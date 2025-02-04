@@ -22,12 +22,17 @@ import (
 )
 
 const (
-	configFileEnvVar = "INDEXD_CONFIG_FILE"
-	dataDirEnvVar    = "INDEXD_DATA_DIR"
+	apiPasswordEnvVar = "INDEXD_API_PASSWORD"
+	configFileEnvVar  = "INDEXD_CONFIG_FILE"
+	dataDirEnvVar     = "INDEXD_DATA_DIR"
 )
 
 var cfg = config.Config{
 	Directory: os.Getenv(dataDirEnvVar), // default to env variable
+	HTTP: config.HTTP{
+		Address:  "127.0.0.1:9980",
+		Password: os.Getenv(apiPasswordEnvVar),
+	},
 	Syncer: config.Syncer{
 		Address:   ":9981",
 		Bootstrap: true,
@@ -194,6 +199,8 @@ func main() {
 	rootCmd := flagg.Root
 	rootCmd.Usage = flagg.SimpleUsage(rootCmd, ``)
 	rootCmd.StringVar(&cfg.Directory, "dir", cfg.Directory, "directory to store indexd metadata in")
+	// http
+	rootCmd.StringVar(&cfg.HTTP.Address, "http", cfg.HTTP.Address, "address to serve API on")
 	// log
 	rootCmd.StringVar(&logLevelOverride, "log", "", "overrides the log level for all enabled loggers (debug, info, warn, error)")
 
@@ -310,6 +317,6 @@ func main() {
 		defer log.Sync()
 		zap.RedirectStdLog(log.Named("stdlib"))
 
-		<-ctx.Done() // TODO: do stuff
+		checkFatalError("daemon startup failed", runRootCmd(ctx, cfg, log))
 	}
 }

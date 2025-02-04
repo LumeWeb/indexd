@@ -9,6 +9,12 @@ import (
 )
 
 type (
+	// HTTP contains the configuration for the HTTP server.
+	HTTP struct {
+		Address  string `yaml:"address,omitempty"`
+		Password string `yaml:"password,omitempty"`
+	}
+
 	// Syncer contains the configuration for the p2p syncer.
 	Syncer struct {
 		Address    string   `yaml:"address,omitempty"`
@@ -51,6 +57,7 @@ type (
 		Directory      string `yaml:"directory,omitempty"`
 		RecoveryPhrase string `yaml:"recoveryPhrase,omitempty"`
 
+		HTTP      HTTP      `yaml:"http,omitempty"`
 		Syncer    Syncer    `yaml:"syncer"`
 		Consensus Consensus `yaml:"consensus"`
 		Log       Log       `yaml:"log"`
