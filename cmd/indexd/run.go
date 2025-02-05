@@ -10,11 +10,18 @@ import (
 
 	"go.sia.tech/indexd/api"
 	"go.sia.tech/indexd/config"
+	"go.sia.tech/indexd/persist/postgres"
 	"go.sia.tech/jape"
 	"go.uber.org/zap"
 )
 
 func runRootCmd(ctx context.Context, cfg config.Config, log *zap.Logger) error {
+	store, err := postgres.Connect(ctx, cfg.Database, log.Named("postgres"))
+	if err != nil {
+		return fmt.Errorf("failed to connect to postgres database: %w", err)
+	}
+	defer store.Close()
+
 	httpListener, err := startLocalhostListener(cfg.HTTP.Address, log.Named("listener"))
 	if err != nil {
 		return fmt.Errorf("failed to listen on http address: %w", err)
