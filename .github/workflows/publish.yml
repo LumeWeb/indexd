@@ -66,23 +66,26 @@ jobs:
           - OS: ubuntu-latest
             GOARCH: amd64
             BUILD_LD_FLAGS: -s -w -linkmode external -extldflags "-static"
+            RELEASE_PLATFORM: linux
           - OS: ubuntu-latest
             GOARCH: arm64
             BUILD_LD_FLAGS: -s -w -linkmode external -extldflags "-static"
+            RELEASE_PLATFORM: linux
           - OS: macos-latest
             GOARCH: amd64
             BUILD_LD_FLAGS: -s -w
+            RELEASE_PLATFORM: macos
           - OS: macos-latest
             GOARCH: arm64
             BUILD_LD_FLAGS: -s -w
+            RELEASE_PLATFORM: macos
           - OS: windows-latest
             GOARCH: amd64
             BUILD_LD_FLAGS: -s -w -linkmode external -extldflags "-static"
+            RELEASE_PLATFORM: windows
     runs-on: ${{ matrix.OS }}
     env:
-      CGO_ENABLED: 1
-      GOARCH: ${{ matrix.GOARCH }}
-      RELEASE_NAME: indexd_linux_${{ matrix.GOARCH }}
+      RELEASE_NAME: indexd_${{ matrix.RELEASE_PLATFORM }}_${{ matrix.GOARCH }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -130,12 +133,15 @@ jobs:
         if: ${{ matrix.OS == 'windows-latest' }}
         run: |
           dotnet tool install --global AzureSignTool
-      - name: Build
+      - name: Generate
         run: |
           go mod download
           go generate ./...
-
-          go build -o bin/ -tags='netgo timetzdata' -trimpath -a -ldflags '${{ matrix.BUILD_LD_FLAGS }}' ./...
+      - name: Build
+        env:
+          GOARCH: ${{ matrix.GOARCH }}
+          CGO_ENABLED: 1
+        run: go build -o bin/ -tags='netgo timetzdata' -trimpath -a -ldflags '${{ matrix.BUILD_LD_FLAGS }}' ./...
       - name: Sign macOS
         if: ${{ matrix.OS == 'macos-latest' }}
         env:
