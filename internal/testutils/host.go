@@ -1,8 +1,8 @@
 package testutils
 
 import (
-	"errors"
 	"net"
+	"testing"
 	"time"
 
 	"go.sia.tech/core/consensus"
@@ -20,32 +20,20 @@ import (
 type (
 	// A Host is an ephemeral host that can be used for testing.
 	Host struct {
-		address string
-		pk      types.PrivateKey
+		l  net.Listener
+		pk types.PrivateKey
 
 		c  *testutil.EphemeralContractor
 		ss *testutil.EphemeralSectorStore
 		sr *testutil.EphemeralSettingsReporter
 		s  *syncer.Syncer
 		w  *wallet.SingleAddressWallet
-
-		closeFn func() error
 	}
 )
 
 // Addr returns the host's address.
 func (h *Host) Addr() string {
-	return h.address
-}
-
-// Close shuts down the host subsystems.
-func (h *Host) Close() error {
-	return errors.Join(
-		h.s.Close(),
-		h.w.Close(),
-		h.c.Close(),
-		h.closeFn(),
-	)
+	return h.l.Addr().String()
 }
 
 // PublicKey returns the host's public key.
@@ -54,17 +42,19 @@ func (h *Host) PublicKey() types.PublicKey {
 }
 
 // NewHost creates a new host.
-func NewHost(pk types.PrivateKey, n *consensus.Network, genesis types.Block, log *zap.Logger) (*Host, error) {
+func NewHost(tb testing.TB, pk types.PrivateKey, n *consensus.Network, genesis types.Block, log *zap.Logger) *Host {
 	db, tipstate, err := chain.NewDBStore(chain.NewMemDB(), n, genesis)
 	if err != nil {
-		return nil, err
+		tb.Fatal(err)
 	}
 	cm := chain.NewManager(db, tipstate)
 
 	syncerListener, err := net.Listen("tcp", ":0")
 	if err != nil {
-		return nil, err
+		tb.Fatal(err)
 	}
+	tb.Cleanup(func() { syncerListener.Close() })
+
 	s := syncer.New(syncerListener, cm, testutil.NewEphemeralPeerStore(), gateway.Header{
 		GenesisID:  genesis.ID(),
 		UniqueID:   gateway.GenerateUniqueID(),
@@ -73,13 +63,16 @@ func NewHost(pk types.PrivateKey, n *consensus.Network, genesis types.Block, log
 		syncer.WithSendBlocksTimeout(2*time.Second),
 		syncer.WithRPCTimeout(2*time.Second),
 	)
+	tb.Cleanup(func() { s.Close() })
+
 	go s.Run()
 
 	ws := testutil.NewEphemeralWalletStore()
 	w, err := wallet.NewSingleAddressWallet(types.GeneratePrivateKey(), cm, ws)
 	if err != nil {
-		return nil, err
+		tb.Fatal(err)
 	}
+	tb.Cleanup(func() { w.Close() })
 
 	sr := testutil.NewEphemeralSettingsReporter()
 	sr.Update(proto4.HostSettings{
@@ -100,8 +93,10 @@ func NewHost(pk types.PrivateKey, n *consensus.Network, genesis types.Block, log
 	})
 	ss := testutil.NewEphemeralSectorStore()
 	c := testutil.NewEphemeralContractor(cm)
+	tb.Cleanup(func() { c.Close() })
 
 	reorgCh := make(chan struct{}, 1)
+	tb.Cleanup(func() { close(reorgCh) })
 	go func() {
 		for range reorgCh {
 			reverted, applied, err := cm.UpdatesSince(w.Tip(), 1000)
@@ -116,36 +111,31 @@ func NewHost(pk types.PrivateKey, n *consensus.Network, genesis types.Block, log
 			}
 		}
 	}()
-	unsubscribeFn := cm.OnReorg(func(index types.ChainIndex) {
+	stop := cm.OnReorg(func(index types.ChainIndex) {
 		select {
 		case reorgCh <- struct{}{}:
 		default:
 		}
 	})
+	tb.Cleanup(stop)
 
 	rs := rhp4.NewServer(pk, cm, s, c, w, sr, ss, rhp4.WithPriceTableValidity(2*time.Minute))
 	rhp4Listener, err := net.Listen("tcp", ":0")
 	if err != nil {
-		return nil, err
+		tb.Fatal(err)
 	}
+	tb.Cleanup(func() { rhp4Listener.Close() })
+
 	go rhp4.ServeSiaMux(rhp4Listener, rs, log)
 
 	return &Host{
-		c:       c,
-		s:       s,
-		ss:      ss,
-		sr:      sr,
-		w:       w,
-		pk:      pk,
-		address: rhp4Listener.Addr().String(),
+		pk: pk,
+		l:  rhp4Listener,
 
-		closeFn: func() error {
-			unsubscribeFn()
-			close(reorgCh)
-			return errors.Join(
-				rhp4Listener.Close(),
-				syncerListener.Close(),
-			)
-		},
-	}, nil
+		c:  c,
+		s:  s,
+		ss: ss,
+		sr: sr,
+		w:  w,
+	}
 }

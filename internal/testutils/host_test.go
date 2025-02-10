@@ -16,11 +16,7 @@ func TestHost(t *testing.T) {
 	defer cancel()
 
 	n, genesis := testutil.V2Network()
-	h, err := NewHost(types.GeneratePrivateKey(), n, genesis, zap.NewNop())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer h.Close()
+	h := NewHost(t, types.GeneratePrivateKey(), n, genesis, zap.NewNop())
 
 	transport, err := rhp4.DialSiaMux(ctx, h.Addr(), h.PublicKey())
 	if err != nil {
