@@ -40,26 +40,25 @@ Notable columns/types:
 
 ```postgresql
 CREATE TABLE wallet_events (
-    id BYTEA PRIMARY KEY,
+    id SERIAL PRIMARY KEY,
     chain_index BYTEA NOT NULL,
     maturity_height INTEGER NOT NULL,
-    confirmations INTEGER NOT NULL,
+    event_id BYTEA UNIQUE NOT NULL,
     event_type TEXT NOT NULL,
-    event_data BYTEA NOT NULL,
-    event_time TIMESTAMP WITH TIME ZONE NOT NULL,
-    relevant BYTEA
+    event_data BYTEA NOT NULL
 );
-CREATE INDEX wallet_events_chain_index ON wallet_events(chain_index);
-CREATE INDEX wallet_events_maturity_height ON wallet_events(maturity_height DESC);
+CREATE INDEX wallet_events_chain_index_idx ON wallet_events(chain_index);
 
 CREATE TABLE wallet_siacoin_elements (
-    id BYTEA PRIMARY KEY,
+    id SERIAL PRIMARY KEY,
+    output_id BYTEA UNIQUE NOT NULL,
     value NUMERIC(50,0) NOT NULL,
     address BYTEA NOT NULL,
     merkle_proof BYTEA NOT NULL,
     leaf_index INTEGER NOT NULL,
     maturity_height INTEGER NOT NULL
 );
+CREATE INDEX wallet_siacoin_elements_output_id_idx ON wallet_siacoin_elements(output_id);
 ```
 
 ### 2.2 Syncer
