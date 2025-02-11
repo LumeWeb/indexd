@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.sia.tech/core/consensus"
 	"go.sia.tech/core/gateway"
 	"go.sia.tech/core/types"
@@ -24,11 +25,14 @@ import (
 	"lukechampine.com/frand"
 )
 
+// Indexer is a test utility combining an indexer, an http client for the
+// indexer and useful helpers for testing.
 type Indexer struct {
 	client   *api.Client
 	closeFns []func() error
 }
 
+// Client returns a ready-to-go API client for the indexer.
 func (i *Indexer) Client() *api.Client {
 	return i.client
 }
@@ -37,18 +41,6 @@ func (i *Indexer) Client() *api.Client {
 // that closes all of its resources and causes the test to fail if any of them
 // fail to close.
 func NewIndexer(t testing.TB, n *consensus.Network, genesis types.Block, log *zap.Logger) (*Indexer, func()) {
-	ci := postgres.ConnectionInfo{
-		Host:     "localhost",
-		Port:     5432,
-		Database: os.Getenv("POSTGRES_DB"),
-		User:     os.Getenv("POSTGRES_USER"),
-		Password: os.Getenv("POSTGRES_PASSWORD"),
-	}
-	store, err := postgres.Connect(context.Background(), ci, log.Named("postgres"))
-	if err != nil {
-		t.Fatalf("failed to connect to postgres database: %v", err)
-	}
-
 	dbstore, tipState, err := chain.NewDBStore(chain.NewMemDB(), n, genesis)
 	if err != nil {
 		t.Fatalf("failed to create chain store: %v", err)
@@ -75,6 +67,9 @@ func NewIndexer(t testing.TB, n *consensus.Network, genesis types.Block, log *za
 	apiOpts := []api.ServerOption{
 		api.WithLogger(log.Named("api")),
 	}
+
+	// prepare store
+	store := initTestDB(t, log)
 
 	password := hex.EncodeToString(frand.Bytes(16))
 	web := http.Server{
@@ -105,4 +100,39 @@ func NewIndexer(t testing.TB, n *consensus.Network, genesis types.Block, log *za
 				t.Errorf("failed to close store: %v", err)
 			}
 		}
+}
+
+func initTestDB(t testing.TB, log *zap.Logger) *postgres.Store {
+	// parse connection info from env vars
+	ci := postgres.ConnectionInfo{
+		Host:     "localhost",
+		Port:     5432,
+		User:     os.Getenv("POSTGRES_USER"),
+		Password: os.Getenv("POSTGRES_PASSWORD"),
+		Database: os.Getenv("POSTGRES_DB"),
+		SSLMode:  "disable",
+	}
+
+	// create test-specific database
+	dbName := t.Name()
+	pool, err := pgxpool.New(context.Background(), ci.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	if _, err := pool.Exec(context.Background(), "DROP DATABASE IF EXISTS "+dbName); err != nil {
+		t.Fatal(err)
+	} else if _, err := pool.Exec(context.Background(), "CREATE DATABASE "+dbName); err != nil {
+		t.Fatal(err)
+	}
+	pool.Close()
+	ci.Database = dbName
+
+	// connect
+	store, err := postgres.Connect(context.Background(), ci, log.Named("postgres"))
+	if err != nil {
+		t.Fatalf("failed to connect to postgres database: %v", err)
+	}
+	return store
 }

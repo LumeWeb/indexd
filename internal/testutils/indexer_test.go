@@ -10,8 +10,8 @@ import (
 
 func TestIndexer(t *testing.T) {
 	n, genesis := testutil.V2Network()
-	indexer, close := NewIndexer(t, n, genesis, zap.NewNop())
-	defer close()
+	indexer, cleanup := NewIndexer(t, n, genesis, zap.NewNop())
+	defer cleanup()
 
 	state, err := indexer.Client().State()
 	if err != nil {
