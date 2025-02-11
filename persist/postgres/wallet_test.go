@@ -39,7 +39,7 @@ func testSingleAddressWalletStoreTip(store *Store) func(t *testing.T) {
 		}
 
 		update := types.ChainIndex{Height: 1, ID: types.BlockID{1}}
-		if _, err := store.pool.Exec(context.Background(), `UPDATE global_settings SET last_scanned_index = $1`, encode(update)); err != nil {
+		if _, err := store.pool.Exec(context.Background(), `UPDATE global_settings SET last_scanned_index = $1`, sqlChainIndex(update)); err != nil {
 			t.Fatal(err)
 		}
 
@@ -62,10 +62,10 @@ func testSingleAddressWalletStoreUnspentSiacoinElements(store *Store) func(t *te
 
 		update := newTestSiacoinElement()
 		if _, err := store.pool.Exec(context.Background(), `INSERT INTO wallet_siacoin_elements (id, value, address, merkle_proof, leaf_index, maturity_height) VALUES ($1, $2, $3, $4, $5, $6)`,
-			encode(update.ID),
-			encode(update.SiacoinOutput.Value),
-			encode(update.SiacoinOutput.Address),
-			encode(update.StateElement.MerkleProof),
+			sqlHash256(update.ID),
+			sqlCurrency(update.SiacoinOutput.Value),
+			sqlHash256(update.SiacoinOutput.Address),
+			sqlMerkleProof(update.StateElement.MerkleProof),
 			update.StateElement.LeafIndex,
 			update.MaturityHeight,
 		); err != nil {
@@ -98,11 +98,11 @@ func testSingleAddressWalletStoreWalletEventsAndWalletEventCount(store *Store) f
 
 		update := newTestEvent()
 		if _, err := store.pool.Exec(context.Background(), `INSERT INTO wallet_events (id, chain_index, maturity_height, event_type, event_data) VALUES ($1, $2, $3, $4, $5)`,
-			encode(update.ID),
-			encode(update.Index),
+			sqlHash256(update.ID),
+			sqlChainIndex(update.Index),
 			update.MaturityHeight,
 			update.Type,
-			encode(update.Data),
+			sqlEncodeEvent(update.Type, update.Data),
 		); err != nil {
 			t.Fatal(err)
 		}

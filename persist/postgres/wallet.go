@@ -14,7 +14,7 @@ var _ wallet.SingleAddressStore = (*Store)(nil)
 // Tip returns the last scanned index.
 func (s *Store) Tip() (ci types.ChainIndex, err error) {
 	err = s.transaction(context.Background(), func(ctx context.Context, tx *txn) error {
-		return tx.QueryRow(ctx, `SELECT last_scanned_index FROM global_settings`).Scan(decode(&ci))
+		return tx.QueryRow(ctx, `SELECT last_scanned_index FROM global_settings`).Scan((*sqlChainIndex)(&ci))
 	})
 	return
 }
@@ -31,7 +31,7 @@ func (s *Store) UnspentSiacoinElements() (sces []types.SiacoinElement, err error
 
 		for rows.Next() {
 			var se types.SiacoinElement
-			if err := rows.Scan(decode(&se.ID), decode(&se.SiacoinOutput.Value), decode(&se.SiacoinOutput.Address), decode(&se.StateElement.MerkleProof), &se.StateElement.LeafIndex, &se.MaturityHeight); err != nil {
+			if err := rows.Scan((*sqlHash256)(&se.ID), (*sqlCurrency)(&se.SiacoinOutput.Value), (*sqlHash256)(&se.SiacoinOutput.Address), (*sqlMerkleProof)(&se.StateElement.MerkleProof), &se.StateElement.LeafIndex, &se.MaturityHeight); err != nil {
 				return fmt.Errorf("failed to scan unspent siacoin element: %w", err)
 			}
 			sces = append(sces, se)
@@ -56,11 +56,12 @@ func (s *Store) WalletEvents(offset, limit int) (events []wallet.Event, err erro
 		defer rows.Close()
 
 		for rows.Next() {
-			if event, err := scanEvent(rows); err != nil {
+			var event wallet.Event
+			err := rows.Scan((*sqlHash256)(&event.ID), (*sqlChainIndex)(&event.Index), &event.MaturityHeight, &event.Type, sqlDecodeEvent(&event.Data))
+			if err != nil {
 				return fmt.Errorf("failed to scan wallet event: %w", err)
-			} else {
-				events = append(events, event)
 			}
+			events = append(events, event)
 		}
 		return rows.Err()
 	})
@@ -78,7 +79,7 @@ func (s *Store) WalletEventCount() (count uint64, err error) {
 
 func scanEvent(rows scanner) (event wallet.Event, _ error) {
 	var buf []byte
-	err := rows.Scan(decode(&event.ID), decode(&event.Index), &event.MaturityHeight, &event.Type, &buf)
+	err := rows.Scan((*sqlHash256)(&event.ID), (*sqlChainIndex)(&event.Index), &event.MaturityHeight, &event.Type, &buf)
 	if err != nil {
 		return
 	}

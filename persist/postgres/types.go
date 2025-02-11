@@ -1,104 +1,208 @@
 package postgres
 
 import (
-	"context"
+	"bytes"
+	"database/sql"
+	"database/sql/driver"
+	"errors"
+	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
-	"go.uber.org/zap"
+	"go.sia.tech/core/types"
+	"go.sia.tech/coreutils/wallet"
 )
 
-const (
-	longQueryDuration = 10 * time.Millisecond
-	longTxnDuration   = time.Second
+var (
+	_ scannerValuer = (*sqlChainIndex)(nil)
+	_ scannerValuer = (*sqlCurrency)(nil)
+	_ scannerValuer = (*sqlDurationMS)(nil)
+	_ scannerValuer = (*sqlEventData)(nil)
+	_ scannerValuer = (*sqlHash256)(nil)
+	_ scannerValuer = (*sqlMerkleProof)(nil)
 )
 
-type (
-	// A scanner is an interface that wraps the Scan method of sql.Rows and sql.Row
-	// to simplify scanning
-	scanner interface {
-		Scan(dest ...any) error
-	}
-
-	// A txn wraps a *sql.Tx, logging slow queries.
-	txn struct {
-		pgx.Tx
-		log *zap.Logger
-	}
-
-	// A row wraps a *sql.Row, logging slow queries.
-	row struct {
-		pgx.Row
-		log *zap.Logger
-	}
-
-	// rows wraps a *sql.Rows, logging slow queries.
-	rows struct {
-		pgx.Rows
-		log *zap.Logger
-	}
-)
-
-func (r *rows) Next() bool {
-	start := time.Now()
-	next := r.Rows.Next()
-	if dur := time.Since(start); dur > longQueryDuration {
-		r.log.Debug("slow next", zap.Duration("elapsed", dur), zap.Stack("stack"))
-	}
-	return next
+type scannerValuer interface {
+	driver.Valuer
+	sql.Scanner
 }
 
-func (r *rows) Scan(dest ...any) error {
-	start := time.Now()
-	err := r.Rows.Scan(dest...)
-	if dur := time.Since(start); dur > longQueryDuration {
-		r.log.Debug("slow scan", zap.Duration("elapsed", dur), zap.Stack("stack"))
+type sqlChainIndex types.ChainIndex
+
+func (ci sqlChainIndex) Value() (driver.Value, error) {
+	var buf bytes.Buffer
+	e := types.NewEncoder(&buf)
+	types.ChainIndex(ci).EncodeTo(e)
+	if err := e.Flush(); err != nil {
+		return nil, err
 	}
-	return err
+	return buf.Bytes(), nil
 }
 
-func (r *row) Scan(dest ...any) error {
-	start := time.Now()
-	err := r.Row.Scan(dest...)
-	if dur := time.Since(start); dur > longQueryDuration {
-		r.log.Debug("slow scan", zap.Duration("elapsed", dur), zap.Stack("stack"))
+func (ci *sqlChainIndex) Scan(src any) error {
+	if src == nil {
+		*ci = sqlChainIndex{}
+		return nil
 	}
-	return err
+
+	switch src := src.(type) {
+	case []byte:
+		dec := types.NewBufDecoder(src)
+		(*types.ChainIndex)(ci).DecodeFrom(dec)
+		return dec.Err()
+	default:
+		return fmt.Errorf("cannot scan %T to ChainIndex", src)
+	}
 }
 
-// Exec executes a query without returning any rows. The args are for
-// any placeholder parameters in the query.
-func (tx *txn) Exec(ctx context.Context, query string, args ...any) (pgconn.CommandTag, error) {
-	start := time.Now()
-	result, err := tx.Tx.Exec(ctx, query, args...)
-	if dur := time.Since(start); dur > longQueryDuration {
-		tx.log.Debug("slow exec", zap.String("query", query), zap.Duration("elapsed", dur), zap.Stack("stack"))
-	}
-	return result, err
+type sqlCurrency types.Currency
+
+func (c sqlCurrency) Value() (driver.Value, error) {
+	return types.Currency(c).ExactString(), nil
 }
 
-// Query executes a query that returns rows, typically a SELECT. The
-// args are for any placeholder parameters in the query.
-func (tx *txn) Query(ctx context.Context, query string, args ...any) (*rows, error) {
-	start := time.Now()
-	r, err := tx.Tx.Query(ctx, query, args...)
-	if dur := time.Since(start); dur > longQueryDuration {
-		tx.log.Debug("slow query", zap.String("query", query), zap.Duration("elapsed", dur), zap.Stack("stack"))
+func (c *sqlCurrency) Scan(src any) error {
+	switch src := src.(type) {
+	case string:
+		return (*types.Currency)(c).UnmarshalText([]byte(src))
+	case []byte:
+		return (*types.Currency)(c).UnmarshalText(src)
+	default:
+		return fmt.Errorf("cannot scan %T to Currency", src)
 	}
-	return &rows{r, tx.log.Named("rows")}, err
 }
 
-// QueryRow executes a query that is expected to return at most one row.
-// QueryRow always returns a non-nil value. Errors are deferred until
-// Row's Scan method is called. If the query selects no rows, the *Row's
-// Scan will return ErrNoRows. Otherwise, the *Row's Scan scans the
-// first selected row and discards the rest.
-func (tx *txn) QueryRow(ctx context.Context, query string, args ...any) *row {
-	start := time.Now()
-	r := tx.Tx.QueryRow(ctx, query, args...)
-	if dur := time.Since(start); dur > longQueryDuration {
-		tx.log.Debug("slow query row", zap.String("query", query), zap.Duration("elapsed", dur), zap.Stack("stack"))
+type sqlDurationMS time.Duration
+
+func (d sqlDurationMS) Value() (driver.Value, error) {
+	return time.Duration(d).Milliseconds(), nil
+}
+
+func (d *sqlDurationMS) Scan(src any) error {
+	switch src := src.(type) {
+	case int64:
+		*d = sqlDurationMS(time.Duration(src) * time.Millisecond)
+		return nil
+	default:
+		return fmt.Errorf("cannot scan %T to Duration", src)
 	}
-	return &row{r, tx.log.Named("row")}
+}
+
+type sqlEventData struct {
+	eventType string
+	data      *wallet.EventData
+}
+
+func sqlEncodeEvent(t string, d wallet.EventData) sqlEventData {
+	return sqlEventData{t, &d}
+}
+
+func sqlDecodeEvent(d *wallet.EventData) *sqlEventData {
+	return &sqlEventData{data: d}
+}
+
+func (event sqlEventData) Value() (driver.Value, error) {
+	var buf bytes.Buffer
+	e := types.NewEncoder(&buf)
+	e.WriteString(event.eventType)
+	switch data := (*event.data).(type) {
+	case wallet.EventPayout:
+		data.EncodeTo(e)
+	case wallet.EventV1Transaction:
+		data.EncodeTo(e)
+	case wallet.EventV1ContractResolution:
+		data.EncodeTo(e)
+	case wallet.EventV2ContractResolution:
+		data.EncodeTo(e)
+	case wallet.EventV2Transaction:
+		types.V2Transaction(data).EncodeTo(e)
+	default:
+		return nil, fmt.Errorf("unknown event type: %s", event.eventType) // should never happen
+	}
+	if err := e.Flush(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (ed *sqlEventData) Scan(src any) error {
+	// sanity check to avoid nil pointer dereferences
+	if ed.data == nil {
+		return errors.New("EventData.Scan: nil pointer") // developer error
+	}
+	switch src := src.(type) {
+	case []byte:
+		dec := types.NewBufDecoder(src)
+		ed.eventType = dec.ReadString()
+		switch ed.eventType {
+		case wallet.EventTypeMinerPayout,
+			wallet.EventTypeSiafundClaim,
+			wallet.EventTypeFoundationSubsidy:
+			var e wallet.EventPayout
+			e.DecodeFrom(dec)
+			*ed.data = e
+		case wallet.EventTypeV1ContractResolution:
+			var e wallet.EventV1ContractResolution
+			e.DecodeFrom(dec)
+			*ed.data = e
+		case wallet.EventTypeV2ContractResolution:
+			var e wallet.EventV2ContractResolution
+			e.DecodeFrom(dec)
+			*ed.data = e
+		case wallet.EventTypeV1Transaction:
+			var e wallet.EventV1Transaction
+			e.DecodeFrom(dec)
+			*ed.data = e
+		case wallet.EventTypeV2Transaction:
+			var e wallet.EventV2Transaction
+			e.DecodeFrom(dec)
+			*ed.data = e
+		default:
+			return fmt.Errorf("unknown event type %v", ed.eventType)
+		}
+		return dec.Err()
+	default:
+		return fmt.Errorf("cannot scan %T to EventData", src)
+	}
+}
+
+type sqlHash256 types.Hash256
+
+func (h *sqlHash256) Scan(src any) error {
+	switch src := src.(type) {
+	case []byte:
+		if len(src) != len(sqlHash256{}) {
+			return fmt.Errorf("failed to unmarshal Hash256 value due to invalid number of bytes %v != %v: %v", len(src), len(sqlHash256{}), src)
+		}
+		copy(h[:], src)
+		return nil
+	default:
+		return fmt.Errorf("cannot scan %T to Hash256", src)
+	}
+}
+
+func (h sqlHash256) Value() (driver.Value, error) {
+	return h[:], nil
+}
+
+type sqlMerkleProof []types.Hash256
+
+func (mp *sqlMerkleProof) Scan(src any) error {
+	switch src := src.(type) {
+	case []byte:
+		dec := types.NewBufDecoder(src)
+		types.DecodeSlice(dec, (*[]types.Hash256)(mp))
+		return dec.Err()
+	default:
+		return fmt.Errorf("cannot scan %T to MerkleProof", src)
+	}
+}
+
+func (mp sqlMerkleProof) Value() (driver.Value, error) {
+	var buf bytes.Buffer
+	e := types.NewEncoder(&buf)
+	types.EncodeSlice(e, mp)
+	if err := e.Flush(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
