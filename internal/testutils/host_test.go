@@ -16,20 +16,22 @@ func TestMain(m *testing.M) {
 }
 
 func TestHost(t *testing.T) {
-	tt := NewTT(t)
 	n, genesis := testutil.V2Network()
-	h := NewHost(tt, types.GeneratePrivateKey(), n, genesis, zap.NewNop())
+	h := NewHost(t, types.GeneratePrivateKey(), n, genesis, zap.NewNop())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	transport, err := rhp4.DialSiaMux(ctx, h.Addr(), h.PublicKey())
-	tt.OK(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer transport.Close()
 
 	settings, err := rhp4.RPCSettings(ctx, transport)
-	tt.OK(err)
-	if settings.WalletAddress != h.w.Address() {
+	if err != nil {
+		t.Fatal(err)
+	} else if settings.WalletAddress != h.w.Address() {
 		t.Fatal("wallet address mismatch")
 	}
 }

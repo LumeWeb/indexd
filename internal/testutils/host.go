@@ -2,6 +2,7 @@ package testutils
 
 import (
 	"net"
+	"testing"
 	"time"
 
 	"go.sia.tech/core/consensus"
@@ -41,14 +42,18 @@ func (h *Host) PublicKey() types.PublicKey {
 }
 
 // NewHost creates a new host.
-func NewHost(tt TT, pk types.PrivateKey, n *consensus.Network, genesis types.Block, log *zap.Logger) *Host {
+func NewHost(t testing.TB, pk types.PrivateKey, n *consensus.Network, genesis types.Block, log *zap.Logger) *Host {
 	db, tipstate, err := chain.NewDBStore(chain.NewMemDB(), n, genesis)
-	tt.OK(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cm := chain.NewManager(db, tipstate)
 
 	syncerListener, err := net.Listen("tcp", ":0")
-	tt.OK(err)
-	tt.Cleanup(func() { syncerListener.Close() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { syncerListener.Close() })
 
 	s := syncer.New(syncerListener, cm, testutil.NewEphemeralPeerStore(), gateway.Header{
 		GenesisID:  genesis.ID(),
@@ -58,13 +63,15 @@ func NewHost(tt TT, pk types.PrivateKey, n *consensus.Network, genesis types.Blo
 		syncer.WithSendBlocksTimeout(2*time.Second),
 		syncer.WithRPCTimeout(2*time.Second),
 	)
-	tt.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { s.Close() })
 	go s.Run()
 
 	ws := testutil.NewEphemeralWalletStore()
 	w, err := wallet.NewSingleAddressWallet(types.GeneratePrivateKey(), cm, ws)
-	tt.OK(err)
-	tt.Cleanup(func() { w.Close() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { w.Close() })
 
 	sr := testutil.NewEphemeralSettingsReporter()
 	sr.Update(proto4.HostSettings{
@@ -85,10 +92,10 @@ func NewHost(tt TT, pk types.PrivateKey, n *consensus.Network, genesis types.Blo
 	})
 	ss := testutil.NewEphemeralSectorStore()
 	c := testutil.NewEphemeralContractor(cm)
-	tt.Cleanup(func() { c.Close() })
+	t.Cleanup(func() { c.Close() })
 
 	reorgCh := make(chan struct{}, 1)
-	tt.Cleanup(func() { close(reorgCh) })
+	t.Cleanup(func() { close(reorgCh) })
 	go func() {
 		for range reorgCh {
 			reverted, applied, err := cm.UpdatesSince(w.Tip(), 1000)
@@ -109,12 +116,14 @@ func NewHost(tt TT, pk types.PrivateKey, n *consensus.Network, genesis types.Blo
 		default:
 		}
 	})
-	tt.Cleanup(stop)
+	t.Cleanup(stop)
 
 	rs := rhp4.NewServer(pk, cm, s, c, w, sr, ss, rhp4.WithPriceTableValidity(2*time.Minute))
 	rhp4Listener, err := net.Listen("tcp", ":0")
-	tt.OK(err)
-	tt.Cleanup(func() { rhp4Listener.Close() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { rhp4Listener.Close() })
 	go rhp4.ServeSiaMux(rhp4Listener, rs, log)
 
 	return &Host{
