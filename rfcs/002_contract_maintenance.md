@@ -2,12 +2,18 @@
 
 ## Abstract
 
-TODO
+For data to remain on the network, contracts needs to be formed and renewed. The
+contract maintenance process automates this by performing a range of checks on
+hosts and existing contracts to determine whether the contracts we have are
+still sufficient. This RFC outlines the necessary step performed by the contract
+maintenance code.
 
 ### Contract Archiving
 
 Before we look into forming new contracts, we archive contracts that are either
-expired or have been renewed.
+expired or have been renewed. This step is pretty straightforward but still
+crucial as contracts that are no longer needed can block new contracts from
+being formed.
 
 ### Contract Formations
 
@@ -21,7 +27,7 @@ least 50 contracts that meet the following requirements:
 - The contract is neither out of collateral nor out of funds
 - The contract is not less than half a renew window away from expiring
 
-To achieve that number, we perform the following steps:
+To achieve that, we perform the following steps:
 1. Fetch all good hosts
 2. Randomly pick one of them
 3. Scan the host
@@ -29,7 +35,9 @@ To achieve that number, we perform the following steps:
 5. Form a contract with the host
 6. Repeat from step 2 until the desired number of contracts is reached
 
-Initially we fund contracts with 10SC for both allowance and collateral (TODO: edge case 0 storage cost)
+Initially we fund contracts with 10SC of allowance and however much collateral
+that converts to. e.g. if 10SC equals 100GB of data, we add 100GB worth of
+collateral.
 
 ### Contract Renewals
 
@@ -39,6 +47,7 @@ renew a contract if:
 
 - The host is considered "good" (see [Host Scanning](001_host_scanning.md))
 - The contract has data in it
+- The window height of the contract is less blocks away than the renew window
 
 Assuming these conditions are met we try to renew the contract without
 increasing the funds or collateral within the contract. That is what the refresh
@@ -46,7 +55,21 @@ is for.
 
 ### Contract Refreshes
 
-TODO: condition for refresh
+Refreshing a contract is similar to renewing it but without extending its
+expiration height. There are two triggers for refreshing a contract:
+
+1. The contract is out of funds -> remaining funds are less than 10% of the
+initial allowance
+2. The contract is out of collateral -> remaining collateral is less than 10% of
+the total collateral
+
+If the reason for the refresh is 1., we reset the funds to the initial allowance
+of the contract plus 20% without ever going below the initial funding amount of
+10SC.
+
+If the reason for the refresh is 2., the allowance remains the same and we
+convert the remaining allowance to a collateral amount the same way we do when
+forming contracts.
 
 ### Bad Contracts
 

@@ -19,7 +19,7 @@ changes them.
 | Setting           | Assertion |
 |-------------------|----------------|
 | ContractPrice     | < 10SC |
-| Collateral        | >= 2x StoragePrice|
+| Collateral        | > configured MinCollateral && >= 2x StoragePrice|
 | StoragePrice      | < configurd MaxStoragePrice |
 | IngressPrice      | < configured MaxIngressPrice |
 | EgressPrice       | < configured MaxEgressPrice |
