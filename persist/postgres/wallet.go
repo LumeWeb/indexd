@@ -58,7 +58,7 @@ func (s *Store) WalletEvents(offset, limit int) (events []wallet.Event, err erro
 		limit = math.MaxInt64
 	}
 	err = s.transaction(context.Background(), func(ctx context.Context, tx *txn) error {
-		rows, err := tx.Query(ctx, `SELECT chain_index, maturity_height, event_id, event_type, event_data FROM wallet_events ORDER BY maturity_height DESC LIMIT $1 OFFSET $2`, limit, offset)
+		rows, err := tx.Query(ctx, `SELECT chain_index, maturity_height, event_id, event_type, event_data FROM wallet_events ORDER BY maturity_height DESC, id DESC LIMIT $1 OFFSET $2`, limit, offset)
 		if err != nil {
 			return fmt.Errorf("failed to query wallet events: %w", err)
 		}
