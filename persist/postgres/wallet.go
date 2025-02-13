@@ -9,7 +9,6 @@ import (
 
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/wallet"
-	"go.uber.org/zap"
 )
 
 var (
@@ -115,37 +114,19 @@ func (u *updateTx) UpdateWalletSiacoinElementProofs(updater wallet.ProofUpdater)
 		return err
 	}
 
-	const stmt = "update_sce_stmt"
-	if _, err := u.tx.Prepare(u.ctx, stmt, `UPDATE wallet_siacoin_elements SET leaf_index = $1, merkle_proof = $2 WHERE output_id = $3`); err != nil {
-		return fmt.Errorf("failed to prepare update statement: %w", err)
-	}
-
 	for id, se := range sces {
-		if _, err := u.tx.Exec(u.ctx, stmt, se.LeafIndex, sqlMerkleProof(se.MerkleProof), id); err != nil {
+		const query = `UPDATE wallet_siacoin_elements SET leaf_index = $1, merkle_proof = $2 WHERE output_id = $3`
+		if _, err := u.tx.Exec(u.ctx, query, se.LeafIndex, sqlMerkleProof(se.MerkleProof), id); err != nil {
 			return fmt.Errorf("failed to update siacoin element: %w", err)
 		}
 	}
 	return nil
 }
 
-func (u *updateTx) WalletApplyIndex(index types.ChainIndex, created, spent []types.SiacoinElement, events []wallet.Event, timestamp time.Time) (err error) {
-	log := u.log.With(zap.Uint64("height", index.Height), zap.Stringer("id", index.ID))
-	defer func() {
-		if err != nil {
-			log = log.With(zap.Error(err))
-			log.Error("failed to apply index")
-			return
-		}
-		log.Debug("applied index")
-	}()
-
+func (u *updateTx) WalletApplyIndex(index types.ChainIndex, created, spent []types.SiacoinElement, events []wallet.Event, timestamp time.Time) error {
 	if len(spent) > 0 {
-		const stmt = "delete_sce_stmt"
-		if _, err := u.tx.Prepare(u.ctx, "delete_sce_stmt", `DELETE FROM wallet_siacoin_elements WHERE output_id = $1`); err != nil {
-			return fmt.Errorf("failed to prepare delete statement: %w", err)
-		}
 		for _, se := range spent {
-			if res, err := u.tx.Exec(u.ctx, stmt, sqlHash256(se.ID)); err != nil {
+			if res, err := u.tx.Exec(u.ctx, `DELETE FROM wallet_siacoin_elements WHERE output_id = $1`, sqlHash256(se.ID)); err != nil {
 				return fmt.Errorf("failed to delete siacoin element: %w", err)
 			} else if res.RowsAffected() != 1 {
 				return fmt.Errorf("failed to delete siacoin element %v: %w", se.ID, ErrSiacoinElementNotFound)
@@ -154,24 +135,29 @@ func (u *updateTx) WalletApplyIndex(index types.ChainIndex, created, spent []typ
 	}
 
 	if len(created) > 0 {
-		const stmt = "insert_sce_stmt"
-		if _, err := u.tx.Prepare(u.ctx, stmt, `INSERT INTO wallet_siacoin_elements (output_id, value, address, merkle_proof, leaf_index, maturity_height) VALUES ($1, $2, $3, $4, $5, $6)`); err != nil {
-			return fmt.Errorf("failed to prepare insert statement: %w", err)
-		}
 		for _, se := range created {
-			if _, err := u.tx.Exec(u.ctx, stmt, sqlHash256(se.ID), sqlCurrency(se.SiacoinOutput.Value), sqlHash256(se.SiacoinOutput.Address), sqlMerkleProof(se.StateElement.MerkleProof), se.StateElement.LeafIndex, se.MaturityHeight); err != nil {
+			if _, err := u.tx.Exec(u.ctx, `INSERT INTO wallet_siacoin_elements (output_id, value, address, merkle_proof, leaf_index, maturity_height) VALUES ($1, $2, $3, $4, $5, $6)`,
+				sqlHash256(se.ID),
+				sqlCurrency(se.SiacoinOutput.Value),
+				sqlHash256(se.SiacoinOutput.Address),
+				sqlMerkleProof(se.StateElement.MerkleProof),
+				se.StateElement.LeafIndex,
+				se.MaturityHeight,
+			); err != nil {
 				return fmt.Errorf("failed to insert siacoin element: %w", err)
 			}
 		}
 	}
 
 	if len(events) > 0 {
-		const stmt = "insert_event_stmt"
-		if _, err := u.tx.Prepare(u.ctx, stmt, `INSERT INTO wallet_events (chain_index, maturity_height, event_id, event_type, event_data) VALUES ($1, $2, $3, $4, $5)`); err != nil {
-			return fmt.Errorf("failed to prepare insert statement: %w", err)
-		}
 		for _, e := range events {
-			if _, err := u.tx.Exec(u.ctx, stmt, sqlChainIndex(e.Index), e.MaturityHeight, sqlHash256(e.ID), e.Type, sqlEncodeEvent(e.Type, e.Data)); err != nil {
+			if _, err := u.tx.Exec(u.ctx, `INSERT INTO wallet_events (chain_index, maturity_height, event_id, event_type, event_data) VALUES ($1, $2, $3, $4, $5)`,
+				sqlChainIndex(e.Index),
+				e.MaturityHeight,
+				sqlHash256(e.ID),
+				e.Type,
+				sqlEncodeEvent(e.Type, e.Data),
+			); err != nil {
 				return fmt.Errorf("failed to insert event: %w", err)
 			}
 		}
@@ -179,24 +165,10 @@ func (u *updateTx) WalletApplyIndex(index types.ChainIndex, created, spent []typ
 	return nil
 }
 
-func (u *updateTx) WalletRevertIndex(index types.ChainIndex, removed, unspent []types.SiacoinElement, timestamp time.Time) (err error) {
-	log := u.log.With(zap.Uint64("height", index.Height), zap.Stringer("id", index.ID))
-	defer func() {
-		if err != nil {
-			log = log.With(zap.Error(err))
-			log.Error("failed to revert index")
-			return
-		}
-		log.Debug("reverted index")
-	}()
-
+func (u *updateTx) WalletRevertIndex(index types.ChainIndex, removed, unspent []types.SiacoinElement, timestamp time.Time) error {
 	if len(removed) > 0 {
-		const stmt = "delete_sce_stmt"
-		if _, err := u.tx.Prepare(u.ctx, stmt, `DELETE FROM wallet_siacoin_elements WHERE output_id = $1`); err != nil {
-			return fmt.Errorf("failed to prepare delete statement: %w", err)
-		}
 		for _, se := range removed {
-			if res, err := u.tx.Exec(u.ctx, stmt, sqlHash256(se.ID)); err != nil {
+			if res, err := u.tx.Exec(u.ctx, `DELETE FROM wallet_siacoin_elements WHERE output_id = $1`, sqlHash256(se.ID)); err != nil {
 				return fmt.Errorf("failed to delete siacoin element: %w", err)
 			} else if res.RowsAffected() != 1 {
 				return fmt.Errorf("failed to delete siacoin element %v: %w", se.ID, ErrSiacoinElementNotFound)
@@ -205,18 +177,21 @@ func (u *updateTx) WalletRevertIndex(index types.ChainIndex, removed, unspent []
 	}
 
 	if len(unspent) > 0 {
-		const stmt = "insert_sce_stmt"
-		if _, err := u.tx.Prepare(u.ctx, stmt, `INSERT INTO wallet_siacoin_elements (output_id, value, address, merkle_proof, leaf_index, maturity_height) VALUES ($1, $2, $3, $4, $5, $6)`); err != nil {
-			return fmt.Errorf("failed to prepare insert statement: %w", err)
-		}
 		for _, se := range unspent {
-			if _, err := u.tx.Exec(u.ctx, stmt, sqlHash256(se.ID), sqlCurrency(se.SiacoinOutput.Value), sqlHash256(se.SiacoinOutput.Address), sqlMerkleProof(se.StateElement.MerkleProof), se.StateElement.LeafIndex, se.MaturityHeight); err != nil {
+			if _, err := u.tx.Exec(u.ctx, `INSERT INTO wallet_siacoin_elements (output_id, value, address, merkle_proof, leaf_index, maturity_height) VALUES ($1, $2, $3, $4, $5, $6)`,
+				sqlHash256(se.ID),
+				sqlCurrency(se.SiacoinOutput.Value),
+				sqlHash256(se.SiacoinOutput.Address),
+				sqlMerkleProof(se.StateElement.MerkleProof),
+				se.StateElement.LeafIndex,
+				se.MaturityHeight,
+			); err != nil {
 				return fmt.Errorf("failed to insert siacoin element: %w", err)
 			}
 		}
 	}
 
-	_, err = u.tx.Exec(u.ctx, `DELETE FROM wallet_events WHERE chain_index = $1`, sqlChainIndex(index))
+	_, err := u.tx.Exec(u.ctx, `DELETE FROM wallet_events WHERE chain_index = $1`, sqlChainIndex(index))
 	if err != nil {
 		return fmt.Errorf("failed to delete events: %w", err)
 	}

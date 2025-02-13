@@ -30,14 +30,14 @@ func TestProcessChainUpdate(t *testing.T) {
 	events[0].Index = types.ChainIndex{Height: 1}
 
 	// assert err when spending non-existing output
-	if err := store.ApplyChainUpdate(context.Background(), func(tx UpdateTx) error {
+	if err := store.ApplyChainUpdate(context.Background(), func(tx wallet.UpdateTx) error {
 		return tx.WalletApplyIndex(types.ChainIndex{Height: 1}, nil, sces, events, time.Now())
 	}); !errors.Is(err, ErrSiacoinElementNotFound) {
 		t.Fatal("unexpected error", err)
 	}
 
 	// create elements
-	if err := store.ApplyChainUpdate(context.Background(), func(tx UpdateTx) error {
+	if err := store.ApplyChainUpdate(context.Background(), func(tx wallet.UpdateTx) error {
 		return tx.WalletApplyIndex(types.ChainIndex{Height: 1}, sces, nil, events, time.Now())
 	}); err != nil {
 		t.Fatal(err)
@@ -52,7 +52,7 @@ func TestProcessChainUpdate(t *testing.T) {
 	}
 
 	// spend it
-	if err := store.ApplyChainUpdate(context.Background(), func(tx UpdateTx) error {
+	if err := store.ApplyChainUpdate(context.Background(), func(tx wallet.UpdateTx) error {
 		return tx.WalletApplyIndex(types.ChainIndex{Height: 2}, nil, sces, nil, time.Now())
 	}); err != nil {
 		t.Fatal(err)
@@ -63,7 +63,7 @@ func TestProcessChainUpdate(t *testing.T) {
 	}
 
 	// revert spend
-	if err := store.ApplyChainUpdate(context.Background(), func(tx UpdateTx) error {
+	if err := store.ApplyChainUpdate(context.Background(), func(tx wallet.UpdateTx) error {
 		return tx.WalletRevertIndex(types.ChainIndex{Height: 2}, nil, sces, time.Now())
 	}); err != nil {
 		t.Fatal(err)
@@ -79,7 +79,7 @@ func TestProcessChainUpdate(t *testing.T) {
 
 	// update state elements
 	update := types.StateElement{LeafIndex: 2, MerkleProof: append(sces[0].StateElement.MerkleProof, types.Hash256{1})}
-	if err := store.ApplyChainUpdate(context.Background(), func(tx UpdateTx) error {
+	if err := store.ApplyChainUpdate(context.Background(), func(tx wallet.UpdateTx) error {
 		return tx.UpdateWalletSiacoinElementProofs(testProofUpdater{
 			fn: func(se *types.StateElement) {
 				se.LeafIndex = update.LeafIndex
@@ -97,7 +97,7 @@ func TestProcessChainUpdate(t *testing.T) {
 	}
 
 	// revert create
-	if err := store.ApplyChainUpdate(context.Background(), func(tx UpdateTx) error {
+	if err := store.ApplyChainUpdate(context.Background(), func(tx wallet.UpdateTx) error {
 		return tx.WalletRevertIndex(types.ChainIndex{Height: 1}, sces, nil, time.Now())
 	}); err != nil {
 		t.Fatal(err)
