@@ -24,6 +24,7 @@ CREATE TABLE wallet_events (
     event_data BYTEA NOT NULL
 );
 CREATE INDEX wallet_events_chain_index_idx ON wallet_events(chain_index);
+CREATE INDEX wallet_events_maturity_height_id_idx ON wallet_events(maturity_height DESC, id DESC);
 
 CREATE TABLE wallet_siacoin_elements (
     id SERIAL PRIMARY KEY,
@@ -34,7 +35,6 @@ CREATE TABLE wallet_siacoin_elements (
     leaf_index INTEGER NOT NULL,
     maturity_height INTEGER NOT NULL
 );
-CREATE INDEX wallet_siacoin_elements_output_id_idx ON wallet_siacoin_elements(output_id);
 
 CREATE TABLE global_settings (
     id INTEGER PRIMARY KEY NOT NULL DEFAULT 0 CHECK (id = 0), -- enforce a single row
