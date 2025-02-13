@@ -34,16 +34,6 @@ type Indexer struct {
 // NewIndexer creates a new indexer for testing that is automatically closed up
 // after the test is finished.
 func NewIndexer(t testing.TB, n *consensus.Network, genesis types.Block, log *zap.Logger) *Indexer {
-	indexer, cleanup := NewIndexerNoCleanup(t, n, genesis, log)
-	t.Cleanup(cleanup)
-	return indexer
-}
-
-// NewIndexerNoCleanup creates a new indexer for testing. It returns a cleanup
-// function that closes all of its resources and causes the test to fail if any
-// of them fail to close. Useful for tests that require closing the indexer
-// ahead of time.
-func NewIndexerNoCleanup(t testing.TB, n *consensus.Network, genesis types.Block, log *zap.Logger) (*Indexer, func()) {
 	dbstore, tipState, err := chain.NewDBStore(chain.NewMemDB(), n, genesis)
 	if err != nil {
 		t.Fatalf("failed to create chain store: %v", err)
@@ -89,19 +79,20 @@ func NewIndexerNoCleanup(t testing.TB, n *consensus.Network, genesis types.Block
 		}
 	}()
 
-	return &Indexer{
-			Client: api.NewClient(fmt.Sprintf("http://%s", httpListener.Addr().String()), password),
-		}, func() {
-			if err := shutdownWithTimeout(web.Shutdown); err != nil {
-				t.Errorf("failed to shutdown webserver: %v", err)
-			}
-			if err := closeWithTimeout(s.Close); err != nil {
-				t.Errorf("failed to close syncer: %v", err)
-			}
-			if err := closeWithTimeout(store.Close); err != nil {
-				t.Errorf("failed to close store: %v", err)
-			}
+	t.Cleanup(func() {
+		if err := shutdownWithTimeout(web.Shutdown); err != nil {
+			t.Errorf("failed to shutdown webserver: %v", err)
 		}
+		if err := closeWithTimeout(s.Close); err != nil {
+			t.Errorf("failed to close syncer: %v", err)
+		}
+		if err := closeWithTimeout(store.Close); err != nil {
+			t.Errorf("failed to close store: %v", err)
+		}
+	})
+	return &Indexer{
+		Client: api.NewClient(fmt.Sprintf("http://%s", httpListener.Addr().String()), password),
+	}
 }
 
 func initTestDB(t testing.TB, log *zap.Logger) *postgres.Store {
