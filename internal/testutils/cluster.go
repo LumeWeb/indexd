@@ -14,7 +14,7 @@ import (
 type (
 	clusterOpts struct {
 		logger *zap.Logger
-		nHosts int
+		hosts  int
 	}
 
 	// ClusterOpt is a functional option for configuring a cluster for testing
@@ -31,7 +31,7 @@ type Cluster struct {
 var (
 	defaultClusterOpts = clusterOpts{
 		logger: zap.NewNop(),
-		nHosts: 5,
+		hosts:  5,
 	}
 )
 
@@ -43,10 +43,10 @@ func WithLogger(logger *zap.Logger) ClusterOpt {
 	}
 }
 
-// WithNHosts allows for overriding the default number of hosts in the cluster
-func WithNHosts(n int) ClusterOpt {
+// WithHosts allows for overriding the default number of hosts in the cluster
+func WithHosts(n int) ClusterOpt {
 	return func(cfg *clusterOpts) {
-		cfg.nHosts = n
+		cfg.hosts = n
 	}
 }
 
@@ -59,14 +59,14 @@ func NewCluster(t testing.TB, opts ...ClusterOpt) *Cluster {
 	}
 
 	n, genesis := testutil.V2Network()
-	indexer := NewIndexer(t, n, genesis, zap.NewNop())
+	indexer := NewIndexer(t, n, genesis, cfg.logger.Named("indexer"))
 
 	// mine until after v2 height to reach v2 and to fund indexer
 	indexer.MineBlocks(t, types.Address{}, int(n.HardforkV2.AllowHeight))
 
 	// create hosts and connect them to the indexer
 	var hosts []*Host
-	for i := 0; i < cfg.nHosts; i++ {
+	for i := 0; i < cfg.hosts; i++ {
 		pk := types.GeneratePrivateKey()
 		h := NewHost(t, pk, n, genesis, cfg.logger)
 		_, err := h.s.Connect(context.Background(), indexer.syncer.Addr())

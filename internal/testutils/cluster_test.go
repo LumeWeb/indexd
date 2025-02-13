@@ -14,13 +14,13 @@ func TestNewCluster(t *testing.T) {
 	state, err := indexer.TipState()
 	if err != nil {
 		t.Fatal(err)
-	} else if state.Index.Height == 0 {
+	} else if n := indexer.cm.TipState().Network; state.Index.Height < n.HardforkV2.AllowHeight+n.MaturityDelay {
 		t.Fatal("no blocks were mined")
 	}
 
 	// assert hosts were created
-	if len(cluster.Hosts) != defaultClusterOpts.nHosts {
-		t.Fatalf("expected %d hosts, got %d", defaultClusterOpts.nHosts, len(cluster.Hosts))
+	if len(cluster.Hosts) != defaultClusterOpts.hosts {
+		t.Fatalf("expected %d hosts, got %d", defaultClusterOpts.hosts, len(cluster.Hosts))
 	}
 
 	// assert hosts were funded
