@@ -20,7 +20,7 @@ being formed.
 The goal of the contract formation process is to keep around a default of at
 least 50 contracts that meet the following requirements:
 
-- The corresponding host is considered "good" (see [Host Scanning](001_host_scanning.md))
+- The corresponding host is considered "good" (see [Host Scanning](002_host_scanning.md))
 - The corresponding host doesn't share the same IP subnet as another host we have a contract with (if they do, they count as one)
 - The contract has less than 10TB of data in it and hasn't reached its MaxCollateral (if it has more and the host is good, we form another contract with the same host)
 - The corresponding host has at least 10GB of free space
@@ -45,7 +45,7 @@ Contract renewals are similar to contract formations but the requirements are
 slightly different. We don't care about the number of contracts and instead
 renew a contract if:
 
-- The host is considered "good" (see [Host Scanning](001_host_scanning.md))
+- The host is considered "good" (see [Host Scanning](002_host_scanning.md))
 - The contract has data in it
 - The window height of the contract is less blocks away than the renew window
 
@@ -75,5 +75,5 @@ forming contracts.
 
 Bad contracts are contracts that don't contribute to the health of a slab. A contract is considered bad if:
 
-- The host is considered "bad" (see [Host Scanning](001_host_scanning.md))
+- The host is considered "bad" (see [Host Scanning](002_host_scanning.md))
 - The contract fails to renew and has reached the second half of the renew window
