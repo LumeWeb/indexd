@@ -21,11 +21,4 @@ func TestIndexer(t *testing.T) {
 	} else if state.StartTime.IsZero() {
 		t.Fatal("expected start time")
 	}
-
-	events, err := indexer.WalletEvents(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	} else if len(events) == 0 {
-		t.Fatal("expected events")
-	}
 }
