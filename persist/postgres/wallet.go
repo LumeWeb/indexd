@@ -61,12 +61,13 @@ func (s *Store) WalletEvents(offset, limit int) (events []wallet.Event, err erro
 		return nil, nil
 	}
 
-	ci, err := s.Tip()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get last scanned index: %w", err)
-	}
-
 	err = s.transaction(context.Background(), func(ctx context.Context, tx *txn) error {
+		var tip types.ChainIndex
+		err := tx.QueryRow(ctx, `SELECT last_scanned_index FROM global_settings`).Scan((*sqlChainIndex)(&tip))
+		if err != nil {
+			return fmt.Errorf("failed to query last scanned index: %w", err)
+		}
+
 		rows, err := tx.Query(ctx, `SELECT chain_index, maturity_height, event_id, event_type, event_data FROM wallet_events ORDER BY maturity_height DESC, id DESC LIMIT $1 OFFSET $2`, limit, offset)
 		if err != nil {
 			return fmt.Errorf("failed to query wallet events: %w", err)
@@ -79,8 +80,8 @@ func (s *Store) WalletEvents(offset, limit int) (events []wallet.Event, err erro
 			if err != nil {
 				return fmt.Errorf("failed to scan wallet event: %w", err)
 			}
-			if ci.Height > event.Index.Height {
-				event.Confirmations = ci.Height - event.Index.Height
+			if tip.Height >= event.Index.Height {
+				event.Confirmations = 1 + tip.Height - event.Index.Height
 			}
 			events = append(events, event)
 		}
