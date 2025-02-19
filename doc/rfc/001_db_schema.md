@@ -111,7 +111,7 @@ CREATE TABLE hosts (
 
 CREATE TABLE host_addresses (
     id SERIAL PRIMARY KEY,
-    host_id INTEGER PRIMARY KEY REFERENCES hosts(id) ON DELETE CASCADE,
+    host_id INTEGER PRIMARY KEY REFERENCES hosts(id) NOT NULL ON DELETE CASCADE,
 
     net_address TEXT NOT NULL,
     protocol SMALLINT NOT NULL
@@ -119,13 +119,13 @@ CREATE TABLE host_addresses (
 
 CREATE TABLE host_resolved_cidrs (
     id SERIAL PRIMARY KEY,
-    host_id INTEGER REFERENCES hosts(id) ON DELETE CASCADE,
+    host_id INTEGER REFERENCES hosts(id) NOT NULL ON DELETE CASCADE,
 
     cidr CIDR NOT NULL
 )
 
 CREATE TABLE host_settings (
-    host_id INTEGER PRIMARY KEY REFERENCES hosts(id) ON DELETE CASCADE,
+    host_id INTEGER PRIMARY KEY REFERENCES hosts(id) NOT NULL ON DELETE CASCADE,
 
     protocol_version BYTEA NOT NULL,
     release TEXT NOT NULL,
@@ -145,4 +145,49 @@ CREATE TABLE host_settings (
     tip_height BIGINT NOT NULL,
     valid_until TIMESTAMP WITH TIME ZONE NOT NULL
 )
+```
+
+### 2.4 Contracts
+
+```postgresql
+CREATE TABLE contracts (
+  id SERIAL PRIMARY KEY
+
+  -- TODO: f/u with more fields in a separate PR
+)
+```
+
+### 2.5 Slabs and Sectors
+
+```postgresql
+CREATE TABLE slabs (
+    id BIGSERIAL PRIMARY KEY, -- internal db id
+
+    digest BYTEA UNIQUE NOT NULL, -- unique identifier for the slab derived from sector roots
+    encryption_key BYTEA NOT NULL,
+    min_shards SMALLINT NOT NULL
+)
+
+CREATE TABLE sectors (
+    id BIGSERIAL PRIMARY KEY,
+    slab_id BIGINT REFERENCES slabs(id) NOT NULL ON DELETE CASCADE,
+    slab_index SMALLINT NOT NULL, -- index within corresponding slab to retrieve sectors in right order
+    root BYTEA UNIQUE NOT NULL
+)
+
+CREATE TABLE host_sectors (
+    host_id INTEGER REFERENCES hosts(id) NOT NULL ON DELETE CASCADE,
+    sector_id BIGINT REFERENCES sectors(id) NOT NULL ON DELETE CASCADE,
+    PRIMARY KEY (host_id, sector_id), -- a sector should only exist once per host
+
+    contract_id INTEGER REFERENCES contracts(id) ON DELETE SET NULL, -- determines whether the sector is pinned
+
+    -- NOTE: instead of expiration, we track the upload time and remove sectors
+    -- after successfully pinning them or when the host reports that they don't
+    -- have the sector. That way, we can still prioritize sectors that expire
+    -- soon but might get lucky when pinning after what we thought was the
+    -- expiration date.
+    uploaded_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+)
+CREATE INDEX host_sectors_contract_id_uploaded_at_idx ON host_sectors(contract_id, uploaded_at ASC) -- quick lookup of sectors to pin prioritized by upload time
 ```
