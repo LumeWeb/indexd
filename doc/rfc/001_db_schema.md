@@ -153,6 +153,7 @@ CREATE TABLE host_settings (
 CREATE TABLE contracts (
   id SERIAL PRIMARY KEY
 
+  is_good BOOLEAN NOT NULL DEFAULT TRUE,
   -- TODO: f/u with more fields in a separate PR
 )
 ```
