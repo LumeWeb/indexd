@@ -34,13 +34,14 @@ past:
     - If it is < 0 set it to -1 so that all lost slabs have the same health.
     - If it is > 100, search for the bug that is causing it because it should never happen.
 
-With all of the above in place, the database also exposes a `slabs, nextRefresh := UnhealthySlabs(limit)` method which returns up to `limit` slabs for which the following holds true:
-- The slabs are sorted from least failed repair attempts to most failed repair attempts.
-- The slabs are also sorted from most unhealthy to least unhealthy.
+With all of the above in place, the database also exposes a `slabs, nextRefresh := UnhealthySlabs(lastRepairAttemptCutoff,  limit)` method which returns up to `limit` slabs for which the following holds true:
+- The slabs haven't had a repair attempated on them since `lastRepairAttemptCutoff`.
+- The slabs are sorted from most unhealthy to least unhealthy.
 
-The point of the former is to prioritize slabs that have not been repaired yet
-over slabs that failed to repair. As soon as a slab is repaired successfully,
-the counter is reset to 0.
+The point of the former is to allow the repair loop to exhaust the list of
+unhealthy slabs without getting stuck on unrepairable slabs. The repair time is
+set to NULL upon a successful repair or to the current batches start time upon a
+failed repair. A failed repair won't be attempted for another another.
 
 The point of `nextRefresh` is to provide a marker for the repair loop. If
 `UnhealthySlabs` returns fewer than `limit` slabs, the repair loop knows to

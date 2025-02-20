@@ -166,6 +166,7 @@ CREATE TABLE slabs (
 
     digest BYTEA UNIQUE NOT NULL, -- unique identifier for the slab derived from sector roots
     encryption_key BYTEA NOT NULL,
+    last_repair_attempt TIMESTAMP WITH TIME ZONE DEFAULT NULL, -- NULL if no repair has failed yet
     min_shards SMALLINT NOT NULL CHECK(min_shards > 0)
 )
 
@@ -174,7 +175,7 @@ CREATE TABLE sectors (
     sector_root BYTEA UNIQUE NOT NULL
 
     -- uploading
-    host_id INTEGER REFERENCES hosts(id) NOT NULL, -- host that stores sector
+    host_id INTEGER REFERENCES hosts(id), -- host that stores sector
     contract_id INTEGER REFERENCES contracts(id), -- null if not pinned
     uploaded_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW() -- allow sorting by upload time
 
