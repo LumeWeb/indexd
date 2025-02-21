@@ -119,13 +119,13 @@ CREATE TABLE host_addresses (
 
 CREATE TABLE host_resolved_cidrs (
     id SERIAL PRIMARY KEY,
-    host_id INTEGER REFERENCES hosts(id) NOT NULL ON DELETE CASCADE,
+    host_id INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
 
     cidr CIDR NOT NULL
 )
 
 CREATE TABLE host_settings (
-    host_id INTEGER PRIMARY KEY REFERENCES hosts(id) NOT NULL ON DELETE CASCADE,
+    host_id INTEGER PRIMARY KEY REFERENCES hosts(id) ON DELETE CASCADE,
 
     protocol_version BYTEA NOT NULL,
     release TEXT NOT NULL,
@@ -166,7 +166,7 @@ CREATE TABLE slabs (
     digest BYTEA UNIQUE NOT NULL, -- unique identifier for the slab derived from sector roots
     encryption_key BYTEA NOT NULL,
     health SMALLINT NOT NULL DEFAULT 100 CHECK(health >= 0 AND health <= 100), -- 0 unhealthy, 100 healthy
-    health_refresh_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT '0001-01-01 00:00:00+00',
+    next_health_refresh TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT '0001-01-01 00:00:00+00',
     min_shards SMALLINT NOT NULL CHECK(min_shards > 0)
 )
 
