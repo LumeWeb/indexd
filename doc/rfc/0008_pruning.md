@@ -39,12 +39,11 @@ table and set to `0` whenever we end up finishing pruning a contract. So even if
 it goes out of sync, it will eventually be in sync again after getting pruned.
 
 The actual pruning of a contract is performed as follows:
-1. Fetch all sector roots from the `host_sectors` table in the database where the
-`contract_id` matches the contract to prune and put them in a map (TODO: probably need to benchmark this and maybe batch it)
-2. Fetch up to 1TiB worth of sector roots from the contract at offset 0 (up to 80MiB worth of transmitted data)
-3. Collect all sector roots that are within the 1TiB batch but not in the roots fetched from the database
-4. Prune the collected sectors and increment the offset by 1TiB
-5. Repeat steps 2-4 until the new offset > the new contract size
+1. Loop over batches of up to 1TiB worth of roots
+2. Fetch the batch of roots from the host
+3. Diff them against the database to figure out which ones to prune
+4. Use RPCFreeSector to prune the indices returned by the database
+5. Repeat from 1 until offset is greater than the contract's size
 
 NOTE: The process is not perfect and might miss some sectors. That's because
 pruning a sector swaps the sector to prune with the last one from the contract.
