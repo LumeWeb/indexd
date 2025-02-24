@@ -182,12 +182,12 @@ CREATE TABLE host_sectors (
     sector_id BIGINT REFERENCES sectors(id) NOT NULL,
     PRIMARY KEY (host_id, sector_id), -- a sector should only exist once per host
 
-    contract_id INTEGER REFERENCES contracts(id) ON DELETE, -- determines whether the sector is pinned
+    contract_id INTEGER REFERENCES contracts(id), -- determines whether the sector is pinned
 
-    -- NOTE: instead of expiration, we track the upload time and remove sectors
-    -- after successfully pinning them or when the host reports that they don't
-    -- have the sector. That way, we can still prioritize sectors that expire
-    -- soon but might get lucky when pinning after what we thought was the
+    -- NOTE: instead of expiration, we track the upload time and update
+    -- contract_id after successfully pinning them or when the host reports that
+    -- they don't have the sector. That way, we can still prioritize sectors that
+    -- expire soon but might get lucky when pinning after what we thought was the
     -- expiration date.
     uploaded_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 )
