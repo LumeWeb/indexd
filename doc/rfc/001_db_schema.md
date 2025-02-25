@@ -111,7 +111,7 @@ CREATE TABLE hosts (
 
 CREATE TABLE host_addresses (
     id SERIAL PRIMARY KEY,
-    host_id INTEGER PRIMARY KEY REFERENCES hosts(id) ON DELETE CASCADE,
+    host_id INTEGER PRIMARY KEY REFERENCES hosts(id) NOT NULL ON DELETE CASCADE,
 
     net_address TEXT NOT NULL,
     protocol SMALLINT NOT NULL
@@ -119,7 +119,7 @@ CREATE TABLE host_addresses (
 
 CREATE TABLE host_resolved_cidrs (
     id SERIAL PRIMARY KEY,
-    host_id INTEGER REFERENCES hosts(id) ON DELETE CASCADE,
+    host_id INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
 
     cidr CIDR NOT NULL
 )
@@ -145,4 +145,43 @@ CREATE TABLE host_settings (
     tip_height BIGINT NOT NULL,
     valid_until TIMESTAMP WITH TIME ZONE NOT NULL
 )
+```
+
+### 2.4 Contracts
+
+```postgresql
+CREATE TABLE contracts (
+  id SERIAL PRIMARY KEY
+
+  -- TODO: f/u with more fields in a separate PR
+)
+```
+
+### 2.5 Slabs and Sectors
+
+```postgresql
+CREATE TABLE slabs (
+    id BIGSERIAL PRIMARY KEY, -- internal db id
+
+    digest BYTEA UNIQUE NOT NULL, -- unique identifier for the slab derived from sector roots
+    encryption_key BYTEA NOT NULL,
+    min_shards SMALLINT NOT NULL CHECK(min_shards > 0)
+)
+
+CREATE TABLE sectors (
+    id BIGSERIAL PRIMARY KEY,
+    sector_root BYTEA UNIQUE NOT NULL
+
+    -- uploading
+    host_id INTEGER REFERENCES hosts(id) NOT NULL, -- host that stores sector
+    contract_id INTEGER REFERENCES contracts(id), -- null if not pinned
+    uploaded_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW() -- allow sorting by upload time
+
+    -- slab
+    slab_id BIGINT REFERENCES slabs(id) NOT NULL,
+    slab_index SMALLINT NOT NULL, -- index within corresponding slab to retrieve sectors in right order
+    UNIQUE(slab_id, slab_index) -- enforce one sector per index per slab
+)
+-- quick lookup of sectors to pin prioritized by upload time
+CREATE INDEX host_sectors_contract_id_uploaded_at_idx ON host_sectors(contract_id, uploaded_at ASC)
 ```
