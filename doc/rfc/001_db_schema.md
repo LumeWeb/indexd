@@ -27,8 +27,14 @@ CREATE TABLE global_settings (
     db_version INTEGER NOT NULL, -- used for migrations
     last_scanned_index BYTEA, -- chain index of the last scanned block
 
-    -- pricing related settings, limits default to whatever default indexd is shipped with if NULL
+    -- pinned price limits in currency's base unit (e.g. ¢ for USD)
     pinned_currency TEXT, -- e.g. USD, EUR, etc.
+    pinned_min_collateral BIGINT, -- fiat / TB / month
+    pinned_max_storage_price BIGINT, -- fiat / TB / month
+    pinned_max_ingress_price BIGINT, -- fiat / TB
+    pinned_max_egress_price BIGINT -- fiat / TB
+
+    -- current price limits
     min_collateral NUMERIC(50,0), -- hastings / byte / block
     max_storage_price NUMERIC(50,0), -- hastings / byte / block
     max_ingress_price NUMERIC(50,0), -- hastings / byte
