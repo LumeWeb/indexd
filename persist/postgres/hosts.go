@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
 	"time"
 
 	proto4 "go.sia.tech/core/rhp/v4"
@@ -19,14 +20,6 @@ var ErrHostNotFound = errors.New("host not found")
 
 type dbHost struct {
 	id int64
-
-	totalScans             int
-	failedScans            int
-	consecutiveFailedScans int
-	nextScan               time.Time
-
-	networks []string
-
 	hosts.Host
 }
 
@@ -53,13 +46,13 @@ func (u *updateTx) AddHostAnnouncement(hk types.PublicKey, ha chain.V2HostAnnoun
 }
 
 // UpdateHost updates a host in the database, the given parameters are the result of scanning the host.
-func (s *Store) UpdateHost(ctx context.Context, hk types.PublicKey, networks []string, hs proto4.HostSettings, scanSucceeded bool, nextScan time.Time) error {
+func (s *Store) UpdateHost(ctx context.Context, hk types.PublicKey, networks []net.IPNet, hs proto4.HostSettings, scanSucceeded bool, nextScan time.Time) error {
 	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
 		var query string
 		if scanSucceeded {
-			query = `UPDATE hosts SET total_scans = total_scans + 1, consecutive_failed_scans = 0, next_scan = $1 WHERE public_key = $2 RETURNING id`
+			query = `UPDATE hosts SET total_scans = total_scans + 1, last_successful_scan = NOW(), next_scan = $1 WHERE public_key = $2 RETURNING id`
 		} else {
-			query = `UPDATE hosts SET total_scans = total_scans + 1, failed_scans = failed_scans + 1, consecutive_failed_scans = consecutive_failed_scans + 1, next_scan = $1 WHERE public_key = $2 RETURNING id`
+			query = `UPDATE hosts SET total_scans = total_scans + 1, failed_scans = failed_scans + 1, next_scan = $1 WHERE public_key = $2 RETURNING id`
 		}
 
 		var hostID int64
@@ -123,7 +116,7 @@ DO UPDATE SET
 		}
 
 		for _, cidr := range networks {
-			_, err = tx.Exec(ctx, `INSERT INTO host_resolved_cidrs (host_id, cidr) VALUES ($1, $2)`, hostID, cidr)
+			_, err = tx.Exec(ctx, `INSERT INTO host_resolved_cidrs (host_id, cidr) VALUES ($1, $2)`, hostID, cidr.String())
 			if err != nil {
 				return fmt.Errorf("failed to insert host resolved CIDR: %w", err)
 			}
@@ -131,6 +124,44 @@ DO UPDATE SET
 
 		return nil
 	})
+}
+
+// Host returns the host for given public key
+func (s *Store) Host(ctx context.Context, hk types.PublicKey) (hosts.Host, error) {
+	var host hosts.Host
+	if err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
+		var hostID int64
+		err := tx.QueryRow(ctx, `SELECT id, public_key, last_announcement, total_scans, failed_scans, last_successful_scan, next_scan FROM hosts WHERE public_key = $1`, sqlPublicKey(hk)).Scan(
+			&hostID,
+			(*sqlPublicKey)(&host.PublicKey),
+			&host.LastAnnouncement,
+			&host.TotalScans,
+			&host.FailedScans,
+			&host.LastSuccessfulScan,
+			&host.NextScan,
+		)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("host %q: %w", hk, ErrHostNotFound)
+		} else if err != nil {
+			return fmt.Errorf("failed to query host: %w", err)
+		}
+		host.Addresses, err = queryHostAddresses(ctx, tx, hostID)
+		if err != nil {
+			return err
+		}
+		host.Networks, err = queryHostNetworks(ctx, tx, hostID)
+		if err != nil {
+			return err
+		}
+		host.Settings, err = queryHostSettings(ctx, tx, hostID)
+		if err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		return hosts.Host{}, err
+	}
+	return host, nil
 }
 
 // Hosts returns a list of hosts.
@@ -227,7 +258,7 @@ func (s *Store) HostsForScanning(ctx context.Context) ([]types.PublicKey, error)
 }
 
 func queryHosts(ctx context.Context, tx *txn, offset, limit int) ([]dbHost, error) {
-	rows, err := tx.Query(ctx, `SELECT id, public_key, last_announcement FROM hosts LIMIT $1 OFFSET $2`, limit, offset)
+	rows, err := tx.Query(ctx, `SELECT id, public_key, last_announcement, total_scans, failed_scans, last_successful_scan, next_scan  FROM hosts LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query hosts: %w", err)
 	}
@@ -236,7 +267,15 @@ func queryHosts(ctx context.Context, tx *txn, offset, limit int) ([]dbHost, erro
 	var hosts []dbHost
 	for rows.Next() {
 		var host dbHost
-		if err := rows.Scan(&host.id, (*sqlPublicKey)(&host.PublicKey), &host.LastAnnouncement); err != nil {
+		if err := rows.Scan(
+			&host.id,
+			(*sqlPublicKey)(&host.PublicKey),
+			&host.LastAnnouncement,
+			&host.TotalScans,
+			&host.FailedScans,
+			&host.LastSuccessfulScan,
+			&host.NextScan,
+		); err != nil {
 			return nil, fmt.Errorf("failed to scan host: %w", err)
 		}
 		hosts = append(hosts, host)
@@ -268,6 +307,28 @@ func queryHostAddresses(ctx context.Context, tx *txn, hostID int64) ([]chain.Net
 		return nil, err
 	}
 	return addresses, nil
+}
+
+func queryHostNetworks(ctx context.Context, tx *txn, hostID int64) ([]net.IPNet, error) {
+	rows, err := tx.Query(ctx, `SELECT cidr FROM host_resolved_cidrs WHERE host_id = $1`, hostID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query host resolved CIDRs: %w", err)
+	}
+	defer rows.Close()
+
+	var networks []net.IPNet
+	for rows.Next() {
+		var cidr net.IPNet
+		if err := rows.Scan(&cidr); err != nil {
+			return nil, fmt.Errorf("failed to scan host address: %w", err)
+		}
+		networks = append(networks, cidr)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return networks, nil
 }
 
 func queryHostSettings(ctx context.Context, tx *txn, hostID int64) (proto4.HostSettings, error) {

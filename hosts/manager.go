@@ -38,7 +38,7 @@ type (
 	Store interface {
 		HostAddresses(ctx context.Context, hk types.PublicKey) ([]chain.NetAddress, error)
 		HostsForScanning(ctx context.Context) ([]types.PublicKey, error)
-		UpdateHost(ctx context.Context, hk types.PublicKey, networks []string, hs proto4.HostSettings, scanSucceeded bool, nextScan time.Time) error
+		UpdateHost(ctx context.Context, hk types.PublicKey, networks []net.IPNet, hs proto4.HostSettings, scanSucceeded bool, nextScan time.Time) error
 	}
 
 	// Resolver defines an interface to resolve hostnames.
@@ -175,7 +175,7 @@ func (m *HostManager) UpdateChainState(tx UpdateTx, applied []chain.ApplyUpdate)
 	return nil
 }
 
-func (m *HostManager) performHostScan(ctx context.Context, hk types.PublicKey) ([]string, proto4.HostSettings, error) {
+func (m *HostManager) performHostScan(ctx context.Context, hk types.PublicKey) ([]net.IPNet, proto4.HostSettings, error) {
 	ctx, cancel := context.WithTimeout(ctx, scanTimeout)
 	defer cancel()
 
@@ -186,7 +186,7 @@ func (m *HostManager) performHostScan(ctx context.Context, hk types.PublicKey) (
 
 	logger := m.log.With(zap.Stringer("hk", hk))
 
-	var networks []string
+	var networks []net.IPNet
 	addrs, networks, err = resolveHost(ctx, m.resolver, addrs, logger)
 	if err != nil {
 		return nil, proto4.HostSettings{}, fmt.Errorf("failed to resolve host, %w", err)
@@ -200,7 +200,7 @@ func (m *HostManager) performHostScan(ctx context.Context, hk types.PublicKey) (
 	return networks, settings, nil
 }
 
-func (m *HostManager) persistHostScan(ctx context.Context, hk types.PublicKey, networks []string, settings proto4.HostSettings) error {
+func (m *HostManager) persistHostScan(ctx context.Context, hk types.PublicKey, networks []net.IPNet, settings proto4.HostSettings) error {
 	var consecScanFailures int
 	success := settings != (proto4.HostSettings{})
 
@@ -329,9 +329,9 @@ func calculateNextScanTime(lastScan time.Time, success bool, consecScanFailures 
 // and/or private addresses, and a list of networks in CIDR notation. The only
 // error this function returns is [context.Canceled], other errors that occur
 // during the resolving and parsing are debug logged but otherwise ignored.
-func resolveHost(ctx context.Context, resolver Resolver, addresses []chain.NetAddress, log *zap.Logger) ([]chain.NetAddress, []string, error) {
+func resolveHost(ctx context.Context, resolver Resolver, addresses []chain.NetAddress, log *zap.Logger) ([]chain.NetAddress, []net.IPNet, error) {
 	var filtered []chain.NetAddress
-	var networks []string
+	var networks []net.IPNet
 	for _, na := range addresses {
 		host, _, err := net.SplitHostPort(na.Address)
 		if err != nil {
@@ -359,7 +359,7 @@ func resolveHost(ctx context.Context, resolver Resolver, addresses []chain.NetAd
 			continue
 		}
 
-		var ipnets []string
+		var ipnets []net.IPNet
 		for _, ip := range ips {
 			ipRange := ipv6FilterRange
 			if ip.IP.To4() != nil {
@@ -372,7 +372,7 @@ func resolveHost(ctx context.Context, resolver Resolver, addresses []chain.NetAd
 				log.Debug("failed to parse CIDR", zap.String("CIDR", cidr), zap.Error(err))
 				continue
 			}
-			ipnets = append(ipnets, ipnet.String())
+			ipnets = append(ipnets, *ipnet)
 		}
 
 		if len(ipnets) > 0 {

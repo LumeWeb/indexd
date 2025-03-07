@@ -2,9 +2,7 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"fmt"
 	"net"
 	"reflect"
 	"testing"
@@ -26,7 +24,7 @@ func TestAddHostAnnouncement(t *testing.T) {
 
 	// assert host is not found
 	hk := types.PublicKey{1}
-	_, err := db.rawHost(context.Background(), hk)
+	_, err := db.Host(context.Background(), hk)
 	if !errors.Is(err, ErrHostNotFound) {
 		t.Fatal("expected ErrHostNotFound, got", err)
 	}
@@ -42,7 +40,7 @@ func TestAddHostAnnouncement(t *testing.T) {
 	}
 
 	// assert host got inserted, as well as its addresses
-	h, err := db.rawHost(context.Background(), hk)
+	h, err := db.Host(context.Background(), hk)
 	if err != nil {
 		t.Fatal("unexpected", err)
 	} else if h.LastAnnouncement != now {
@@ -65,7 +63,7 @@ func TestAddHostAnnouncement(t *testing.T) {
 	}
 
 	// assert host is updated and addresses are overwritten
-	h, err = db.rawHost(context.Background(), hk)
+	h, err = db.Host(context.Background(), hk)
 	if err != nil {
 		t.Fatal("unexpected", err)
 	} else if h.LastAnnouncement != now {
@@ -74,6 +72,138 @@ func TestAddHostAnnouncement(t *testing.T) {
 		t.Fatal("unexpected", len(h.Addresses))
 	} else if h.Addresses[0].Address != ha3.Address || h.Addresses[0].Protocol != ha3.Protocol {
 		t.Fatal("unexpected", h.Addresses[0])
+	}
+}
+
+func TestHost(t *testing.T) {
+	// create database
+	log := zaptest.NewLogger(t)
+	db := initPostgres(t, log.Named("postgres"))
+
+	hk := types.PublicKey{1}
+	hs := testHostSettings(hk)
+
+	// assert [ErrHostNotFound] is returned
+	_, err := db.Host(context.Background(), hk)
+	if !errors.Is(err, ErrHostNotFound) {
+		t.Fatal("expected ErrHostNotFound, got", err)
+	}
+
+	// add a host
+	ha1 := chain.NetAddress{Protocol: quic.Protocol, Address: "[::]:4848"}
+	if err := db.UpdateChainState(context.Background(), func(tx subscriber.UpdateTx) error {
+		return tx.AddHostAnnouncement(hk, chain.V2HostAnnouncement{ha1}, time.Now())
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// update the host
+	networks := []net.IPNet{{IP: net.IPv4(1, 2, 3, 4), Mask: net.CIDRMask(32, 32)}}
+	err = db.UpdateHost(context.Background(), hk, networks, hs, true, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// assert host is found and address, networks and settings are populated
+	if h, err := db.Host(context.Background(), hk); err != nil {
+		t.Fatal(err)
+	} else if !reflect.DeepEqual(h.Settings, hs) {
+		t.Fatal("expected settings to match")
+	} else if len(h.Addresses) != 1 {
+		t.Fatal("unexpected", len(h.Addresses))
+	} else if len(h.Networks) != 1 {
+		t.Fatal("unexpected networks", h.Networks)
+	}
+}
+
+func TestHostAddresses(t *testing.T) {
+	// create database
+	log := zaptest.NewLogger(t)
+	db := initPostgres(t, log.Named("postgres"))
+
+	// assert [ErrHostNotFound] is returned
+	hk := types.PublicKey{1}
+	_, err := db.HostAddresses(context.Background(), hk)
+	if !errors.Is(err, ErrHostNotFound) {
+		t.Fatal("expected ErrHostNotFound, got", err)
+	}
+
+	// add a host
+	ha1 := chain.NetAddress{Protocol: quic.Protocol, Address: "[::]:4848"}
+	ha2 := chain.NetAddress{Protocol: siamux.Protocol, Address: "1.2.3.4:5678"}
+	if err := db.UpdateChainState(context.Background(), func(tx subscriber.UpdateTx) error {
+		return tx.AddHostAnnouncement(hk, chain.V2HostAnnouncement{ha1, ha2}, time.Now())
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert host addresses are returned
+	as, err := db.HostAddresses(context.Background(), hk)
+	if err != nil {
+		t.Fatal("unexpected", err)
+	} else if len(as) != 2 {
+		t.Fatal("unexpected", len(as))
+	} else if as[0].Address != ha1.Address || as[0].Protocol != ha1.Protocol {
+		t.Fatal("unexpected", as[0])
+	} else if as[1].Address != ha2.Address || as[1].Protocol != ha2.Protocol {
+		t.Fatal("unexpected", as[1])
+	}
+}
+
+func TestHostsForScanning(t *testing.T) {
+	// create database
+	log := zaptest.NewLogger(t)
+	db := initPostgres(t, log.Named("postgres"))
+
+	// add two hosts
+	hk1 := types.PublicKey{1}
+	hk2 := types.PublicKey{2}
+	if err := db.UpdateChainState(context.Background(), func(tx subscriber.UpdateTx) error {
+		return errors.Join(
+			tx.AddHostAnnouncement(hk1, chain.V2HostAnnouncement{}, time.Now()),
+			tx.AddHostAnnouncement(hk2, chain.V2HostAnnouncement{}, time.Now()),
+		)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert both hosts are returned
+	hosts, err := db.HostsForScanning(context.Background())
+	if err != nil {
+		t.Fatal("unexpected", err)
+	} else if len(hosts) != 2 {
+		t.Fatal("unexpected", len(hosts))
+	}
+
+	// simulate scanning h1 successfully
+	nextScan := time.Now().Round(time.Microsecond).Add(time.Minute)
+	err = db.UpdateHost(context.Background(), hk1, nil, proto4.HostSettings{}, true, nextScan)
+	if err != nil {
+		t.Fatal("unexpected", err)
+	}
+
+	// assert only h2 is returned
+	hosts, err = db.HostsForScanning(context.Background())
+	if err != nil {
+		t.Fatal("unexpected", err)
+	} else if len(hosts) != 1 {
+		t.Fatal("unexpected", len(hosts))
+	} else if hosts[0] != hk2 {
+		t.Fatal("unexpected", hosts[0])
+	}
+
+	// simulate scanning h2 successfully
+	err = db.UpdateHost(context.Background(), hk2, nil, proto4.HostSettings{}, true, nextScan)
+	if err != nil {
+		t.Fatal("unexpected", err)
+	}
+
+	// assert no hosts are returned
+	hosts, err = db.HostsForScanning(context.Background())
+	if err != nil {
+		t.Fatal("unexpected", err)
+	} else if len(hosts) != 0 {
+		t.Fatal("unexpected", len(hosts))
 	}
 }
 
@@ -101,121 +231,52 @@ func TestUpdateHost(t *testing.T) {
 	err = db.UpdateHost(context.Background(), hk, nil, hs, false, time.Time{})
 	if err != nil {
 		t.Fatal(err)
-	} else if h, err := db.rawHost(context.Background(), hk); err != nil {
+	} else if h, err := db.Host(context.Background(), hk); err != nil {
 		t.Fatal(err)
 	} else if h.Settings != (proto4.HostSettings{}) {
 		t.Fatal("expected no settings")
-	}
-
-	// assert consecutive failures get updated
-	err = db.UpdateHost(context.Background(), hk, nil, hs, false, time.Time{})
-	if err != nil {
-		t.Fatal(err)
-	} else if h, err := db.rawHost(context.Background(), hk); err != nil {
-		t.Fatal(err)
-	} else if h.consecutiveFailedScans != 2 {
-		t.Fatal("unexpected", h.consecutiveFailedScans)
+	} else if !h.LastSuccessfulScan.IsZero() {
+		t.Fatal("expected no last successful scan")
 	}
 
 	now := time.Now().Round(time.Minute)
 	nextScan := now.Add(time.Hour)
-	networks := []string{"192.168.1.0/24"}
+	networks := []net.IPNet{{IP: net.IPv4(1, 2, 3, 4), Mask: net.CIDRMask(32, 32)}}
 
 	// assert host is properly updated on successful scan
 	err = db.UpdateHost(context.Background(), hk, networks, hs, true, nextScan)
 	if err != nil {
 		t.Fatal(err)
-	} else if h, err := db.rawHost(context.Background(), hk); err != nil {
+	} else if h, err := db.Host(context.Background(), hk); err != nil {
 		t.Fatal(err)
 	} else if !reflect.DeepEqual(h.Settings, hs) {
 		t.Fatal("expected settings to match")
-	} else if h.totalScans != 3 {
-		t.Fatal("unexpected", h.totalScans)
-	} else if !h.nextScan.Equal(nextScan) {
-		t.Fatal("unexpected next scan", h.nextScan)
-	} else if h.failedScans != 2 {
-		t.Fatal("unexpected failed scans", h.failedScans)
-	} else if h.consecutiveFailedScans != 0 {
-		t.Fatal("unexpected consecutive failed scans", h.consecutiveFailedScans)
-	} else if len(h.networks) != 1 {
-		t.Fatal("unexpected networks", h.networks)
-	} else if h.networks[0] != networks[0] {
-		t.Fatal("unexpected network", h.networks[0])
+	} else if h.TotalScans != 2 {
+		t.Fatal("unexpected", h.TotalScans)
+	} else if h.LastSuccessfulScan.IsZero() {
+		t.Fatal("expected last successful scan to be set")
+	} else if !h.NextScan.Equal(nextScan) {
+		t.Fatal("unexpected next scan", h.NextScan)
+	} else if h.FailedScans != 1 {
+		t.Fatal("unexpected failed scans", h.FailedScans)
+	} else if len(h.Networks) != 1 {
+		t.Fatal("unexpected networks", h.Networks)
+	} else if h.Networks[0].String() != networks[0].String() {
+		t.Fatal("unexpected network", h.Networks)
 	}
 
 	// assert networks are overwritten
-	networks = []string{"2001:db8::/32"}
+	networks = []net.IPNet{{IP: net.IPv4(4, 3, 2, 1), Mask: net.CIDRMask(32, 32)}}
 	err = db.UpdateHost(context.Background(), hk, networks, hs, true, nextScan)
 	if err != nil {
 		t.Fatal(err)
-	} else if h, err := db.rawHost(context.Background(), hk); err != nil {
+	} else if h, err := db.Host(context.Background(), hk); err != nil {
 		t.Fatal(err)
-	} else if len(h.networks) != 1 {
-		t.Fatal("unexpected networks", h.networks)
-	} else if h.networks[0] != networks[0] {
-		t.Fatal("unexpected network", h.networks[0])
+	} else if len(h.Networks) != 1 {
+		t.Fatal("unexpected networks", h.Networks)
+	} else if h.Networks[0].String() != networks[0].String() {
+		t.Fatal("unexpected network", h.Networks)
 	}
-}
-
-// rawHost returns the host for given public key
-func (s *Store) rawHost(ctx context.Context, hk types.PublicKey) (dbHost, error) {
-	var h dbHost
-	if err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
-		err := tx.QueryRow(ctx, `SELECT id, public_key, last_announcement, total_scans, failed_scans, consecutive_failed_scans, next_scan FROM hosts WHERE public_key = $1`, sqlPublicKey(hk)).Scan(
-			&h.id,
-			(*sqlPublicKey)(&h.PublicKey),
-			&h.LastAnnouncement,
-			&h.totalScans,
-			&h.failedScans,
-			&h.consecutiveFailedScans,
-			&h.nextScan,
-		)
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("host %q: %w", hk, ErrHostNotFound)
-		} else if err != nil {
-			return fmt.Errorf("failed to query host: %w", err)
-		}
-		h.Addresses, err = queryHostAddresses(ctx, tx, h.id)
-		if err != nil {
-			return err
-		}
-		h.Settings, err = queryHostSettings(ctx, tx, h.id)
-		if err != nil {
-			return err
-		}
-
-		h.networks, err = queryHostNetworks(ctx, tx, h.id)
-		if err != nil {
-			return err
-		}
-
-		return nil
-	}); err != nil {
-		return dbHost{}, err
-	}
-	return h, nil
-}
-
-func queryHostNetworks(ctx context.Context, tx *txn, hostID int64) ([]string, error) {
-	rows, err := tx.Query(ctx, `SELECT cidr FROM host_resolved_cidrs WHERE host_id = $1`, hostID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query host resolved CIDRs: %w", err)
-	}
-	defer rows.Close()
-
-	var networks []string
-	for rows.Next() {
-		var cidr net.IPNet
-		if err := rows.Scan(&cidr); err != nil {
-			return nil, fmt.Errorf("failed to scan host address: %w", err)
-		}
-		networks = append(networks, cidr.String())
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return networks, nil
 }
 
 func testHostSettings(pk types.PublicKey) proto4.HostSettings {

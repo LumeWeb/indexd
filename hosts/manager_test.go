@@ -35,7 +35,7 @@ func (s *mockStore) HostAddresses(ctx context.Context, hk types.PublicKey) ([]ch
 }
 
 func (s *mockStore) HostsForScanning(ctx context.Context) ([]types.PublicKey, error) { return nil, nil }
-func (s *mockStore) UpdateHost(ctx context.Context, hk types.PublicKey, networks []string, hs proto4.HostSettings, scanSucceeded bool, nextScan time.Time) error {
+func (s *mockStore) UpdateHost(ctx context.Context, hk types.PublicKey, networks []net.IPNet, hs proto4.HostSettings, scanSucceeded bool, nextScan time.Time) error {
 	return nil
 }
 
