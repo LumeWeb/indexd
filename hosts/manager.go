@@ -36,7 +36,7 @@ type (
 	// Store defines an interface to fetch hosts that need to be scanned and
 	// persist the scan results in the database.
 	Store interface {
-		HostAddresses(ctx context.Context, hk types.PublicKey) ([]chain.NetAddress, error)
+		Host(ctx context.Context, hk types.PublicKey) (Host, error)
 		HostsForScanning(ctx context.Context) ([]types.PublicKey, error)
 		UpdateHost(ctx context.Context, hk types.PublicKey, networks []net.IPNet, hs proto4.HostSettings, scanSucceeded bool, nextScan time.Time) error
 	}
@@ -69,9 +69,6 @@ type (
 
 		tg  *threadgroup.ThreadGroup
 		log *zap.Logger
-
-		mu                      sync.Mutex
-		consecutiveScanFailures map[types.PublicKey]int
 	}
 )
 
@@ -87,8 +84,6 @@ func NewManager(store Store, opts ...Option) (*HostManager, error) {
 		store:    store,
 		tg:       threadgroup.New(),
 		log:      zap.NewNop(),
-
-		consecutiveScanFailures: make(map[types.PublicKey]int),
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -131,16 +126,43 @@ func (m *HostManager) Close() error {
 
 // ScanHost scans the host with given host key and returns its settings.
 func (m *HostManager) ScanHost(ctx context.Context, hk types.PublicKey) (proto4.HostSettings, error) {
-	networks, hs, err := m.performHostScan(ctx, hk)
+	logger := m.log.With(zap.Stringer("hk", hk))
+
+	host, err := m.store.Host(ctx, hk)
 	if err != nil {
-		return proto4.HostSettings{}, err
+		return proto4.HostSettings{}, fmt.Errorf("failed to get host, %w", err)
 	}
 
-	err = m.persistHostScan(ctx, hk, networks, hs)
+	scanCtx, cancel := context.WithTimeout(ctx, scanTimeout)
+	defer cancel()
+
+	addrs, networks, err := resolveHost(scanCtx, m.resolver, host.Addresses, logger)
 	if err != nil {
-		m.log.Error("failed to persist host scan", zap.Stringer("hk", hk), zap.Error(err))
+		return proto4.HostSettings{}, fmt.Errorf("failed to resolve host, %w", err)
 	}
-	return hs, nil
+
+	settings, err := fetchSettings(scanCtx, m.client, hk, addrs, logger)
+	if err != nil {
+		return proto4.HostSettings{}, fmt.Errorf("failed to fetch settings, %w", err)
+	}
+
+	success := settings != (proto4.HostSettings{})
+	nextScan := calculateNextScanTime(
+		time.Now(),
+		success,
+		host.ConsecutiveFailedScans,
+		m.scanInterval,
+		scanIntervalOffsetHours,
+		scanExponentialBackoffHours,
+		scanExponentialBackoffMaxHours,
+	)
+
+	err = m.store.UpdateHost(ctx, hk, networks, settings, success, nextScan)
+	if err != nil {
+		return proto4.HostSettings{}, fmt.Errorf("failed to update host, %w", err)
+	}
+
+	return settings, nil
 }
 
 // UpdateChainState updates the host announcements in the database.
@@ -175,59 +197,6 @@ func (m *HostManager) UpdateChainState(tx UpdateTx, applied []chain.ApplyUpdate)
 	return nil
 }
 
-func (m *HostManager) performHostScan(ctx context.Context, hk types.PublicKey) ([]net.IPNet, proto4.HostSettings, error) {
-	ctx, cancel := context.WithTimeout(ctx, scanTimeout)
-	defer cancel()
-
-	addrs, err := m.store.HostAddresses(ctx, hk)
-	if err != nil {
-		return nil, proto4.HostSettings{}, fmt.Errorf("failed to get host addresses, %w", err)
-	}
-
-	logger := m.log.With(zap.Stringer("hk", hk))
-
-	var networks []net.IPNet
-	addrs, networks, err = resolveHost(ctx, m.resolver, addrs, logger)
-	if err != nil {
-		return nil, proto4.HostSettings{}, fmt.Errorf("failed to resolve host, %w", err)
-	}
-
-	settings, err := fetchSettings(ctx, m.client, hk, addrs, logger)
-	if err != nil {
-		return nil, proto4.HostSettings{}, fmt.Errorf("failed to fetch settings, %w", err)
-	}
-
-	return networks, settings, nil
-}
-
-func (m *HostManager) persistHostScan(ctx context.Context, hk types.PublicKey, networks []net.IPNet, settings proto4.HostSettings) error {
-	var consecScanFailures int
-	success := settings != (proto4.HostSettings{})
-
-	m.mu.Lock()
-	if success {
-		delete(m.consecutiveScanFailures, hk)
-	} else {
-		m.consecutiveScanFailures[hk]++
-		consecScanFailures = m.consecutiveScanFailures[hk]
-	}
-	m.mu.Unlock()
-
-	nextScan := calculateNextScanTime(
-		time.Now(),
-		success,
-		consecScanFailures,
-		m.scanInterval,
-		scanIntervalOffsetHours,
-		scanExponentialBackoffHours,
-		scanExponentialBackoffMaxHours,
-	)
-
-	ctx, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
-	return m.store.UpdateHost(ctx, hk, networks, settings, success, nextScan)
-}
-
 func (m *HostManager) scanHosts(ctx context.Context) {
 	start := time.Now()
 
@@ -259,13 +228,10 @@ func (m *HostManager) scanHosts(ctx context.Context) {
 				wg.Done()
 			}()
 
-			logger := m.log.With(zap.Stringer("hk", hk))
-			if networks, hs, err := m.performHostScan(ctx, hk); errors.Is(err, context.Canceled) {
+			if _, err := m.ScanHost(ctx, hk); errors.Is(err, context.Canceled) {
 				return
 			} else if err != nil {
-				logger.Error("failed to perform host scan", zap.Error(err))
-			} else if err := m.persistHostScan(ctx, hk, networks, hs); err != nil {
-				logger.Error("failed to persist host scan", zap.Error(err))
+				m.log.Error("failed to perform host scan", zap.Stringer("hk", hk), zap.Error(err))
 			}
 		}(ctx, hk)
 	}
@@ -320,6 +286,7 @@ func calculateNextScanTime(lastScan time.Time, success bool, consecScanFailures 
 		return lastScan.Add(interval).Add(randomOffset)
 	}
 
+	consecScanFailures++
 	expBackoff := time.Duration(min(expBackoffHours*consecScanFailures, expBackoffHoursMax)) * time.Hour
 	return lastScan.Add(expBackoff)
 }

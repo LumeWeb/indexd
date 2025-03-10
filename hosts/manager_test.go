@@ -18,20 +18,20 @@ import (
 
 // mockStore is a mock that implements the Store interface.
 type mockStore struct {
-	hosts map[types.PublicKey]chain.V2HostAnnouncement
+	hosts map[types.PublicKey]Host
 }
 
 func (s *mockStore) AddHostAnnouncement(hk types.PublicKey, ha chain.V2HostAnnouncement, _ time.Time) error {
-	s.hosts[hk] = ha
+	s.hosts[hk] = Host{Addresses: ha}
 	return nil
 }
 
-func (s *mockStore) HostAddresses(ctx context.Context, hk types.PublicKey) ([]chain.NetAddress, error) {
-	ha, ok := s.hosts[hk]
+func (s *mockStore) Host(ctx context.Context, hk types.PublicKey) (Host, error) {
+	h, ok := s.hosts[hk]
 	if !ok {
-		return nil, errors.New("not found")
+		return h, errors.New("not found")
 	}
-	return ha, nil
+	return h, nil
 }
 
 func (s *mockStore) HostsForScanning(ctx context.Context) ([]types.PublicKey, error) { return nil, nil }
@@ -74,7 +74,7 @@ func (c *mockClient) Settings(ctx context.Context, hk types.PublicKey, addr stri
 }
 
 func TestHostManager(t *testing.T) {
-	db := &mockStore{hosts: make(map[types.PublicKey]chain.V2HostAnnouncement)}
+	db := &mockStore{hosts: make(map[types.PublicKey]Host)}
 
 	// create host manager
 	mgr, err := NewManager(db, WithAnnouncementMaxAge(time.Minute))

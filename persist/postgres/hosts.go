@@ -45,14 +45,114 @@ func (u *updateTx) AddHostAnnouncement(hk types.PublicKey, ha chain.V2HostAnnoun
 	return nil
 }
 
+// Host returns the host for given public key
+func (s *Store) Host(ctx context.Context, hk types.PublicKey) (hosts.Host, error) {
+	var host hosts.Host
+	if err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
+		var hostID int64
+		err := tx.QueryRow(ctx, `SELECT id, public_key, last_announcement, total_scans, failed_scans, consecutive_failed_scans, last_successful_scan, next_scan FROM hosts WHERE public_key = $1`, sqlPublicKey(hk)).Scan(
+			&hostID,
+			(*sqlPublicKey)(&host.PublicKey),
+			&host.LastAnnouncement,
+			&host.TotalScans,
+			&host.FailedScans,
+			&host.ConsecutiveFailedScans,
+			&host.LastSuccessfulScan,
+			&host.NextScan,
+		)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("host %q: %w", hk, ErrHostNotFound)
+		} else if err != nil {
+			return fmt.Errorf("failed to query host: %w", err)
+		}
+		host.Addresses, err = queryHostAddresses(ctx, tx, hostID)
+		if err != nil {
+			return err
+		}
+		host.Networks, err = queryHostNetworks(ctx, tx, hostID)
+		if err != nil {
+			return err
+		}
+		host.Settings, err = queryHostSettings(ctx, tx, hostID)
+		if err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		return hosts.Host{}, err
+	}
+	return host, nil
+}
+
+// Hosts returns a list of hosts.
+func (s *Store) Hosts(ctx context.Context, offset, limit int) ([]hosts.Host, error) {
+	// sanity check input
+	if err := validateOffsetLimit(offset, limit); err != nil {
+		return nil, err
+	} else if limit == 0 {
+		return nil, nil
+	}
+
+	var hosts []hosts.Host
+	if err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
+		dbHosts, err := queryHosts(ctx, tx, offset, limit)
+		if err != nil {
+			return err
+		}
+		for _, h := range dbHosts {
+			h.Addresses, err = queryHostAddresses(ctx, tx, h.id)
+			if err != nil {
+				return err
+			}
+			h.Settings, err = queryHostSettings(ctx, tx, h.id)
+			if err != nil {
+				return err
+			}
+
+			// TODO: perform host checks
+
+			hosts = append(hosts, h.Host)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	return hosts, nil
+}
+
+// HostsForScanning returns a list of hosts where the next scan is due.
+func (s *Store) HostsForScanning(ctx context.Context) ([]types.PublicKey, error) {
+	var hosts []types.PublicKey
+	if err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
+		rows, err := tx.Query(ctx, `SELECT public_key FROM hosts WHERE next_scan <= NOW() ORDER BY next_scan ASC`)
+		if err != nil {
+			return fmt.Errorf("failed to query hosts for scanning: %w", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var hk sqlPublicKey
+			if err := rows.Scan(&hk); err != nil {
+				return fmt.Errorf("failed to scan host: %w", err)
+			}
+			hosts = append(hosts, types.PublicKey(hk))
+		}
+		return rows.Err()
+	}); err != nil {
+		return nil, err
+	}
+	return hosts, nil
+}
+
 // UpdateHost updates a host in the database, the given parameters are the result of scanning the host.
 func (s *Store) UpdateHost(ctx context.Context, hk types.PublicKey, networks []net.IPNet, hs proto4.HostSettings, scanSucceeded bool, nextScan time.Time) error {
 	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
 		var query string
 		if scanSucceeded {
-			query = `UPDATE hosts SET total_scans = total_scans + 1, last_successful_scan = NOW(), next_scan = $1 WHERE public_key = $2 RETURNING id`
+			query = `UPDATE hosts SET total_scans = total_scans + 1, consecutive_failed_scans = 0, last_successful_scan = NOW(), next_scan = $1 WHERE public_key = $2 RETURNING id`
 		} else {
-			query = `UPDATE hosts SET total_scans = total_scans + 1, failed_scans = failed_scans + 1, next_scan = $1 WHERE public_key = $2 RETURNING id`
+			query = `UPDATE hosts SET total_scans = total_scans + 1, failed_scans = failed_scans + 1, consecutive_failed_scans = consecutive_failed_scans + 1,next_scan = $1 WHERE public_key = $2 RETURNING id`
 		}
 
 		var hostID int64
@@ -124,137 +224,6 @@ DO UPDATE SET
 
 		return nil
 	})
-}
-
-// Host returns the host for given public key
-func (s *Store) Host(ctx context.Context, hk types.PublicKey) (hosts.Host, error) {
-	var host hosts.Host
-	if err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
-		var hostID int64
-		err := tx.QueryRow(ctx, `SELECT id, public_key, last_announcement, total_scans, failed_scans, last_successful_scan, next_scan FROM hosts WHERE public_key = $1`, sqlPublicKey(hk)).Scan(
-			&hostID,
-			(*sqlPublicKey)(&host.PublicKey),
-			&host.LastAnnouncement,
-			&host.TotalScans,
-			&host.FailedScans,
-			&host.LastSuccessfulScan,
-			&host.NextScan,
-		)
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("host %q: %w", hk, ErrHostNotFound)
-		} else if err != nil {
-			return fmt.Errorf("failed to query host: %w", err)
-		}
-		host.Addresses, err = queryHostAddresses(ctx, tx, hostID)
-		if err != nil {
-			return err
-		}
-		host.Networks, err = queryHostNetworks(ctx, tx, hostID)
-		if err != nil {
-			return err
-		}
-		host.Settings, err = queryHostSettings(ctx, tx, hostID)
-		if err != nil {
-			return err
-		}
-		return nil
-	}); err != nil {
-		return hosts.Host{}, err
-	}
-	return host, nil
-}
-
-// Hosts returns a list of hosts.
-func (s *Store) Hosts(ctx context.Context, offset, limit int) ([]hosts.Host, error) {
-	// sanity check input
-	if err := validateOffsetLimit(offset, limit); err != nil {
-		return nil, err
-	} else if limit == 0 {
-		return nil, nil
-	}
-
-	var hosts []hosts.Host
-	if err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
-		dbHosts, err := queryHosts(ctx, tx, offset, limit)
-		if err != nil {
-			return err
-		}
-		for _, h := range dbHosts {
-			h.Addresses, err = queryHostAddresses(ctx, tx, h.id)
-			if err != nil {
-				return err
-			}
-			h.Settings, err = queryHostSettings(ctx, tx, h.id)
-			if err != nil {
-				return err
-			}
-
-			// TODO: perform host checks
-
-			hosts = append(hosts, h.Host)
-		}
-		return nil
-	}); err != nil {
-		return nil, err
-	}
-
-	return hosts, nil
-}
-
-// HostAddresses returns the addresses of a host. If the host is not found, ErrHostNotFound is returned.
-func (s *Store) HostAddresses(ctx context.Context, hk types.PublicKey) ([]chain.NetAddress, error) {
-	var addresses []chain.NetAddress
-	if err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
-		var hostID int64
-		err := tx.QueryRow(ctx, `SELECT id FROM hosts WHERE public_key = $1`, sqlPublicKey(hk)).Scan(&hostID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("host %q: %w", hk, ErrHostNotFound)
-		} else if err != nil {
-			return fmt.Errorf("failed to query host: %w", err)
-		}
-
-		rows, err := tx.Query(ctx, `SELECT net_address, protocol FROM host_addresses WHERE host_id = $1`, hostID)
-		if err != nil {
-			return fmt.Errorf("failed to query host addresses: %w", err)
-		}
-		defer rows.Close()
-
-		for rows.Next() {
-			var na chain.NetAddress
-			if err := rows.Scan(&na.Address, (*sqlNetworkProtocol)(&na.Protocol)); err != nil {
-				return fmt.Errorf("failed to scan host address: %w", err)
-			}
-			addresses = append(addresses, na)
-		}
-		return rows.Err()
-	}); err != nil {
-		return nil, err
-	}
-	return addresses, nil
-}
-
-// HostsForScanning returns a list of hosts where the next scan is due.
-func (s *Store) HostsForScanning(ctx context.Context) ([]types.PublicKey, error) {
-	var hosts []types.PublicKey
-	if err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
-		rows, err := tx.Query(ctx, `SELECT public_key FROM hosts WHERE next_scan <= NOW() ORDER BY next_scan ASC`)
-		if err != nil {
-			return fmt.Errorf("failed to query hosts for scanning: %w", err)
-		}
-		defer rows.Close()
-
-		for rows.Next() {
-			var hk sqlPublicKey
-			if err := rows.Scan(&hk); err != nil {
-				return fmt.Errorf("failed to scan host: %w", err)
-			}
-			hosts = append(hosts, types.PublicKey(hk))
-		}
-		return rows.Err()
-	}); err != nil {
-		return nil, err
-	}
-	return hosts, nil
 }
 
 func queryHosts(ctx context.Context, tx *txn, offset, limit int) ([]dbHost, error) {

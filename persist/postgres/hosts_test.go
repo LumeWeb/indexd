@@ -116,40 +116,6 @@ func TestHost(t *testing.T) {
 	}
 }
 
-func TestHostAddresses(t *testing.T) {
-	// create database
-	log := zaptest.NewLogger(t)
-	db := initPostgres(t, log.Named("postgres"))
-
-	// assert [ErrHostNotFound] is returned
-	hk := types.PublicKey{1}
-	_, err := db.HostAddresses(context.Background(), hk)
-	if !errors.Is(err, ErrHostNotFound) {
-		t.Fatal("expected ErrHostNotFound, got", err)
-	}
-
-	// add a host
-	ha1 := chain.NetAddress{Protocol: quic.Protocol, Address: "[::]:4848"}
-	ha2 := chain.NetAddress{Protocol: siamux.Protocol, Address: "1.2.3.4:5678"}
-	if err := db.UpdateChainState(context.Background(), func(tx subscriber.UpdateTx) error {
-		return tx.AddHostAnnouncement(hk, chain.V2HostAnnouncement{ha1, ha2}, time.Now())
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	// assert host addresses are returned
-	as, err := db.HostAddresses(context.Background(), hk)
-	if err != nil {
-		t.Fatal("unexpected", err)
-	} else if len(as) != 2 {
-		t.Fatal("unexpected", len(as))
-	} else if as[0].Address != ha1.Address || as[0].Protocol != ha1.Protocol {
-		t.Fatal("unexpected", as[0])
-	} else if as[1].Address != ha2.Address || as[1].Protocol != ha2.Protocol {
-		t.Fatal("unexpected", as[1])
-	}
-}
-
 func TestHostsForScanning(t *testing.T) {
 	// create database
 	log := zaptest.NewLogger(t)
@@ -239,6 +205,16 @@ func TestUpdateHost(t *testing.T) {
 		t.Fatal("expected no last successful scan")
 	}
 
+	// assert consecutive failed scans are incremented
+	err = db.UpdateHost(context.Background(), hk, nil, hs, false, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	} else if h, err := db.Host(context.Background(), hk); err != nil {
+		t.Fatal(err)
+	} else if h.ConsecutiveFailedScans != 2 {
+		t.Fatal("unexpected", h.ConsecutiveFailedScans)
+	}
+
 	now := time.Now().Round(time.Minute)
 	nextScan := now.Add(time.Hour)
 	networks := []net.IPNet{{IP: net.IPv4(1, 2, 3, 4), Mask: net.CIDRMask(32, 32)}}
@@ -251,13 +227,15 @@ func TestUpdateHost(t *testing.T) {
 		t.Fatal(err)
 	} else if !reflect.DeepEqual(h.Settings, hs) {
 		t.Fatal("expected settings to match")
-	} else if h.TotalScans != 2 {
+	} else if h.TotalScans != 3 {
 		t.Fatal("unexpected", h.TotalScans)
+	} else if h.ConsecutiveFailedScans != 0 {
+		t.Fatal("unexpected", h.ConsecutiveFailedScans)
 	} else if h.LastSuccessfulScan.IsZero() {
 		t.Fatal("expected last successful scan to be set")
 	} else if !h.NextScan.Equal(nextScan) {
 		t.Fatal("unexpected next scan", h.NextScan)
-	} else if h.FailedScans != 1 {
+	} else if h.FailedScans != 2 {
 		t.Fatal("unexpected failed scans", h.FailedScans)
 	} else if len(h.Networks) != 1 {
 		t.Fatal("unexpected networks", h.Networks)
