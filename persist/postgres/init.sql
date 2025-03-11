@@ -1,9 +1,11 @@
 CREATE TABLE hosts (
     id SERIAL PRIMARY KEY,
     public_key BYTEA UNIQUE NOT NULL CHECK (LENGTH(public_key) = 32),
+    uptime_ema DOUBLE PRECISION NOT NULL DEFAULT 1,
     total_scans INTEGER NOT NULL DEFAULT 0,
     failed_scans INTEGER NOT NULL DEFAULT 0,
     consecutive_failed_scans INTEGER NOT NULL DEFAULT 0,
+    last_failed_scan TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT '0001-01-01 00:00:00+00',
     last_successful_scan TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT '0001-01-01 00:00:00+00',
     last_announcement TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT '0001-01-01 00:00:00+00',
     next_scan TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT '0001-01-01 00:00:00+00',
@@ -83,7 +85,15 @@ CREATE TABLE wallet_siacoin_elements (
 CREATE TABLE global_settings (
     id INTEGER PRIMARY KEY NOT NULL DEFAULT 0 CHECK (id = 0), -- enforce a single row
     db_version INTEGER NOT NULL, -- used for migrations
-    last_scanned_index BYTEA CHECK (LENGTH(last_scanned_index) = 8+32) -- chain index of the last scanned block
+    last_scanned_index BYTEA CHECK (LENGTH(last_scanned_index) = 8+32), -- chain index of the last scanned block
+
+    min_collateral NUMERIC(50,0) NOT NULL DEFAULT 0, -- hastings / byte / block
+    max_storage_price NUMERIC(50,0) NOT NULL DEFAULT 0, -- hastings / byte / block
+    max_ingress_price NUMERIC(50,0) NOT NULL DEFAULT 0, -- hastings / byte
+    max_egress_price NUMERIC(50,0) NOT NULL DEFAULT 0, -- hastings / byte
+
+    contract_period INTEGER NOT NULL DEFAULT 0, -- duration of contracts in blocks
+    min_protocol_version BYTEA NOT NULL DEFAULT '\x010000' -- minimum protocol version
 );
 
 CREATE TABLE contracts (

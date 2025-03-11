@@ -15,6 +15,7 @@ import (
 	"go.sia.tech/coreutils/rhp/v4/siamux"
 	"go.sia.tech/indexd/subscriber"
 	"go.uber.org/zap/zaptest"
+	"lukechampine.com/frand"
 )
 
 func TestAddHostAnnouncement(t *testing.T) {
@@ -113,6 +114,261 @@ func TestHost(t *testing.T) {
 		t.Fatal("unexpected", len(h.Addresses))
 	} else if len(h.Networks) != 1 {
 		t.Fatal("unexpected networks", h.Networks)
+	}
+}
+
+func TestHostChecks(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	db := initPostgres(t, log.Named("postgres"))
+	hk := types.PublicKey{1}
+
+	// define helper to assert the settings passed the check with given name
+	assertCheckOK := func(check string) {
+		t.Helper()
+
+		h, err := db.Host(context.Background(), hk)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		v := reflect.ValueOf(h.Usability)
+		f := v.FieldByName(check)
+		if !f.IsValid() {
+			t.Fatalf("field '%s' not found", check)
+		} else if f.Kind() != reflect.Bool {
+			t.Fatalf("field '%s' is not a boolean", check)
+		} else if !f.Bool() {
+			t.Fatalf("expected field '%s' to be true", check)
+		}
+	}
+
+	// define test variables
+	oneSC := types.Siacoins(1)
+	oneH := types.NewCurrency64(1)
+	oneTB := uint64(1 << 40)
+	settingPeriod := uint64(6084)
+	settingMinCollataral := types.Siacoins(1).Div64(oneTB)
+	settingMaxStoragePrice := types.Siacoins(2).Div64(oneTB)
+	settingMaxIngressPrice := types.Siacoins(3).Div64(oneTB)
+	settingMaxEgressPrice := types.Siacoins(4).Div64(oneTB)
+
+	// update global settings
+	if _, err := db.pool.Exec(context.Background(), `UPDATE global_settings SET contract_period = $1, min_collateral = $2, max_storage_price = $3, max_ingress_price = $4, max_egress_price = $5`,
+		settingPeriod,
+		sqlCurrency(settingMinCollataral),
+		sqlCurrency(settingMaxStoragePrice),
+		sqlCurrency(settingMaxIngressPrice),
+		sqlCurrency(settingMaxEgressPrice),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// add a host
+	if err := db.UpdateChainState(context.Background(), func(tx subscriber.UpdateTx) error {
+		return tx.AddHostAnnouncement(hk, nil, time.Now())
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert unscanned host is unusable
+	if h, err := db.Host(context.Background(), hk); err != nil {
+		t.Fatal(err)
+	} else if h.Usability.Usable() {
+		t.Fatal("expected host to be not usable")
+	}
+
+	// update host with settings that fail all checks
+	err := db.UpdateHost(context.Background(), hk, nil, proto4.HostSettings{
+		Release:             "test",
+		ProtocolVersion:     [3]uint8{0, 0, 0},
+		AcceptingContracts:  false,
+		WalletAddress:       types.StandardAddress(hk),
+		MaxCollateral:       oneH.Mul64(oneTB).Mul64(settingPeriod).Sub(oneH),
+		MaxContractDuration: settingPeriod - 1,
+		RemainingStorage:    frand.Uint64n(1e3),
+		TotalStorage:        frand.Uint64n(1e3) + 1e3,
+		Prices: proto4.HostPrices{
+			ContractPrice:   oneSC.Add(oneH),
+			StoragePrice:    settingMaxStoragePrice.Add(oneH),
+			IngressPrice:    settingMaxIngressPrice.Add(oneH),
+			EgressPrice:     settingMaxEgressPrice.Add(oneH),
+			Collateral:      settingMinCollataral.Sub(oneH),
+			FreeSectorPrice: oneSC.Div64(oneTB).Add(oneH),
+			ValidUntil:      time.Now().Add(59 * time.Minute).Round(time.Microsecond),
+			TipHeight:       frand.Uint64n(1e3),
+		},
+	}, true, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// fail scan to ensure we fail on uptime
+	err = db.UpdateHost(context.Background(), hk, nil, proto4.HostSettings{}, false, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// assert host fails all checks
+	h, err := db.Host(context.Background(), hk)
+	if err != nil {
+		t.Fatal(err)
+	} else {
+		v := reflect.ValueOf(h.Usability)
+		for i := range v.NumField() {
+			if v.Field(i).Bool() {
+				t.Fatal(v.Type().Field(i).Name, "expected to be false")
+			}
+		}
+	}
+	hs := h.Settings
+
+	// adjust last failed scan so we pass the uptime check
+	if _, err := db.pool.Exec(context.Background(), `UPDATE hosts SET last_failed_scan = NOW() - INTERVAL '8 days'`); err != nil {
+		t.Fatal(err)
+	}
+	assertCheckOK("Uptime")
+
+	// adjust max duration so we pass the check
+	hs.MaxContractDuration = settingPeriod
+	_ = db.UpdateHost(context.Background(), hk, nil, hs, true, time.Time{})
+	assertCheckOK("MaxContractDuration")
+
+	// adjust max collateral so we pass the check
+	hs.MaxCollateral = hs.Prices.Collateral.Mul64(oneTB).Mul64(settingPeriod)
+	_ = db.UpdateHost(context.Background(), hk, nil, hs, true, time.Time{})
+	assertCheckOK("MaxCollateral")
+
+	// adjust protocol to pass the check
+	hs.ProtocolVersion = [3]uint8{1, 0, 0}
+	_ = db.UpdateHost(context.Background(), hk, nil, hs, true, time.Time{})
+	assertCheckOK("ProtocolVersion")
+
+	// adjust price validity so we pass the check
+	hs.Prices.ValidUntil = time.Now().Add(time.Second * 3601)
+	_ = db.UpdateHost(context.Background(), hk, nil, hs, true, time.Time{})
+	assertCheckOK("PriceValidity")
+
+	// adjust accepting contracts so we pass the check
+	hs.AcceptingContracts = true
+	_ = db.UpdateHost(context.Background(), hk, nil, hs, true, time.Time{})
+	assertCheckOK("AcceptingContracts")
+
+	// adjust contract price so we pass the check
+	hs.Prices.ContractPrice = oneSC.Sub(oneH)
+	_ = db.UpdateHost(context.Background(), hk, nil, hs, true, time.Time{})
+	assertCheckOK("ContractPrice")
+
+	// adjust collateral so we pass the check
+	hs.Prices.Collateral = hs.Prices.StoragePrice.Mul64(2)
+	hs.MaxCollateral = hs.Prices.Collateral.Mul64(oneTB).Mul64(settingPeriod)
+	_ = db.UpdateHost(context.Background(), hk, nil, hs, true, time.Time{})
+	assertCheckOK("Collateral")
+
+	// adjust storage price so we pass the check
+	hs.Prices.StoragePrice = settingMaxStoragePrice
+	_ = db.UpdateHost(context.Background(), hk, nil, hs, true, time.Time{})
+	assertCheckOK("StoragePrice")
+
+	// adjust egress price so we pass the check
+	hs.Prices.EgressPrice = settingMaxEgressPrice
+	_ = db.UpdateHost(context.Background(), hk, nil, hs, true, time.Time{})
+	assertCheckOK("EgressPrice")
+
+	// adjust ingress price so we pass the check
+	hs.Prices.IngressPrice = settingMaxIngressPrice
+	_ = db.UpdateHost(context.Background(), hk, nil, hs, true, time.Time{})
+	assertCheckOK("IngressPrice")
+
+	// adjust free sector price so we pass the check
+	hs.Prices.FreeSectorPrice = oneSC.Div64(oneTB)
+	_ = db.UpdateHost(context.Background(), hk, nil, hs, true, time.Time{})
+	assertCheckOK("FreeSectorPrice")
+
+	// assert host is usable
+	if h, err := db.Host(context.Background(), hk); err != nil {
+		t.Fatal(err)
+	} else if !h.Usability.Usable() {
+		t.Fatal("expected host to be usable")
+	}
+}
+
+func TestHostsUptimeEMA(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	db := initPostgres(t, log.Named("postgres"))
+	hk := types.PublicKey{1}
+
+	// simulateScan is a helper that sets the most recent scan time 8 hours in
+	// the past, that way we simulate a scan at our default scan interval and we
+	// can get an idea of how fast the EMA decays
+	simulateScan := func(success bool, n int) {
+		t.Helper()
+		if success {
+			for range n {
+				_, err1 := db.pool.Exec(context.Background(), `UPDATE hosts SET last_successful_scan = NOW() - INTERVAL '8 hours'`)
+				if err := errors.Join(err1, db.UpdateHost(context.Background(), hk, nil, testHostSettings(hk), true, time.Time{})); err != nil {
+					t.Fatal(err)
+				}
+			}
+		} else {
+			for range n {
+				_, err1 := db.pool.Exec(context.Background(), `UPDATE hosts SET last_failed_scan = NOW() - INTERVAL '8 hours'`)
+				if err := errors.Join(err1, db.UpdateHost(context.Background(), hk, nil, proto4.HostSettings{}, false, time.Time{})); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		_, err1 := db.pool.Exec(context.Background(), `UPDATE hosts SET last_successful_scan = '0001-01-01 00:00:00+00'`)
+		_, err2 := db.pool.Exec(context.Background(), `UPDATE hosts SET last_failed_scan = '0001-01-01 00:00:00+00'`)
+		if err := errors.Join(err1, err2); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	uptime := func() float64 {
+		t.Helper()
+		h, err := db.Host(context.Background(), hk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return h.UptimeEMA
+	}
+
+	// add a host
+	if err := db.UpdateChainState(context.Background(), func(tx subscriber.UpdateTx) error {
+		return tx.AddHostAnnouncement(hk, nil, time.Now())
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert uptime is 1 by default
+	if u := uptime(); u != 1 {
+		t.Fatal("unexpected", u)
+	}
+
+	// assert it takes 3 failed scans to drop the uptime below .9
+	simulateScan(false, 2)
+	if u := uptime(); u < .9 {
+		t.Fatal("unexpected", u)
+	}
+	simulateScan(false, 1)
+	if u := uptime(); u > .9 {
+		t.Fatal("unexpected", u)
+	}
+
+	// assert uptime drops below .8 after another 3 failed scan
+	simulateScan(false, 3)
+	if u := uptime(); u > .8 {
+		t.Fatal("unexpected", u)
+	}
+
+	// assert it now takes ~20 successful scans to climb back up to above .9
+	simulateScan(true, 18)
+	if u := uptime(); u > .9 {
+		t.Fatal("unexpected", u)
+	}
+	simulateScan(true, 1)
+	if u := uptime(); u < .9 {
+		t.Fatal("unexpected", u)
 	}
 }
 
@@ -226,7 +482,7 @@ func TestPruneHosts(t *testing.T) {
 		t.Fatal(err)
 	} else if n != 1 {
 		t.Fatal("unexpected", n)
-	} else if _, err = db.Host(context.Background(), h1); !errors.Is(err, ErrHostNotFound) {
+	} else if _, err := db.Host(context.Background(), h1); !errors.Is(err, ErrHostNotFound) {
 		t.Fatal("expected ErrHostNotFound, got", err)
 	}
 
@@ -282,10 +538,7 @@ func TestPruneHosts(t *testing.T) {
 	}
 
 	// delete all contracts
-	if err := db.transaction(context.Background(), func(ctx context.Context, tx *txn) error {
-		_, err := tx.Exec(ctx, "DELETE FROM contracts")
-		return err
-	}); err != nil {
+	if _, err := db.pool.Exec(context.Background(), "DELETE FROM contracts"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -385,6 +638,7 @@ func TestUpdateHost(t *testing.T) {
 func testHostSettings(pk types.PublicKey) proto4.HostSettings {
 	return proto4.HostSettings{
 		Release:             "test",
+		ProtocolVersion:     [3]uint8{1, 0, 0},
 		AcceptingContracts:  true,
 		WalletAddress:       types.StandardAddress(pk),
 		MaxCollateral:       types.Siacoins(10000),
