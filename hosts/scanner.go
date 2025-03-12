@@ -13,11 +13,12 @@ import (
 type scanner struct{}
 
 // Settings executes the RPCSettings RPC on the host.
-func (c *scanner) Settings(ctx context.Context, hk types.PublicKey, addr string) (hs proto4.HostSettings, _ error) {
+func (c *scanner) Settings(ctx context.Context, hk types.PublicKey, addr string) (proto4.HostSettings, error) {
 	t, err := siamux.Dial(ctx, addr, hk)
 	if err != nil {
 		return proto4.HostSettings{}, fmt.Errorf("failed to upgrade connection: %w", err)
 	}
+	defer t.Close()
 
 	return rhp.RPCSettings(ctx, t)
 }
