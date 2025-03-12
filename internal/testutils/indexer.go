@@ -43,33 +43,6 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger) *Indexer {
 	// prepare store
 	store := NewDB(t, log)
 
-	walletKey := types.GeneratePrivateKey()
-	wm, err := wallet.NewSingleAddressWallet(walletKey, c.cm, store, wallet.WithLogger(log.Named("wallet")), wallet.WithReservationDuration(3*time.Hour))
-	if err != nil {
-		t.Fatalf("failed to create wallet: %v", err)
-	}
-
-	hm, err := hosts.NewManager(store, hosts.WithLogger(log.Named("hosts")), hosts.WithScanFrequency(500*time.Millisecond), hosts.WithScanInterval(time.Second))
-	if err != nil {
-		t.Fatalf("failed to create host manager: %v", err)
-	}
-
-	contracts, err := contracts.NewManager(contracts.WithLogger(log.Named("contracts")))
-	if err != nil {
-		t.Fatalf("failed to create contract manager: %v", err)
-	}
-
-	sub := subscriber.New(c.cm, hm, contracts, wm, store, subscriber.WithLogger(log.Named("subscriber")))
-
-	// sync subscriber
-	syncFn := func() {
-		t.Helper()
-		if err := sub.Sync(); err != nil {
-			t.Fatal(err)
-		}
-	}
-	c.addSyncFn(syncFn)
-
 	syncerListener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -85,6 +58,33 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger) *Indexer {
 		syncer.WithRPCTimeout(2*time.Second),
 	)
 	go s.Run()
+
+	walletKey := types.GeneratePrivateKey()
+	wm, err := wallet.NewSingleAddressWallet(walletKey, c.cm, store, wallet.WithLogger(log.Named("wallet")), wallet.WithReservationDuration(3*time.Hour))
+	if err != nil {
+		t.Fatalf("failed to create wallet: %v", err)
+	}
+
+	hm, err := hosts.NewManager(store, hosts.WithLogger(log.Named("hosts")), hosts.WithScanFrequency(500*time.Millisecond), hosts.WithScanInterval(time.Second))
+	if err != nil {
+		t.Fatalf("failed to create host manager: %v", err)
+	}
+
+	contracts, err := contracts.NewManager(c.cm, s, wm, contracts.WithLogger(log.Named("contracts")))
+	if err != nil {
+		t.Fatalf("failed to create contract manager: %v", err)
+	}
+
+	sub := subscriber.New(c.cm, hm, contracts, wm, store, subscriber.WithLogger(log.Named("subscriber")))
+
+	// sync subscriber
+	syncFn := func() {
+		t.Helper()
+		if err := sub.Sync(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.addSyncFn(syncFn)
 
 	apiOpts := []api.ServerOption{
 		api.WithLogger(log.Named("api")),
