@@ -74,6 +74,7 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger) *Indexer {
 	if err != nil {
 		t.Fatalf("failed to create contract manager: %v", err)
 	}
+	go contracts.Run()
 
 	sub := subscriber.New(c.cm, hm, contracts, wm, store, subscriber.WithLogger(log.Named("subscriber")))
 

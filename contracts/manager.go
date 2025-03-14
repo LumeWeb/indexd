@@ -57,6 +57,7 @@ type (
 		contractRejectBuffer           time.Duration
 		expiredContractBroadcastBuffer uint64
 		expiredContractPruneBuffer     uint64
+		maintenanceFrequency           time.Duration
 	}
 )
 
@@ -84,6 +85,7 @@ func NewManager(chainManager ChainManager, store Store, syncer Syncer, wallet Wa
 		contractRejectBuffer:           6 * time.Hour, // 6 hours after formation
 		expiredContractBroadcastBuffer: 144,           // 144 block after expiration
 		expiredContractPruneBuffer:     144,           // 144 blocks after broadcast
+		maintenanceFrequency:           10 * time.Minute,
 	}
 	for _, opt := range opts {
 		opt(cm)
@@ -95,5 +97,67 @@ func NewManager(chainManager ChainManager, store Store, syncer Syncer, wallet Wa
 // for them to exit.
 func (cm *ContractManager) Close() error {
 	cm.tg.Stop()
+	return nil
+}
+
+// Run starts the contract manager's background tasks.
+func (cm *ContractManager) Run() {
+	done, err := cm.tg.Add()
+	if err != nil {
+		return
+	}
+	defer done()
+
+	log := cm.log.Named("maintenance")
+	for {
+		select {
+		case <-cm.tg.Done():
+			return
+		case <-time.After(cm.maintenanceFrequency):
+		}
+
+		if err := cm.performContractMaintenance(); err != nil {
+			log.Error("contract maintenance failed", zap.Error(err))
+		}
+
+		// TODO: use account manager to fund accounts using the good contracts
+
+		if err := cm.performSlabPinning(); err != nil {
+			log.Error("slab pinning failed", zap.Error(err))
+		}
+
+		if err := cm.performContractPruning(); err != nil {
+			log.Error("contract pruning failed", zap.Error(err))
+		}
+	}
+}
+
+func (cm *ContractManager) performContractMaintenance() error {
+	// TODO: fetch settings for maintenance from the store
+
+	// TODO: Use host manager to perform host checks and update results in the store
+
+	// TODO: Mark hosts as well as their contracts as bad if they fail the checks
+
+	// TODO: Renew any good contracts within their renew window
+
+	// TODO: Refresh any good contracts that are either out of collateral or funds
+
+	// TODO: Mark any contracts that failed to renew/refresh and are too close
+	// to the expiration height as bad
+
+	// TODO: Form enough contracts to meet the desired number of usable
+	// contracts
+
+	return nil
+}
+
+// TODO: implement
+func (cm *ContractManager) performContractPruning() error {
+	return nil
+}
+
+// TODO: implement
+func (cm *ContractManager) performSlabPinning() error {
 	return nil
 }
