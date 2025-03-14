@@ -192,9 +192,7 @@ func (cm *ContractManager) performContractMaintenance(ctx context.Context) error
 		return nil
 	}
 
-	// TODO: Use host manager to perform host checks and update results in the store
-
-	// TODO: Mark hosts as well as their contracts as bad if they fail the checks
+	// TODO: Mark hosts as well as their contracts as bad if they fail their checks
 
 	// TODO: Renew any good contracts within their renew window
 

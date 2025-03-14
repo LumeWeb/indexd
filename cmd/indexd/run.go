@@ -48,7 +48,6 @@ func runRootCmd(ctx context.Context, cfg config.Config, walletKey types.PrivateK
 		return fmt.Errorf("failed to create chain store: %w", err)
 	}
 	cm := chain.NewManager(dbstore, tipState, chain.WithLog(log.Named("chain")))
-	cm.TipState()
 
 	wm, err := wallet.NewSingleAddressWallet(walletKey, cm, store, wallet.WithLogger(log.Named("wallet")), wallet.WithReservationDuration(3*time.Hour))
 	if err != nil {
