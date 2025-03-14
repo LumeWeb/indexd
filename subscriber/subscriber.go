@@ -201,7 +201,7 @@ func (s *Subscriber) Sync(ctx context.Context) error {
 
 	// post-sync actions
 	if err := s.contracts.ProcessActions(); err != nil {
-		s.log.Error("ContractManager.ProcessActions failed", zap.Error(err))
+		s.log.Named("contracts").Error("failed to process actions", zap.Error(err))
 	}
 
 	s.log.Debug("synced", zap.Uint64("height", index.Height), zap.Stringer("id", index.ID))
