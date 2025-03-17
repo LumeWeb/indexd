@@ -101,6 +101,22 @@ func WithLogger(l *zap.Logger) ContractManagerOpt {
 // renewing contracts as well as any interactions with hosts that require
 // contracts.
 func NewManager(chainManager ChainManager, store Store, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) (*ContractManager, error) {
+	cm, err := newContractManager(chainManager, store, syncer, wallet, opts...)
+	if err != nil {
+		return nil, err
+	}
+	go cm.run()
+	return cm, nil
+}
+
+// Close closes the contract manager, terminates any background tasks and waits
+// for them to exit.
+func (cm *ContractManager) Close() error {
+	cm.tg.Stop()
+	return nil
+}
+
+func newContractManager(chainManager ChainManager, store Store, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) (*ContractManager, error) {
 	cm := &ContractManager{
 		cm: chainManager,
 		s:  syncer,
@@ -122,15 +138,8 @@ func NewManager(chainManager ChainManager, store Store, syncer Syncer, wallet Wa
 	return cm, nil
 }
 
-// Close closes the contract manager, terminates any background tasks and waits
-// for them to exit.
-func (cm *ContractManager) Close() error {
-	cm.tg.Stop()
-	return nil
-}
-
 // Run starts the contract manager's background tasks.
-func (cm *ContractManager) Run() {
+func (cm *ContractManager) run() {
 	ctx, cancel, err := cm.tg.AddContext(context.Background())
 	if err != nil {
 		return

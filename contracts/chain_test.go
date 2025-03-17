@@ -183,7 +183,7 @@ func (w *walletMock) ReleaseInputs(txns []types.Transaction, v2txns []types.V2Tr
 func (w *walletMock) SignV2Inputs(txn *types.V2Transaction, toSign []int)                  {}
 
 func TestApplyRevertDiff(t *testing.T) {
-	contracts, err := NewManager(nil, nil, nil, nil)
+	contracts, err := newContractManager(nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,7 +329,7 @@ func TestProcessActions(t *testing.T) {
 	cmMock := &chainManagerMock{}
 	syncerMock := &syncerMock{}
 	store := &storeMock{}
-	contracts, err := NewManager(cmMock, store, syncerMock, &walletMock{})
+	contracts, err := newContractManager(cmMock, store, syncerMock, &walletMock{})
 	if err != nil {
 		t.Fatal(err)
 	}
