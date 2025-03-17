@@ -101,22 +101,27 @@ func WithLogger(l *zap.Logger) ContractManagerOpt {
 // renewing contracts as well as any interactions with hosts that require
 // contracts.
 func NewManager(chainManager ChainManager, store Store, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) (*ContractManager, error) {
-	cm, err := newContractManager(chainManager, store, syncer, wallet, opts...)
+	cm := newContractManager(chainManager, store, syncer, wallet, opts...)
+
+	ctx, cancel, err := cm.tg.AddContext(context.Background())
 	if err != nil {
 		return nil, err
 	}
-	go cm.run()
+	go func() {
+		defer cancel()
+		cm.maintenanceLoop(ctx)
+	}()
 	return cm, nil
 }
 
-// Close closes the contract manager, terminates any background tasks and waits
-// for them to exit.
+// Close terminates any background tasks of the manager and waits for them to
+// exit.
 func (cm *ContractManager) Close() error {
 	cm.tg.Stop()
 	return nil
 }
 
-func newContractManager(chainManager ChainManager, store Store, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) (*ContractManager, error) {
+func newContractManager(chainManager ChainManager, store Store, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) *ContractManager {
 	cm := &ContractManager{
 		cm: chainManager,
 		s:  syncer,
@@ -135,17 +140,12 @@ func newContractManager(chainManager ChainManager, store Store, syncer Syncer, w
 	for _, opt := range opts {
 		opt(cm)
 	}
-	return cm, nil
+	return cm
 }
 
-// Run starts the contract manager's background tasks.
-func (cm *ContractManager) run() {
-	ctx, cancel, err := cm.tg.AddContext(context.Background())
-	if err != nil {
-		return
-	}
-	defer cancel()
-
+// maintenanceLoop performs any background tasks that the contract manager needs
+// to perform on contracts
+func (cm *ContractManager) maintenanceLoop(ctx context.Context) {
 	// block until we are online and the consensus is synced
 	log := cm.log.Named("maintenance")
 	if !cm.blockUntilReady(log) {
@@ -154,7 +154,7 @@ func (cm *ContractManager) run() {
 
 	for {
 		select {
-		case <-cm.tg.Done():
+		case <-ctx.Done():
 			return
 		case <-time.After(cm.maintenanceFrequency):
 		}
