@@ -46,7 +46,7 @@ type (
 		TotalScans             int                 `json:"totalScans"`
 		FailedScans            int                 `json:"failedScans"`
 		ConsecutiveFailedScans int                 `json:"consecutiveFailedScans"`
-		UptimeEMA              float64             `json:"uptimeEma"`
+		RecentUptime           float64             `json:"recentUptime"`
 		Addresses              []chain.NetAddress  `json:"addresses"`
 		Networks               []net.IPNet         `json:"networks"`
 		Settings               proto4.HostSettings `json:"settings"`

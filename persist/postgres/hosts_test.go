@@ -330,7 +330,7 @@ func TestHostsUptimeEMA(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return h.UptimeEMA
+		return h.RecentUptime
 	}
 
 	// add a host

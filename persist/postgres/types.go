@@ -305,9 +305,6 @@ func (np *sqlNetworkProtocol) Scan(src any) error {
 type sqlPublicKey types.PublicKey
 
 func (pk sqlPublicKey) Value() (driver.Value, error) {
-	if pk == (sqlPublicKey{}) {
-		return nil, nil
-	}
 	return pk[:], nil
 }
 
