@@ -51,12 +51,14 @@ func (s *Store) Host(ctx context.Context, hk types.PublicKey) (hosts.Host, error
 	if err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
 		h, err := scanHost(tx.QueryRow(ctx, `
 SELECT
-	id, public_key, last_announcement, total_scans, failed_scans, consecutive_failed_scans, last_successful_scan, next_scan,
+	id, hosts.public_key, last_announcement, hb.public_key IS NOT NULL AS blocked,
+	total_scans, failed_scans, consecutive_failed_scans, last_successful_scan, next_scan,
 	settings_protocol_version, settings_release, settings_wallet_address, settings_accepting_contracts,
 	settings_max_collateral, settings_max_contract_duration, settings_remaining_storage, settings_total_storage,
 	settings_contract_price, settings_collateral, settings_storage_price, settings_ingress_price, settings_egress_price,
 	settings_free_sector_price, settings_tip_height, settings_valid_until
-FROM hosts WHERE public_key = $1`, sqlPublicKey(hk)))
+FROM hosts LEFT JOIN hosts_blocklist hb ON hosts.public_key = hb.public_key
+WHERE hosts.public_key = $1`, sqlPublicKey(hk)))
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("host %q: %w", hk, ErrHostNotFound)
 		} else if err != nil {
@@ -115,6 +117,61 @@ func (s *Store) Hosts(ctx context.Context, offset, limit int) ([]hosts.Host, err
 	return hosts, nil
 }
 
+// BlockedHosts returns a list of blocked hostkeys.
+func (s *Store) BlockedHosts(ctx context.Context, offset, limit int) ([]types.PublicKey, error) {
+	// sanity check input
+	if err := validateOffsetLimit(offset, limit); err != nil {
+		return nil, err
+	} else if limit == 0 {
+		return nil, nil
+	}
+
+	var blocklist []types.PublicKey
+	if err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
+		rows, err := tx.Query(ctx, `SELECT public_key FROM hosts_blocklist LIMIT $1 OFFSET $2`, limit, offset)
+		if err != nil {
+			return fmt.Errorf("failed to query hosts blocklist: %w", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var hk types.PublicKey
+			if err := rows.Scan((*sqlPublicKey)(&hk)); err != nil {
+				return fmt.Errorf("failed to scan host: %w", err)
+			}
+			blocklist = append(blocklist, hk)
+		}
+		return rows.Err()
+	}); err != nil {
+		return nil, err
+	}
+	return blocklist, nil
+}
+
+// BlockHosts adds the given host keys to the blocklist.
+func (s *Store) BlockHosts(ctx context.Context, hks []types.PublicKey) error {
+	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
+		for _, hk := range hks {
+			_, err := tx.Exec(ctx, "INSERT INTO hosts_blocklist (public_key) VALUES ($1) ON CONFLICT (public_key) DO NOTHING", sqlPublicKey(hk))
+			if err != nil {
+				return fmt.Errorf("failed to add host %q to blocklist: %w", hk, err)
+			}
+		}
+		return nil
+	})
+}
+
+// UnblockHost removes the given host key from the blocklist.
+func (s *Store) UnblockHost(ctx context.Context, hk types.PublicKey) error {
+	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
+		_, err := tx.Exec(ctx, "DELETE FROM hosts_blocklist WHERE public_key = $1", sqlPublicKey(hk))
+		if err != nil {
+			return fmt.Errorf("failed to remove host %q from blocklist: %w", hk, err)
+		}
+		return nil
+	})
+}
+
 // HostsForScanning returns a list of hosts where the next scan is due.
 func (s *Store) HostsForScanning(ctx context.Context) ([]types.PublicKey, error) {
 	var hosts []types.PublicKey
@@ -128,7 +185,7 @@ func (s *Store) HostsForScanning(ctx context.Context) ([]types.PublicKey, error)
 		for rows.Next() {
 			var hk sqlPublicKey
 			if err := rows.Scan(&hk); err != nil {
-				return fmt.Errorf("failed to scan host: %w", err)
+				return err
 			}
 			hosts = append(hosts, types.PublicKey(hk))
 		}
@@ -243,12 +300,14 @@ WHERE public_key = $18 RETURNING id`,
 func queryHosts(ctx context.Context, tx *txn, offset, limit int) ([]dbHost, error) {
 	rows, err := tx.Query(ctx, `
 SELECT 
-	id, public_key, last_announcement, total_scans, failed_scans, consecutive_failed_scans, last_successful_scan, next_scan,
+	id, hosts.public_key, last_announcement, hb.public_key IS NOT NULL AS blocked,
+	total_scans, failed_scans, consecutive_failed_scans, last_successful_scan, next_scan,
 	settings_protocol_version, settings_release, settings_wallet_address, settings_accepting_contracts,
 	settings_max_collateral, settings_max_contract_duration, settings_remaining_storage, settings_total_storage,
 	settings_contract_price, settings_collateral, settings_storage_price, settings_ingress_price, settings_egress_price,
 	settings_free_sector_price, settings_tip_height, settings_valid_until
-FROM hosts LIMIT $1 OFFSET $2`, limit, offset)
+FROM hosts LEFT JOIN hosts_blocklist hb ON hosts.public_key = hb.public_key 
+LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query hosts: %w", err)
 	}
@@ -318,6 +377,7 @@ func scanHost(s scanner) (host dbHost, err error) {
 		&host.id,
 		(*sqlPublicKey)(&host.PublicKey),
 		&host.LastAnnouncement,
+		&host.Blocked,
 		&host.TotalScans,
 		&host.FailedScans,
 		&host.ConsecutiveFailedScans,

@@ -142,6 +142,10 @@ func (cm *chainManagerMock) TipState() consensus.State {
 	}
 }
 
+func (cm *chainManagerMock) V2TransactionSet(basis types.ChainIndex, txn types.V2Transaction) (types.ChainIndex, []types.V2Transaction, error) {
+	return basis, []types.V2Transaction{txn}, nil
+}
+
 func (cm *chainManagerMock) V2PoolTransactions() []types.V2Transaction {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
@@ -166,11 +170,7 @@ func (s *syncerMock) BroadcastV2TransactionSet(index types.ChainIndex, txns []ty
 func (s *syncerMock) BroadcastedSets() []types.V2Transaction {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return slices.Clone(s.broadcasted)
-}
-
-func (s *syncerMock) Peers() []*syncer.Peer {
-	return []*syncer.Peer{{}}
+	return append([]types.V2Transaction(nil), s.broadcasted...)
 }
 
 type walletMock struct {
@@ -181,6 +181,10 @@ func (w *walletMock) FundV2Transaction(txn *types.V2Transaction, amount types.Cu
 }
 func (w *walletMock) ReleaseInputs(txns []types.Transaction, v2txns []types.V2Transaction) {}
 func (w *walletMock) SignV2Inputs(txn *types.V2Transaction, toSign []int)                  {}
+
+func (s *syncerMock) Peers() []*syncer.Peer {
+	return []*syncer.Peer{{}}
+}
 
 func TestApplyRevertDiff(t *testing.T) {
 	contracts := newContractManager(nil, nil, nil, nil)
@@ -355,14 +359,14 @@ func TestProcessActions(t *testing.T) {
 	}
 
 	// broadcast when no contract should be broadcasted
-	if err := contracts.ProcessActions(); err != nil {
+	if err := contracts.ProcessActions(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	assert(0, 0, 0, 1, 1)
 
 	// broadcast with 1 contract to broadcast
 	store.toBroadcast = []types.V2FileContractElement{contract}
-	if err := contracts.ProcessActions(); err != nil {
+	if err := contracts.ProcessActions(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	assert(1, 1, 1, 2, 2)

@@ -20,6 +20,7 @@ type (
 		AddV2PoolTransactions(basis types.ChainIndex, txns []types.V2Transaction) (known bool, err error)
 		RecommendedFee() types.Currency
 		TipState() consensus.State
+		V2TransactionSet(basis types.ChainIndex, txn types.V2Transaction) (types.ChainIndex, []types.V2Transaction, error)
 	}
 
 	// Store is the minimal interface of Store functionality the ContractManager
@@ -114,13 +115,6 @@ func NewManager(chainManager ChainManager, store Store, syncer Syncer, wallet Wa
 	return cm, nil
 }
 
-// Close terminates any background tasks of the manager and waits for them to
-// exit.
-func (cm *ContractManager) Close() error {
-	cm.tg.Stop()
-	return nil
-}
-
 func newContractManager(chainManager ChainManager, store Store, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) *ContractManager {
 	cm := &ContractManager{
 		cm: chainManager,
@@ -141,6 +135,13 @@ func newContractManager(chainManager ChainManager, store Store, syncer Syncer, w
 		opt(cm)
 	}
 	return cm
+}
+
+// Close closes the contract manager, terminates any background tasks and waits
+// for them to exit.
+func (cm *ContractManager) Close() error {
+	cm.tg.Stop()
+	return nil
 }
 
 // maintenanceLoop performs any background tasks that the contract manager needs
