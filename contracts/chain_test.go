@@ -14,6 +14,7 @@ import (
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/syncer"
 	"go.sia.tech/coreutils/wallet"
+	"go.sia.tech/indexd/hosts"
 )
 
 type mockProofUpdater struct {
@@ -25,6 +26,7 @@ func (u *mockProofUpdater) UpdateElementProof(stateElement *types.StateElement) 
 }
 
 type storeMock struct {
+	contracts   []Contract
 	toBroadcast []types.V2FileContractElement
 	pruneCalls  int
 	rejectCalls int
@@ -33,6 +35,18 @@ type storeMock struct {
 
 func (s *storeMock) ContractElementsForBroadcast(ctx context.Context, maxBlocksSinceExpiry uint64) ([]types.V2FileContractElement, error) {
 	return slices.Clone(s.toBroadcast), nil
+}
+
+func (s *storeMock) Contracts(ctx context.Context, opts ...ContractQueryOpt) ([]Contract, error) {
+	return slices.Clone(s.contracts), nil
+}
+
+func (s *storeMock) Host(ctx context.Context, hostKey types.PublicKey) (hosts.Host, error) {
+	panic("not implemented")
+}
+
+func (s *storeMock) Hosts(ctx context.Context, offset, limit int) ([]hosts.Host, error) {
+	panic("not implemented")
 }
 
 func (s *storeMock) MaintenanceSettings(ctx context.Context) (MaintenanceSettings, error) {
@@ -183,7 +197,7 @@ func (w *walletMock) ReleaseInputs(txns []types.Transaction, v2txns []types.V2Tr
 func (w *walletMock) SignV2Inputs(txn *types.V2Transaction, toSign []int)                  {}
 
 func TestApplyRevertDiff(t *testing.T) {
-	contracts := newContractManager(nil, nil, nil, nil)
+	contracts := newContractManager(nil, nil, nil, nil, nil)
 
 	// create a contract
 	contractID := types.FileContractID{1, 2, 3}
@@ -326,7 +340,7 @@ func TestProcessActions(t *testing.T) {
 	cmMock := &chainManagerMock{}
 	syncerMock := &syncerMock{}
 	store := &storeMock{}
-	contracts := newContractManager(cmMock, store, syncerMock, &walletMock{})
+	contracts := newContractManager(cmMock, nil, store, syncerMock, &walletMock{})
 
 	contract := types.V2FileContractElement{
 		ID: types.FileContractID{1},
