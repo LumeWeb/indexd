@@ -35,6 +35,10 @@ const (
 	scanExponentialBackoffMaxHours = 128
 )
 
+var (
+	errNodeOffline = errors.New("node is offline")
+)
+
 type (
 	// HostManager manages the host announcements.
 	HostManager struct {
@@ -42,12 +46,20 @@ type (
 		scanFrequency      time.Duration
 		scanInterval       time.Duration
 
+		pinger   Pinger
 		resolver Resolver
 		scanner  Scanner
 		store    Store
 
 		tg  *threadgroup.ThreadGroup
 		log *zap.Logger
+	}
+
+	// Pinger defines an interface to check whether the indexer is online. It's
+	// used to ensure hosts aren't punished for failing a scan if the indexer is
+	// offline.
+	Pinger interface {
+		Online() bool
 	}
 
 	// Resolver defines an interface to resolve hostnames.
@@ -83,6 +95,7 @@ func NewManager(store Store, opts ...Option) (*HostManager, error) {
 		scanFrequency:      time.Hour,
 		scanInterval:       time.Hour * 24,
 
+		pinger:   pinger{},
 		resolver: &net.Resolver{},
 		scanner:  &scanner{},
 		store:    store,
@@ -148,7 +161,7 @@ func (m *HostManager) ScanHost(ctx context.Context, hk types.PublicKey) (proto4.
 	scanCtx, cancel := context.WithTimeout(ctx, scanTimeout)
 	defer cancel()
 
-	addrs, networks, err := resolveHost(scanCtx, m.resolver, host.Addresses, logger)
+	addrs, networks, err := resolveHost(scanCtx, m.pinger, m.resolver, host.Addresses, logger)
 	if err != nil {
 		return proto4.HostSettings{}, fmt.Errorf("failed to resolve host, %w", err)
 	}
@@ -264,7 +277,7 @@ func (m *HostManager) scanHosts(ctx context.Context) {
 				wg.Done()
 			}()
 
-			if _, err := m.ScanHost(ctx, hk); errors.Is(err, context.Canceled) {
+			if _, err := m.ScanHost(ctx, hk); errors.Is(err, context.Canceled) || errors.Is(err, errNodeOffline) {
 				return
 			} else if err != nil {
 				m.log.Error("failed to perform host scan", zap.Stringer("hk", hk), zap.Error(err))
@@ -333,7 +346,7 @@ func calculateNextScanTime(lastScan time.Time, success bool, consecScanFailures 
 // and/or private addresses, and a list of networks in CIDR notation. The only
 // error this function returns is [context.Canceled], other errors that occur
 // during the resolving and parsing are debug logged but otherwise ignored.
-func resolveHost(ctx context.Context, resolver Resolver, addresses []chain.NetAddress, log *zap.Logger) ([]chain.NetAddress, []net.IPNet, error) {
+func resolveHost(ctx context.Context, pinger Pinger, resolver Resolver, addresses []chain.NetAddress, log *zap.Logger) ([]chain.NetAddress, []net.IPNet, error) {
 	var filtered []chain.NetAddress
 	var networks []net.IPNet
 	for _, na := range addresses {
@@ -347,6 +360,10 @@ func resolveHost(ctx context.Context, resolver Resolver, addresses []chain.NetAd
 		if errors.Is(err, context.Canceled) {
 			return nil, nil, err
 		} else if err != nil {
+			if !pinger.Online() {
+				log.Warn("indexer is offline")
+				return nil, nil, errNodeOffline
+			}
 			log.Debug("failed to resolve host", zap.String("host", host), zap.Error(err))
 			continue
 		}
