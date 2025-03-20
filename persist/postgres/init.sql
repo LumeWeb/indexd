@@ -88,7 +88,10 @@ CREATE TABLE wallet_siacoin_elements (
 CREATE TABLE global_settings (
     id INTEGER PRIMARY KEY NOT NULL DEFAULT 0 CHECK (id = 0), -- enforce a single row
     db_version INTEGER NOT NULL, -- used for migrations
-    last_scanned_index BYTEA CHECK (LENGTH(last_scanned_index) = 8+32), -- chain index of the last scanned block
+
+    -- chain index of the last scanned block
+    scanned_height BIGINT NOT NULL DEFAULT 0 CHECK(scanned_height >= 0),
+    scanned_block_id BYTEA NOT NULL DEFAULT '\x0000000000000000000000000000000000000000000000000000000000000000'::bytea CHECK (LENGTH(scanned_block_id) = 32),
 
     -- contract manager settings
     contracts_period INTEGER NOT NULL DEFAULT 144 * 7 * 6 CHECK(contracts_period > contracts_renew_window), -- 6 weeks
