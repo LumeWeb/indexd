@@ -48,6 +48,9 @@ CREATE TABLE global_settings (
     max_storage_price NUMERIC(50,0), -- hastings / byte / block
     max_ingress_price NUMERIC(50,0), -- hastings / byte
     max_egress_price NUMERIC(50,0) -- hastings / byte
+
+    -- host checks
+    min_protocol_version BYTEA NOT NULL DEFAULT '\x010000' -- minimum protocol version
 );
 ```
 
@@ -119,9 +122,9 @@ CREATE INDEX syncer_bans_net_cidr_idx ON syncer_bans USING gist (net_cidr inet_o
 CREATE TABLE hosts (
     id SERIAL PRIMARY KEY,
     public_key BYTEA UNIQUE NOT NULL CHECK (LENGTH(public_key) = 32),
-    total_scans INTEGER NOT NULL DEFAULT 0,
-    failed_scans INTEGER NOT NULL DEFAULT 0,
     consecutive_failed_scans INTEGER NOT NULL DEFAULT 0,
+    recent_uptime DOUBLE PRECISION NOT NULL DEFAULT 0.894 CHECK (recent_uptime > 0 AND recent_uptime < 1),
+    last_failed_scan TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT '0001-01-01 00:00:00+00',
     last_successful_scan TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT '0001-01-01 00:00:00+00',
     last_announcement TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT '0001-01-01 00:00:00+00',
     next_scan TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT '0001-01-01 00:00:00+00',

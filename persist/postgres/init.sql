@@ -1,9 +1,9 @@
 CREATE TABLE hosts (
     id SERIAL PRIMARY KEY,
     public_key BYTEA UNIQUE NOT NULL CHECK (LENGTH(public_key) = 32),
-    total_scans INTEGER NOT NULL DEFAULT 0,
-    failed_scans INTEGER NOT NULL DEFAULT 0,
     consecutive_failed_scans INTEGER NOT NULL DEFAULT 0,
+    recent_uptime DOUBLE PRECISION NOT NULL DEFAULT 0.894 CHECK (recent_uptime > 0 AND recent_uptime < 1),
+    last_failed_scan TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT '0001-01-01 00:00:00+00',
     last_successful_scan TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT '0001-01-01 00:00:00+00',
     last_announcement TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT '0001-01-01 00:00:00+00',
     next_scan TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT '0001-01-01 00:00:00+00',
@@ -96,8 +96,15 @@ CREATE TABLE global_settings (
     -- contract manager settings
     contracts_maintenance_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     contracts_wanted INTEGER NOT NULL DEFAULT 50 CHECK(contracts_wanted > 0), -- number of contracts to maintain
+    contracts_period INTEGER NOT NULL DEFAULT 144 * 7 * 6 CHECK(contracts_period > contracts_renew_window), -- 6 weeks
     contracts_renew_window INTEGER NOT NULL DEFAULT 144 * 7 * 2 CHECK(contracts_renew_window > 0), -- 2 weeks
-    contracts_period INTEGER NOT NULL DEFAULT 144 * 7 * 6 CHECK(contracts_period > contracts_renew_window) -- 6 weeks
+
+    min_collateral NUMERIC(50,0) NOT NULL DEFAULT 0, -- hastings / byte / block
+    max_storage_price NUMERIC(50,0) NOT NULL DEFAULT 0, -- hastings / byte / block
+    max_ingress_price NUMERIC(50,0) NOT NULL DEFAULT 0, -- hastings / byte
+    max_egress_price NUMERIC(50,0) NOT NULL DEFAULT 0, -- hastings / byte
+
+    min_protocol_version BYTEA NOT NULL DEFAULT '\x010000' -- minimum protocol version
 );
 
 CREATE TABLE contracts (
