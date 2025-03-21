@@ -104,17 +104,18 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 
 	// helper to check if a host is good to form a contract with
 	checkHost := func(host hosts.Host, log *zap.Logger) bool {
+		hostLog := log.With(zap.Stringer("hostKey", host.PublicKey))
 		if good := host.Usability.Usable(); !good {
 			// host should be good
-			log.Debug("ignore contract since host is not good", zap.Stringer("hostKey", host.PublicKey))
+			hostLog.Debug("host is not usable due to bad usability")
 			return false
 		} else if used := hasCidrConflict(host); used {
 			// host should be on a unique cidr
-			log.Debug("ignore contract since host's cidr has already been used", zap.Stringer("hostKey", host.PublicKey))
+			hostLog.Debug("host is not usable cidr is already in use")
 			return false
 		} else if host.Settings.RemainingStorage < minRemainingStorage {
 			// host should at least have 10GB of storage left
-			log.Debug("ignore contract since host has less than 1GB of storage left", zap.Stringer("hostKey", host.PublicKey), zap.Uint64("remainingStorage", host.Settings.RemainingStorage))
+			hostLog.Debug("host is not usable since host has less than 10GB of storage left", zap.Uint64("remainingStorage", host.Settings.RemainingStorage))
 			return false
 		}
 		return true

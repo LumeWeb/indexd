@@ -12,6 +12,7 @@ import (
 	"slices"
 
 	"go.sia.tech/core/consensus"
+	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/syncer"
 	"go.sia.tech/coreutils/wallet"
@@ -94,6 +95,16 @@ func (s *storeMock) PruneExpiredContractElements(ctx context.Context, maxBlocksS
 		panic("invalid maxBlocksSinceExpiry")
 	}
 	s.pruneCalls++
+	return nil
+}
+
+func (s *storeMock) UpdateHostSettings(hostKey types.PublicKey, settings proto.HostSettings) error {
+	h, ok := s.hosts[hostKey]
+	if !ok {
+		return hosts.ErrNotFound
+	}
+	h.Settings = settings
+	s.hosts[hostKey] = h
 	return nil
 }
 
