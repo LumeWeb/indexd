@@ -3,6 +3,7 @@ package contracts
 import (
 	"context"
 	"errors"
+	"maps"
 	"reflect"
 	"sync"
 	"testing"
@@ -31,10 +32,29 @@ type storeMock struct {
 	pruneCalls  int
 	rejectCalls int
 	settings    MaintenanceSettings
+	hosts       map[types.PublicKey]hosts.Host
 }
 
-func (s *storeMock) AddFormedContract(ctx context.Context, contractID types.FileContractID, hostKey types.PublicKey, proofHeight, expirationHeight uint64, contractPrice, allowance, minerFee types.Currency) error {
-	panic("not implemented")
+func (s *storeMock) AddFormedContract(ctx context.Context, contractID types.FileContractID, hostKey types.PublicKey, proofHeight, expirationHeight uint64, contractPrice, allowance, minerFee, totalCollateral types.Currency) error {
+	s.contracts = append(s.contracts, Contract{
+		ID:      contractID,
+		HostKey: hostKey,
+
+		Formation:        time.Now(),
+		ProofHeight:      proofHeight,
+		ExpirationHeight: expirationHeight,
+		State:            ContractStatePending,
+
+		RemainingAllowance: allowance,
+		TotalCollateral:    totalCollateral,
+
+		ContractPrice:    contractPrice,
+		InitialAllowance: allowance,
+		MinerFee:         minerFee,
+
+		Good: true,
+	})
+	return nil
 }
 
 func (s *storeMock) ContractElementsForBroadcast(ctx context.Context, maxBlocksSinceExpiry uint64) ([]types.V2FileContractElement, error) {
@@ -46,11 +66,15 @@ func (s *storeMock) Contracts(ctx context.Context, opts ...ContractQueryOpt) ([]
 }
 
 func (s *storeMock) Host(ctx context.Context, hostKey types.PublicKey) (hosts.Host, error) {
-	panic("not implemented")
+	host, ok := s.hosts[hostKey]
+	if !ok {
+		return hosts.Host{}, hosts.ErrNotFound
+	}
+	return host, nil
 }
 
 func (s *storeMock) Hosts(ctx context.Context, offset, limit int) ([]hosts.Host, error) {
-	panic("not implemented")
+	return slices.Collect(maps.Values(s.hosts)), nil
 }
 
 func (s *storeMock) MaintenanceSettings(ctx context.Context) (MaintenanceSettings, error) {
