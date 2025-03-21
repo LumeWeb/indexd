@@ -24,6 +24,7 @@ var (
 )
 
 type (
+	// ContractQueryOpts contains the options for querying contracts.
 	ContractQueryOpts struct {
 		Revisable *bool
 		Good      *bool
@@ -36,6 +37,9 @@ type (
 var (
 	optTrue = true
 
+	// DefaultContractQueryOpts are the default options applied when querying
+	// contracts. By default, only contracts that are revisable will be
+	// returned.
 	DefaultContractQueryOpts = ContractQueryOpts{
 		Revisable: &optTrue, // return active contracts
 		Good:      nil,      // return both good and bad contracts

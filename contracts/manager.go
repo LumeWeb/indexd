@@ -32,12 +32,15 @@ type (
 		V2TransactionSet(basis types.ChainIndex, txn types.V2Transaction) (types.ChainIndex, []types.V2Transaction, error)
 	}
 
+	// ContractFormer defines the dependencies required to form a contract with
+	// a host.
 	ContractFormer interface {
 		FormContract(ctx context.Context, hk types.PublicKey, addr string, settings proto.HostSettings, params proto.RPCFormContractParams) (rhp.RPCFormContractResult, error)
 	}
 
+	// Scanner defines the interface for scanning hosts for their latest settings.
 	Scanner interface {
-		Settings(context.Context, types.PublicKey, string) (proto.HostSettings, error)
+		ScanHost(ctx context.Context, hk types.PublicKey) (proto.HostSettings, error)
 	}
 
 	// Store is the minimal interface of Store functionality the ContractManager
@@ -127,8 +130,8 @@ func WithLogger(l *zap.Logger) ContractManagerOpt {
 // NewManager creates a new contract manager. It is responsible for forming and
 // renewing contracts as well as any interactions with hosts that require
 // contracts.
-func NewManager(chainManager ChainManager, contractFormer ContractFormer, store Store, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) (*ContractManager, error) {
-	cm := newContractManager(chainManager, contractFormer, store, syncer, wallet, opts...)
+func NewManager(chainManager ChainManager, contractFormer ContractFormer, scanner Scanner, store Store, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) (*ContractManager, error) {
+	cm := newContractManager(chainManager, contractFormer, scanner, store, syncer, wallet, opts...)
 
 	ctx, cancel, err := cm.tg.AddContext(context.Background())
 	if err != nil {
@@ -141,7 +144,7 @@ func NewManager(chainManager ChainManager, contractFormer ContractFormer, store 
 	return cm, nil
 }
 
-func newContractManager(chainManager ChainManager, contractFormer ContractFormer, store Store, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) *ContractManager {
+func newContractManager(chainManager ChainManager, contractFormer ContractFormer, scanner Scanner, store Store, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) *ContractManager {
 	cm := &ContractManager{
 		cm: chainManager,
 		s:  syncer,
@@ -149,7 +152,8 @@ func newContractManager(chainManager ChainManager, contractFormer ContractFormer
 
 		cf: contractFormer,
 
-		store: store,
+		scanner: scanner,
+		store:   store,
 
 		log: zap.NewNop(),
 		tg:  threadgroup.New(),

@@ -20,6 +20,8 @@ type formContractSigner struct {
 	w         rhp.Wallet
 }
 
+// NewFormContractSigner implements the rhp.FormContractSigner interface by
+// wrapping a wallet.
 func NewFormContractSigner(w rhp.Wallet, renterKey types.PrivateKey) rhp.FormContractSigner {
 	return &formContractSigner{
 		renterKey: renterKey,
@@ -85,14 +87,28 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 		return fmt.Errorf("failed to fetch active contracts: %w", err)
 	}
 
-	// helper to check if a host is good to form a contract with
 	usedCidrs := make(map[string]struct{})
+	addHostCidrs := func(host hosts.Host) {
+		for _, cidr := range host.Networks {
+			usedCidrs[cidr.IP.String()] = struct{}{}
+		}
+	}
+	hasCidrConflict := func(host hosts.Host) bool {
+		for _, cidr := range host.Networks {
+			if _, known := usedCidrs[cidr.IP.String()]; known {
+				return true
+			}
+		}
+		return false
+	}
+
+	// helper to check if a host is good to form a contract with
 	checkHost := func(host hosts.Host, log *zap.Logger) bool {
-		if good := true; !good { // TODO: update
+		if good := host.Usability.Usable(); !good {
 			// host should be good
 			log.Debug("ignore contract since host is not good", zap.Stringer("hostKey", host.PublicKey))
 			return false
-		} else if _, used := usedCidrs[""]; used { // TODO: update
+		} else if used := hasCidrConflict(host); used {
 			// host should be on a unique cidr
 			log.Debug("ignore contract since host's cidr has already been used", zap.Stringer("hostKey", host.PublicKey))
 			return false
@@ -134,7 +150,7 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 
 		// contract is good
 		wanted--
-		// TODO: add cidr
+		addHostCidrs(host)
 	}
 
 	// fetch all hosts
@@ -143,20 +159,27 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 		return fmt.Errorf("failed to fetch hosts to form contracts with: %w", err)
 	}
 
-	// randomize their order to avoid prefering any host
+	// randomize their order to avoid preferring any host
 	frand.Shuffle(len(hosts), func(i, j int) { hosts[i], hosts[j] = hosts[j], hosts[i] })
 
 	for i := range hosts {
 		formationLog := formationLog.With(zap.Stringer("hostKey", hosts[i].PublicKey))
 
-		// TODO: before checking the host, scan it to get valid settings we can
-		// use for forming contracts
-		host, err := hosts[i], error(nil)
+		// scan host before forming a contract and fetch it from the database to
+		// get updated settings and checks
+		scanCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		_, err := cm.scanner.ScanHost(scanCtx, hosts[i].PublicKey)
+		cancel()
 		if err != nil {
 			formationLog.Error("failed to scan host", zap.Error(err))
 			continue
+		}
+		host, err := cm.store.Host(ctx, hosts[i].PublicKey)
+		if err != nil {
+			formationLog.Error("failed to fetch host", zap.Error(err))
+			continue
 		} else if !checkHost(host, formationLog) {
-			continue // ignore host
+			continue // ignore bad host
 		}
 		hostAddr := host.SiamuxAddr()
 
@@ -175,7 +198,7 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 			continue
 		}
 		contract := res.Contract
-		minerFee := res.FormationSet.Transactions[len(res.FormationSet.Transactions)].MinerFee
+		minerFee := res.FormationSet.Transactions[len(res.FormationSet.Transactions)-1].MinerFee
 
 		err = cm.store.AddFormedContract(ctx, contract.ID, host.PublicKey, contract.Revision.ProofHeight, contract.Revision.ExpirationHeight, host.Settings.Prices.ContractPrice, allowance, minerFee)
 		if err != nil {
@@ -184,7 +207,7 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 		}
 
 		wanted--
-		// TODO: add cidr
+		addHostCidrs(host)
 	}
 
 	return nil
@@ -196,8 +219,8 @@ func initialContractFunding(prices proto.HostPrices, period uint64) (allowance, 
 
 	// each 10GB of upload + download + storage
 	basePrice := prices.ContractPrice
-	writeUsage := prices.RPCWriteSectorCost(proto.SectorSize) //.Mul(10 * sectorsPerGB) TODO
-	readUsage := prices.RPCReadSectorCost(proto.SectorSize)   //.Mul(10 * sectorsPerGB) TODO
+	writeUsage := prices.RPCWriteSectorCost(proto.SectorSize).Mul(10 * sectorsPerGB)
+	readUsage := prices.RPCReadSectorCost(proto.SectorSize).Mul(10 * sectorsPerGB)
 	storageUsage := prices.RPCAppendSectorsCost(10*sectorsPerGB, period)
 	total := writeUsage.Add(readUsage).Add(storageUsage)
 	allowance, collateral = total.RenterCost().Add(basePrice), total.HostRiskedCollateral()
