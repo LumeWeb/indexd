@@ -5,6 +5,7 @@ import (
 	"errors"
 	"maps"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -75,7 +76,12 @@ func (s *storeMock) Host(ctx context.Context, hostKey types.PublicKey) (hosts.Ho
 }
 
 func (s *storeMock) Hosts(ctx context.Context, offset, limit int) ([]hosts.Host, error) {
-	return slices.Collect(maps.Values(s.hosts)), nil
+	copied := slices.Collect(maps.Values(s.hosts))
+	slices.SortFunc(copied, func(a, b hosts.Host) int {
+		// sort by public key to make order in testing deterministic
+		return strings.Compare(a.PublicKey.String(), b.PublicKey.String())
+	})
+	return copied, nil
 }
 
 func (s *storeMock) MaintenanceSettings(ctx context.Context) (MaintenanceSettings, error) {

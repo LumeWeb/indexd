@@ -12,7 +12,6 @@ import (
 	"go.sia.tech/coreutils/rhp/v4/siamux"
 	"go.sia.tech/indexd/hosts"
 	"go.uber.org/zap"
-	"lukechampine.com/frand"
 )
 
 type formContractSigner struct {
@@ -161,7 +160,7 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 	}
 
 	// randomize their order to avoid preferring any host
-	frand.Shuffle(len(hosts), func(i, j int) { hosts[i], hosts[j] = hosts[j], hosts[i] })
+	cm.shuffle(len(hosts), func(i, j int) { hosts[i], hosts[j] = hosts[j], hosts[i] })
 
 	for i := range hosts {
 		formationLog := formationLog.With(zap.Stringer("hostKey", hosts[i].PublicKey))

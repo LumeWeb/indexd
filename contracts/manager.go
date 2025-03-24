@@ -14,6 +14,7 @@ import (
 	"go.sia.tech/coreutils/threadgroup"
 	"go.sia.tech/indexd/hosts"
 	"go.uber.org/zap"
+	"lukechampine.com/frand"
 )
 
 const (
@@ -110,8 +111,9 @@ type (
 		scanner   Scanner
 		renterKey types.PublicKey
 
-		log *zap.Logger
-		tg  *threadgroup.ThreadGroup
+		log     *zap.Logger
+		shuffle func(int, func(i, j int))
+		tg      *threadgroup.ThreadGroup
 
 		contractRejectBuffer           time.Duration
 		expiredContractBroadcastBuffer uint64
@@ -156,8 +158,9 @@ func newContractManager(renterKey types.PublicKey, chainManager ChainManager, co
 		scanner: scanner,
 		store:   store,
 
-		log: zap.NewNop(),
-		tg:  threadgroup.New(),
+		log:     zap.NewNop(),
+		shuffle: frand.Shuffle,
+		tg:      threadgroup.New(),
 
 		contractRejectBuffer:           6 * time.Hour, // 6 hours after formation
 		expiredContractBroadcastBuffer: 144,           // 144 block after expiration
