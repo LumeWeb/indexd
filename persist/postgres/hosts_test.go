@@ -163,7 +163,7 @@ func TestHost(t *testing.T) {
 	db := initPostgres(t, log.Named("postgres"))
 
 	hk := types.GeneratePrivateKey().PublicKey()
-	hs := testHostSettings(hk)
+	hs := newTestHostSettings(hk)
 
 	// assert [hosts.ErrNotFound] is returned
 	_, err := db.Host(context.Background(), hk)
@@ -393,7 +393,7 @@ func TestHostsRecentUptime(t *testing.T) {
 		if up {
 			for range n {
 				_, err1 := db.pool.Exec(context.Background(), `UPDATE hosts SET last_failed_scan = '0001-01-01 00:00:00+00'::timestamptz, last_successful_scan = NOW() - INTERVAL '24 hours'`)
-				if err := errors.Join(err1, db.UpdateHost(context.Background(), hk, nil, testHostSettings(hk), true, time.Time{})); err != nil {
+				if err := errors.Join(err1, db.UpdateHost(context.Background(), hk, nil, newTestHostSettings(hk), true, time.Time{})); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -669,7 +669,7 @@ func TestUpdateHost(t *testing.T) {
 	}
 
 	// assert host settings are not inserted if the scan failed
-	hs := testHostSettings(hk)
+	hs := newTestHostSettings(hk)
 	err = db.UpdateHost(context.Background(), hk, nil, hs, false, time.Now())
 	if err != nil {
 		t.Fatal(err)
@@ -733,7 +733,7 @@ func TestUpdateHost(t *testing.T) {
 	}
 }
 
-func testHostSettings(pk types.PublicKey) proto4.HostSettings {
+func newTestHostSettings(pk types.PublicKey) proto4.HostSettings {
 	return proto4.HostSettings{
 		Release:             "test",
 		ProtocolVersion:     [3]uint8{1, 0, 0},
