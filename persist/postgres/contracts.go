@@ -177,8 +177,8 @@ WHERE fces.contract_id = contracts.id AND current_height.scanned_height >= contr
 }
 
 // SetContractBad marks a contract as bad.
-func (s *Store) SetContractBad(contractID types.FileContractID) error {
-	return s.transaction(context.Background(), func(ctx context.Context, tx *txn) error {
+func (s *Store) SetContractBad(ctx context.Context, contractID types.FileContractID) error {
+	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
 		_, err := tx.Exec(ctx, `UPDATE contracts SET good = FALSE WHERE contract_id = $1`, sqlHash256(contractID))
 		if err != nil {
 			return fmt.Errorf("failed to update contract.'good': %w", err)

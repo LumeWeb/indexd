@@ -54,8 +54,10 @@ type (
 		Host(ctx context.Context, hostKey types.PublicKey) (hosts.Host, error)
 		Hosts(ctx context.Context, offset, limit int) ([]hosts.Host, error)
 		MaintenanceSettings(ctx context.Context) (MaintenanceSettings, error)
+		BlockHosts(ctx context.Context, hostKeys []types.PublicKey) error
 		RejectPendingContracts(ctx context.Context, maxFormation time.Time) error
 		PruneExpiredContractElements(ctx context.Context, maxBlocksSinceExpiry uint64) error
+		SetContractBad(ctx context.Context, contractID types.FileContractID) error
 	}
 
 	// Syncer is the minimal interface of Syncer functionality the
@@ -230,6 +232,37 @@ func (cm *ContractManager) blockUntilReady(log *zap.Logger) bool {
 	}
 }
 
+// BlockBadHosts blocks any hosts that we have contracts with that are not
+// usable.
+func (cm *ContractManager) BlockBadHosts(ctx context.Context, contracts []Contract) {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+
+	log := cm.log.Named("blockhosts")
+
+	for _, c := range contracts {
+		contractLog := log.With(zap.Stringer("contractID", c.ID), zap.Stringer("hostKey", c.HostKey))
+
+		// fetch the host for the contract
+		host, err := cm.store.Host(ctx, c.HostKey)
+		if err != nil {
+			contractLog.Error("failed to fetch host for contract")
+			continue
+		}
+
+		// if the host is not usable, we block it and mark the contract as bad
+		if !host.Usability.Usable() || host.Blocked {
+			if !host.Blocked {
+				if err := cm.store.BlockHosts(ctx, []types.PublicKey{host.PublicKey}); err != nil {
+					contractLog.Error("failed to block host", zap.Error(err))
+					continue
+				}
+				log.Warn("blocking unusable host", zap.Any("usability", host.Usability))
+			}
+		}
+	}
+}
+
 func (cm *ContractManager) performContractMaintenance(ctx context.Context, log *zap.Logger) error {
 	// fetch settings and determine if maintenance is supposed to run
 	settings, err := cm.store.MaintenanceSettings(ctx)
@@ -239,14 +272,19 @@ func (cm *ContractManager) performContractMaintenance(ctx context.Context, log *
 		return nil
 	}
 
-	// TODO: Mark hosts as well as their contracts as bad if they fail their checks
+	activeContracts, err := cm.store.Contracts(ctx, WithRevisable(true))
+	if err != nil {
+		return fmt.Errorf("failed to fetch active contracts: %w", err)
+	}
+
+	// block bad hosts we have contracts with
+	cm.BlockBadHosts(ctx, activeContracts)
 
 	// TODO: Renew any good contracts within their renew window
 
 	// TODO: Refresh any good contracts that are either out of collateral or funds
 
-	// TODO: Mark any contracts that failed to renew/refresh and are too close
-	// to the expiration height as bad
+	// TODO: Mark any contracts too close to their expiration height as bad.
 
 	// form new contracts until there are enough good contracts to use
 	if err := cm.performContractFormation(ctx, settings.Period, settings.WantedContracts, log); err != nil {

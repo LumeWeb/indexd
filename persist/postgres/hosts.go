@@ -69,7 +69,7 @@ WITH globals AS (
 		1E24::NUMERIC AS one_sc
 	FROM global_settings
 ), hosts AS (
-	SELECT 
+	SELECT
 		id, hosts.public_key, last_announcement, hb.public_key IS NOT NULL AS blocked,
 		last_failed_scan, last_successful_scan, next_scan, consecutive_failed_scans, recent_uptime,
 		settings_protocol_version, settings_release, settings_wallet_address,
@@ -82,7 +82,7 @@ WITH globals AS (
 	FROM hosts
 	LEFT JOIN hosts_blocklist hb ON hosts.public_key = hb.public_key
 	WHERE hosts.public_key = $1
-) SELECT 
+) SELECT
 	hosts.*,
 	recent_uptime > 0.9,
 	has_settings AND settings_max_contract_duration >= globals.contracts_period,
@@ -143,7 +143,7 @@ WITH globals AS (
 		1E24::NUMERIC AS one_sc
     FROM global_settings
 ), hosts AS (
-	SELECT 
+	SELECT
 		id, hosts.public_key, last_announcement, hb.public_key IS NOT NULL AS blocked,
 		last_failed_scan, last_successful_scan, next_scan, consecutive_failed_scans, recent_uptime,
 		settings_protocol_version, settings_release, settings_wallet_address,
@@ -156,7 +156,7 @@ WITH globals AS (
 	FROM hosts
 	LEFT JOIN hosts_blocklist hb ON hosts.public_key = hb.public_key
 	LIMIT $1 OFFSET $2
-) SELECT 
+) SELECT
  	hosts.*,
 	recent_uptime > 0.9,
 	has_settings AND settings_max_contract_duration >= globals.contracts_period,
@@ -243,7 +243,8 @@ func (s *Store) BlockedHosts(ctx context.Context, offset, limit int) ([]types.Pu
 	return blocklist, nil
 }
 
-// BlockHosts adds the given host keys to the blocklist.
+// BlockHosts adds the given host keys to the blocklist and marks all of its
+// contracts as bad.
 func (s *Store) BlockHosts(ctx context.Context, hks []types.PublicKey) error {
 	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
 		for _, hk := range hks {
@@ -251,17 +252,39 @@ func (s *Store) BlockHosts(ctx context.Context, hks []types.PublicKey) error {
 			if err != nil {
 				return fmt.Errorf("failed to add host %q to blocklist: %w", hk, err)
 			}
+			_, err = tx.Exec(ctx, `
+				UPDATE contracts
+				SET good = FALSE
+				FROM contracts c
+				INNER JOIN hosts h ON h.id = c.host_id
+				INNER JOIN hosts_blocklist hb ON hb.public_key = h.public_key
+				WHERE contracts.id = c.id AND h.public_key = $1
+				`, sqlPublicKey(hk))
+			if err != nil {
+				return fmt.Errorf("failed to update contracts: %w", err)
+			}
 		}
 		return nil
 	})
 }
 
-// UnblockHost removes the given host key from the blocklist.
+// UnblockHost removes the given host key from the blocklist and marks its
+// contracts as good again.
 func (s *Store) UnblockHost(ctx context.Context, hk types.PublicKey) error {
 	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
 		_, err := tx.Exec(ctx, "DELETE FROM hosts_blocklist WHERE public_key = $1", sqlPublicKey(hk))
 		if err != nil {
 			return fmt.Errorf("failed to remove host %q from blocklist: %w", hk, err)
+		}
+		_, err = tx.Exec(ctx, `
+			UPDATE contracts
+			SET good = TRUE
+			FROM contracts c
+			INNER JOIN hosts h ON h.id = c.host_id
+			WHERE contracts.id = c.id AND h.public_key = $1
+			`, sqlPublicKey(hk))
+		if err != nil {
+			return fmt.Errorf("failed to update contracts: %w", err)
 		}
 		return nil
 	})
@@ -315,7 +338,7 @@ func (s *Store) UpdateHost(ctx context.Context, hk types.PublicKey, networks []n
 		if !scanSucceeded {
 			if res, err := tx.Exec(ctx, `
 WITH computed AS (
-	SELECT 
+	SELECT
 		id,
 		EXP(- (LN(2) / $2::double precision) * elapsed_time) AS decay_factor
 	FROM (
@@ -330,7 +353,7 @@ WITH computed AS (
 		WHERE public_key = $1
 	) AS _
 )
-UPDATE hosts 
+UPDATE hosts
 SET
  	recent_uptime = recent_uptime * decay_factor,
 	consecutive_failed_scans = consecutive_failed_scans + 1,
@@ -348,7 +371,7 @@ WHERE hosts.id = computed.id`, sqlPublicKey(hk), uptimeHalfLife, nextScan); err 
 		var hostID int64
 		err := tx.QueryRow(ctx, `
 WITH computed AS (
-	SELECT 
+	SELECT
 		id,
 		EXP(- (LN(2) / $2::double precision) * elapsed_time) AS decay_factor
 	FROM (

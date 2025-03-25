@@ -97,6 +97,15 @@ func TestBlocklist(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// add one contract for each host reusing the host keys as contract IDs
+	fcid1 := types.FileContractID(hk1)
+	fcid2 := types.FileContractID(hk2)
+	if err := db.AddFormedContract(context.Background(), fcid1, hk1, 100, 200, types.Siacoins(1), types.Siacoins(2), types.Siacoins(3), types.Siacoins(4)); err != nil {
+		t.Fatal(err)
+	} else if err := db.AddFormedContract(context.Background(), fcid2, hk2, 100, 200, types.Siacoins(1), types.Siacoins(2), types.Siacoins(3), types.Siacoins(4)); err != nil {
+		t.Fatal(err)
+	}
+
 	assertBlocked := func(hk types.PublicKey, blocked bool) {
 		t.Helper()
 		h, err := db.Host(context.Background(), hk)
@@ -110,6 +119,12 @@ func TestBlocklist(t *testing.T) {
 			t.Fatal(err)
 		} else if slices.Contains(hks, hk) != blocked {
 			t.Fatal("expected host to be in blocklist")
+		}
+		contract, err := db.Contract(context.Background(), types.FileContractID(hk))
+		if err != nil {
+			t.Fatal(err)
+		} else if contract.Good == blocked {
+			t.Fatalf("expected contract to only be good if the host isn't blocked: %v %v", contract.Good, blocked)
 		}
 	}
 
