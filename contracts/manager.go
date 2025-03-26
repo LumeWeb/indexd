@@ -60,7 +60,6 @@ type (
 		MarkUnrenewableContractsBad(ctx context.Context, maxProofHeight uint64) error
 		RejectPendingContracts(ctx context.Context, maxFormation time.Time) error
 		PruneExpiredContractElements(ctx context.Context, maxBlocksSinceExpiry uint64) error
-		SetContractBad(ctx context.Context, contractID types.FileContractID) error
 	}
 
 	// Syncer is the minimal interface of Syncer functionality the

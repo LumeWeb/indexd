@@ -136,16 +136,6 @@ func (s *storeMock) RejectPendingContracts(_ context.Context, t time.Time) error
 	return nil
 }
 
-func (s *storeMock) SetContractBad(_ context.Context, contractID types.FileContractID) error {
-	for i := range s.contracts {
-		if s.contracts[i].ID == contractID {
-			s.contracts[i].Good = false
-			return nil
-		}
-	}
-	return ErrNotFound
-}
-
 func (s *storeMock) PruneExpiredContractElements(ctx context.Context, maxBlocksSinceExpiry uint64) error {
 	if maxBlocksSinceExpiry == 0 {
 		panic("invalid maxBlocksSinceExpiry")
