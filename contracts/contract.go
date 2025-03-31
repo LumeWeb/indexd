@@ -128,10 +128,23 @@ func (c Contract) GoodForUpload(maxCollateral types.Currency) bool {
 		return false
 	} else if c.Size >= maxContractSize {
 		return false
-	} else if c.UsedCollateral.Cmp(maxCollateral) > 0 {
+	} else if c.TotalCollateral.Cmp(maxCollateral) >= 0 {
 		return false
 	}
 	return true
+}
+
+// OutOfFunds indicates that a contract is running low on funds and should be
+// refreshed.
+func (c Contract) OutOfFunds() bool {
+	return c.RemainingAllowance.Cmp(c.InitialAllowance.Div64(10)) < 0
+}
+
+// OutOfCollateral indicates that a contract is running low on unallocated
+// collateral and should be refreshed.
+func (c Contract) OutOfCollateral() bool {
+	remaining := c.TotalCollateral.Sub(c.UsedCollateral)
+	return remaining.Cmp(c.TotalCollateral.Div64(10)) < 0
 }
 
 // String implements the fmt.Stringer interface.
