@@ -225,6 +225,9 @@ func (s *Store) RejectPendingContracts(ctx context.Context, maxFormation time.Ti
 	})
 }
 
+// SyncContract updates the contract with the given ID to the provided
+// parameters which are expected to contain information about the latest
+// revision of a contract.
 func (s *Store) SyncContract(ctx context.Context, contractID types.FileContractID, params contracts.ContractSyncParams) error {
 	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
 		_, err := tx.Exec(ctx, `

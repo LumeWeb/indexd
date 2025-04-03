@@ -82,6 +82,8 @@ type (
 		SectorRoots  types.Currency `json:"sectorRoots"`
 	}
 
+	// ContractSyncParams are the parameters to pass to the SyncContract store
+	// method.
 	ContractSyncParams struct {
 		Capacity           uint64
 		RemainingAllowance types.Currency
