@@ -36,7 +36,7 @@ func (tx *updateTx) IsKnownContract(fcid types.FileContractID) (bool, error) {
 	if found {
 		return known, nil
 	}
-	known, err := tx.IsKnownContract(fcid)
+	known, err := tx.UpdateTx.IsKnownContract(fcid)
 	if err != nil {
 		return false, fmt.Errorf("failed to determine whether contract is known: %w", err)
 	}
