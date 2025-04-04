@@ -71,7 +71,7 @@ WITH globals AS (
 	FROM global_settings
 ), hosts AS (
 	SELECT
-		id, hosts.public_key, last_announcement, hb.public_key IS NOT NULL AS blocked,
+		id, hosts.public_key, last_announcement, hb.public_key IS NOT NULL AS blocked, COALESCE(hb.reason, ''),
 		last_failed_scan, last_successful_scan, next_scan, consecutive_failed_scans, recent_uptime,
 		settings_protocol_version, settings_release, settings_wallet_address,
 		settings_accepting_contracts, settings_max_collateral, settings_max_contract_duration,
@@ -149,7 +149,7 @@ WITH globals AS (
     FROM global_settings
 ), hosts AS (
 	SELECT
-		id, hosts.public_key, last_announcement, hb.public_key IS NOT NULL AS blocked,
+		id, hosts.public_key, last_announcement, hb.public_key IS NOT NULL AS blocked, COALESCE(hb.reason, ''),
 		last_failed_scan, last_successful_scan, next_scan, consecutive_failed_scans, recent_uptime,
 		settings_protocol_version, settings_release, settings_wallet_address,
 		settings_accepting_contracts, settings_max_collateral, settings_max_contract_duration,
@@ -198,7 +198,7 @@ WHERE
 	AND (($4::boolean IS NULL) OR ($4::boolean = hosts.blocked))
 	-- active contracts filter
 	AND (($5::boolean IS NULL) OR ($5::boolean = EXISTS (SELECT 1 FROM contracts WHERE host_id = hosts.id AND state >= $6 AND state <= $7)))
-LIMIT $1 OFFSET $2
+	LIMIT $1 OFFSET $2
 ;`, limit, offset, opts.Good, opts.Blocked, opts.ActiveContracts, contracts.ContractStatePending, contracts.ContractStateActive)
 		if err != nil {
 			return fmt.Errorf("failed to query hosts: %w", err)
@@ -272,25 +272,50 @@ func (s *Store) BlockedHosts(ctx context.Context, offset, limit int) ([]types.Pu
 	return blocklist, nil
 }
 
-// BlockHosts adds the given host keys to the blocklist.
-func (s *Store) BlockHosts(ctx context.Context, hks []types.PublicKey) error {
+// BlockHosts adds the given host keys to the blocklist and marks all of its
+// contracts as bad.
+// If a host is already on the blocklist, the reason remains unchanged to
+// preserve the original reason for blocking.
+func (s *Store) BlockHosts(ctx context.Context, hks []types.PublicKey, reason string) error {
 	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
 		for _, hk := range hks {
-			_, err := tx.Exec(ctx, "INSERT INTO hosts_blocklist (public_key) VALUES ($1) ON CONFLICT (public_key) DO NOTHING", sqlPublicKey(hk))
+			_, err := tx.Exec(ctx, "INSERT INTO hosts_blocklist (public_key, reason) VALUES ($1, $2) ON CONFLICT (public_key) DO NOTHING", sqlPublicKey(hk), reason)
 			if err != nil {
 				return fmt.Errorf("failed to add host %q to blocklist: %w", hk, err)
+			}
+			_, err = tx.Exec(ctx, `
+				UPDATE contracts
+				SET good = FALSE
+				FROM contracts c
+				INNER JOIN hosts h ON h.id = c.host_id
+				INNER JOIN hosts_blocklist hb ON hb.public_key = h.public_key
+				WHERE contracts.id = c.id AND h.public_key = $1
+				`, sqlPublicKey(hk))
+			if err != nil {
+				return fmt.Errorf("failed to update contracts: %w", err)
 			}
 		}
 		return nil
 	})
 }
 
-// UnblockHost removes the given host key from the blocklist.
+// UnblockHost removes the given host key from the blocklist and marks its
+// contracts as good again.
 func (s *Store) UnblockHost(ctx context.Context, hk types.PublicKey) error {
 	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
 		_, err := tx.Exec(ctx, "DELETE FROM hosts_blocklist WHERE public_key = $1", sqlPublicKey(hk))
 		if err != nil {
 			return fmt.Errorf("failed to remove host %q from blocklist: %w", hk, err)
+		}
+		_, err = tx.Exec(ctx, `
+			UPDATE contracts
+			SET good = TRUE
+			FROM contracts c
+			INNER JOIN hosts h ON h.id = c.host_id
+			WHERE contracts.id = c.id AND h.public_key = $1
+			`, sqlPublicKey(hk))
+		if err != nil {
+			return fmt.Errorf("failed to update contracts: %w", err)
 		}
 		return nil
 	})
@@ -513,6 +538,7 @@ func scanHost(s scanner) (dbHost, error) {
 		(*sqlPublicKey)(&host.PublicKey),
 		&host.LastAnnouncement,
 		&host.Blocked,
+		&host.BlockedReason,
 		&lastFailedScan,
 		&lastSuccessfulScan,
 		&host.NextScan,

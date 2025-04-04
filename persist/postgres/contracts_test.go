@@ -467,7 +467,7 @@ func TestSetContractGood(t *testing.T) {
 	setContractGood := func(id int64, good bool) {
 		t.Helper()
 		if !good {
-			if err := store.SetContractBad(types.FileContractID{byte(id)}); err != nil {
+			if err := store.SetContractBad(context.Background(), types.FileContractID{byte(id)}); err != nil {
 				t.Fatal("failed to set contract.'good'", err)
 			}
 		} else {

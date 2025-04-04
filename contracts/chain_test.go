@@ -59,8 +59,39 @@ func (s *storeMock) AddFormedContract(ctx context.Context, contractID types.File
 	return nil
 }
 
+func (s *storeMock) BlockHosts(_ context.Context, hostKeys []types.PublicKey, reason string) error {
+	for _, hostKey := range hostKeys {
+		host, ok := s.hosts[hostKey]
+		if !ok {
+			return hosts.ErrNotFound
+		}
+		if !host.Blocked {
+			host.Blocked = true
+			host.BlockedReason = reason
+			s.hosts[hostKey] = host
+		}
+
+		for i := range s.contracts {
+			if s.contracts[i].HostKey == hostKey {
+				s.contracts[i].Good = false
+			}
+		}
+	}
+
+	return nil
+}
+
 func (s *storeMock) ContractElementsForBroadcast(ctx context.Context, maxBlocksSinceExpiry uint64) ([]types.V2FileContractElement, error) {
 	return slices.Clone(s.toBroadcast), nil
+}
+
+func (s *storeMock) Contract(_ context.Context, contractID types.FileContractID) (Contract, error) {
+	for _, c := range s.contracts {
+		if c.ID == contractID {
+			return c, nil
+		}
+	}
+	return Contract{}, ErrNotFound
 }
 
 func (s *storeMock) Contracts(ctx context.Context, opts ...ContractQueryOpt) ([]Contract, error) {
@@ -94,11 +125,16 @@ func (s *storeMock) Hosts(ctx context.Context, offset, limit int, queryOpts ...h
 		if opts.Blocked != nil {
 			keep = keep && h.Blocked == *opts.Blocked
 		}
+		if opts.ActiveContracts != nil {
+			keep = keep && *opts.ActiveContracts == slices.ContainsFunc(s.contracts, func(contract Contract) bool {
+				return contract.HostKey == h.PublicKey
+			})
+		}
 		if keep {
 			filter = append(filter, h)
 		}
 	}
-	return copied, nil
+	return filter, nil
 }
 
 func (s *storeMock) MaintenanceSettings(ctx context.Context) (MaintenanceSettings, error) {
@@ -111,6 +147,16 @@ func (s *storeMock) RejectPendingContracts(_ context.Context, t time.Time) error
 	}
 	s.rejectCalls++
 	return nil
+}
+
+func (s *storeMock) SetContractBad(_ context.Context, contractID types.FileContractID) error {
+	for i := range s.contracts {
+		if s.contracts[i].ID == contractID {
+			s.contracts[i].Good = false
+			return nil
+		}
+	}
+	return ErrNotFound
 }
 
 func (s *storeMock) PruneExpiredContractElements(ctx context.Context, maxBlocksSinceExpiry uint64) error {

@@ -29,23 +29,6 @@ var (
 			StoragePrice:  types.NewCurrency64(1),
 		},
 	}
-
-	// goodUsability is the usability of a host that passes all checks
-	goodUsability = hosts.Usability{
-		Uptime:              true,
-		MaxContractDuration: true,
-		MaxCollateral:       true,
-		ProtocolVersion:     true,
-		PriceValidity:       true,
-		AcceptingContracts:  true,
-
-		ContractPrice:   true,
-		Collateral:      true,
-		StoragePrice:    true,
-		IngressPrice:    true,
-		EgressPrice:     true,
-		FreeSectorPrice: true,
-	}
 )
 
 type formContractCall struct {

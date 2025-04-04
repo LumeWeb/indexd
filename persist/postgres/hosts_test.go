@@ -97,13 +97,24 @@ func TestBlocklist(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	assertBlocked := func(hk types.PublicKey, blocked bool) {
+	// add one contract for each host reusing the host keys as contract IDs
+	fcid1 := types.FileContractID(hk1)
+	fcid2 := types.FileContractID(hk2)
+	if err := db.AddFormedContract(context.Background(), fcid1, hk1, 100, 200, types.Siacoins(1), types.Siacoins(2), types.Siacoins(3), types.Siacoins(4)); err != nil {
+		t.Fatal(err)
+	} else if err := db.AddFormedContract(context.Background(), fcid2, hk2, 100, 200, types.Siacoins(1), types.Siacoins(2), types.Siacoins(3), types.Siacoins(4)); err != nil {
+		t.Fatal(err)
+	}
+
+	assertBlocked := func(hk types.PublicKey, blocked bool, reason string) {
 		t.Helper()
 		h, err := db.Host(context.Background(), hk)
 		if err != nil {
 			t.Fatal(err)
 		} else if h.Blocked != blocked {
 			t.Fatal("unexpected", h.Blocked)
+		} else if h.Blocked && h.BlockedReason != reason {
+			t.Fatalf("unexpected %v %v", h.BlockedReason, reason)
 		}
 		hks, err := db.BlockedHosts(context.Background(), 0, 10)
 		if err != nil {
@@ -111,11 +122,17 @@ func TestBlocklist(t *testing.T) {
 		} else if slices.Contains(hks, hk) != blocked {
 			t.Fatal("expected host to be in blocklist")
 		}
+		contract, err := db.Contract(context.Background(), types.FileContractID(hk))
+		if err != nil {
+			t.Fatal(err)
+		} else if contract.Good == blocked {
+			t.Fatalf("expected contract to only be good if the host isn't blocked: %v %v", contract.Good, blocked)
+		}
 	}
 
-	block := func(hks ...types.PublicKey) {
+	block := func(reason string, hks ...types.PublicKey) {
 		t.Helper()
-		if err := db.BlockHosts(context.Background(), hks); err != nil {
+		if err := db.BlockHosts(context.Background(), hks, reason); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -128,33 +145,34 @@ func TestBlocklist(t *testing.T) {
 		}
 	}
 
-	// assert both are returned
-	assertBlocked(hk1, false)
-	assertBlocked(hk2, false)
+	// assert neither host is blocked
+	assertBlocked(hk1, false, "")
+	assertBlocked(hk2, false, "")
 
 	// block h1 and assert noop on duplicate insert
-	block(hk1, hk1)
+	block("block1", hk1, hk1)
+	block("blockX", hk1, hk1)
 
-	// assert only h2 is returned
-	assertBlocked(hk1, true)
-	assertBlocked(hk2, false)
+	// assert only h1 is blocked
+	assertBlocked(hk1, true, "block1")
+	assertBlocked(hk2, false, "")
 
-	// block h2 and assert no hosts are returned
-	block(hk2)
-	assertBlocked(hk1, true)
-	assertBlocked(hk2, true)
+	// assert both hosts are blocked
+	block("block2", hk2)
+	assertBlocked(hk1, true, "block1")
+	assertBlocked(hk2, true, "block2")
 
 	// unblock h2 assert noop on duplicate or remove of unknown key
 	unblock(hk2, hk2, types.GeneratePrivateKey().PublicKey())
 
-	// assert h2 is returned
-	assertBlocked(hk1, true)
-	assertBlocked(hk2, false)
+	// assert only h1 is blocked
+	assertBlocked(hk1, true, "block1")
+	assertBlocked(hk2, false, "")
 
 	// unblock h1 and assert we're back to normal
 	unblock(hk1)
-	assertBlocked(hk1, false)
-	assertBlocked(hk2, false)
+	assertBlocked(hk1, false, "")
+	assertBlocked(hk2, false, "")
 }
 
 func TestHost(t *testing.T) {
@@ -835,7 +853,7 @@ func TestHosts(t *testing.T) {
 
 		// block host
 		if blocked {
-			err := db.BlockHosts(context.Background(), []types.PublicKey{hk})
+			err := db.BlockHosts(context.Background(), []types.PublicKey{hk}, "test")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -910,6 +928,8 @@ func TestHosts(t *testing.T) {
 				t.Fatal("invalid settings")
 			} else if host.Blocked != blocked {
 				t.Fatalf("expected blocked %v, got %v", blocked, host.Blocked)
+			} else if host.Blocked && host.BlockedReason != "test" {
+				t.Fatalf("expected blocked reason 'test', got %v", host.BlockedReason)
 			} else if host.Usability != usability {
 				t.Fatalf("expected usability %+v, got %+v", usability, host.Usability)
 			}
