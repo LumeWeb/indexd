@@ -104,9 +104,11 @@ func (f *Funder) FundAccounts(ctx context.Context, host hosts.Host, accounts []H
 			continue
 		} else if !rev.Revisable {
 			contractLog.Debug("contract is not revisable") // sanity check
+			drained++
 			continue
 		} else if rev.Contract.RenterOutput.Value.Cmp(f.target) < 0 {
 			contractLog.Debug("contract has insufficient funds")
+			drained++
 			continue
 		}
 

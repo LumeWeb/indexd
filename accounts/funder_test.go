@@ -86,8 +86,8 @@ func TestFunder(t *testing.T) {
 		t.Fatal("unexpected", err)
 	} else if funded != 0 {
 		t.Fatal("expected 0 accounts funded, got", funded)
-	} else if drained != 0 {
-		t.Fatal("expected 0 contracts drained, got", drained)
+	} else if drained != 2 {
+		t.Fatal("expected 2 contracts drained, got", drained)
 	} else if entries := logs.TakeAll(); len(entries) != 3 {
 		t.Fatal("expected 3 log entries, got", len(entries))
 	} else if !strings.Contains(entries[0].Message, "latest revision") {
@@ -103,22 +103,20 @@ func TestFunder(t *testing.T) {
 		Revisable: true,
 		Contract:  types.V2FileContract{RenterOutput: types.SiacoinOutput{Value: target.Mul64(2)}},
 	}
-	contractIDs = append(contractIDs, types.FileContractID{3})
 
 	// add a bad contract, that fails RPC replenish (to assert we don't increment fundIdx)
 	h.revisions[badContractId] = proto.RPCLatestRevisionResponse{
 		Revisable: true,
 		Contract:  types.V2FileContract{RenterOutput: types.SiacoinOutput{Value: target}},
 	}
-	contractIDs = append(contractIDs, badContractId)
 
 	// add a good contract, capable of funding 1 account
 	h.revisions[types.FileContractID{4}] = proto.RPCLatestRevisionResponse{
 		Revisable: true,
 		Contract:  types.V2FileContract{RenterOutput: types.SiacoinOutput{Value: target.Mul64(1)}},
 	}
-	contractIDs = append(contractIDs, types.FileContractID{4})
 
+	contractIDs = []types.FileContractID{{3}, badContractId, {4}}
 	accounts := []HostAccount{{AccountKey: proto.Account{1}}, {AccountKey: proto.Account{2}}, {AccountKey: proto.Account{3}}, {AccountKey: proto.Account{4}}}
 	funded, drained, err = f.FundAccounts(context.Background(), hosts.Host{}, accounts, contractIDs, zap.NewNop())
 	if err != nil {
