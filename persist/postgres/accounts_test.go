@@ -62,6 +62,30 @@ func TestAddAccount(t *testing.T) {
 	}
 }
 
+func TestHasAccount(t *testing.T) {
+	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
+
+	pk := types.GeneratePrivateKey().PublicKey()
+	found, err := store.HasAccount(context.Background(), pk)
+	if err != nil {
+		t.Fatal(err)
+	} else if found {
+		t.Fatal("expected account to not exist")
+	}
+
+	err = store.AddAccount(context.Background(), pk)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	found, err = store.HasAccount(context.Background(), pk)
+	if err != nil {
+		t.Fatal(err)
+	} else if !found {
+		t.Fatal("expected account to exist")
+	}
+}
+
 func TestHostAccountsForFunding(t *testing.T) {
 	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
 

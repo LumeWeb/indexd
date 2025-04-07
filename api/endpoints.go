@@ -246,9 +246,10 @@ func (a *api) handleGETWalletPending(jc jape.Context) {
 
 func (a *api) handlePOSTWalletSend(jc jape.Context) {
 	var req WalletSendSiacoinsRequest
-	if err := jc.Decode(&req); err != nil {
+	if jc.Decode(&req) != nil {
 		return
-	} else if req.Address == types.VoidAddress {
+	}
+	if req.Address == types.VoidAddress {
 		jc.Error(errors.New("cannot send to void address"), http.StatusBadRequest)
 		return
 	}
