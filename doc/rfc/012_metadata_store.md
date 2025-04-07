@@ -38,15 +38,27 @@ reuse the same key material for different cryptographic algorithms directly.
 
 For that, we use the key derivation function HKDF which is specifically made for
 use-cases where you already have entropy-rich input and quickly want to derive
-domain-specific keys. We then use the resulting key to create the HMAC over the
-encrypted value to store in the metadata store.
+domain-specific keys. The salt/domain should be the string `MD-HMAC-SECRET`. We
+then use the resulting key to create the HMAC over the encrypted value to store
+in the metadata store.
 
 ### Value Encryption
 
 Similar to the HMAC creation, we derive another key for the encryption of the
-value with HKDF as well as a random nonce. Then we use CHACHA20-Poly1305 to
-encrypt the plaintext value and append the nonce to it. The nonce is appended
-since it mustn't be reused while we still need to know it when decrypting.
+value with HKDF as well as a random nonce. This time we use the salt
+`MD-ENCRYPTION-SECRET`. Then we use CHACHA20-Poly1305 to encrypt the plaintext
+value and append the nonce to it. The nonce is appended since it mustn't be
+reused while we still need to know it when decrypting.
+
+### Validation
+
+After fetching the value for a key from the store, validation works as follows:
+
+1. derive the needed keys again
+2. validate the value against the key (HMAC)
+3. extract the nonce from the value
+4. decrypt the value
+5. use the value
 
 ### Limits and Abuse
 
