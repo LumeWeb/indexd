@@ -77,7 +77,7 @@ func TestPerformContractRefreshes(t *testing.T) {
 		return hosts.Host{
 			PublicKey: types.PublicKey{byte(i)},
 			Settings:  goodSettings,
-			Usability: goodUsability,
+			Usability: hosts.GoodUsability,
 		}
 	}
 
