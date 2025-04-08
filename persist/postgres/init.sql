@@ -174,3 +174,39 @@ CREATE TABLE contract_elements (
     leaf_index INTEGER NOT NULL,
     merkle_proof BYTEA NOT NULL
 );
+
+CREATE TABLE slabs (
+    id BIGSERIAL PRIMARY KEY, -- internal db id
+
+    account_id SERIAL REFERENCES accounts(id), -- account that owns slab
+    digest BYTEA NOT NULL, -- unique identifier for the slab derived from sector roots
+    UNIQUE(account_id, digest), -- deduplicate slabs per account
+
+    encryption_key BYTEA NOT NULL,
+    last_repair_attempt TIMESTAMP WITH TIME ZONE,
+    min_shards SMALLINT NOT NULL CHECK(min_shards > 0)
+);
+CREATE INDEX slabs_digest ON slabs(digest);
+
+CREATE TABLE sectors (
+    id BIGSERIAL PRIMARY KEY,
+    sector_root BYTEA UNIQUE NOT NULL,
+
+    -- uploading
+    host_id INTEGER REFERENCES hosts(id), -- host that stores sector
+    contract_id INTEGER REFERENCES contracts(id) DEFAULT NULL, -- null if not pinned
+    uploaded_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(), -- allow sorting by upload time
+
+    -- slab
+    slab_id BIGINT REFERENCES slabs(id) NOT NULL,
+    slab_index SMALLINT NOT NULL, -- index within corresponding slab to retrieve sectors in right order
+
+    -- data integrity
+    next_integrity_check TIMESTAMP WITH TIME ZONE,
+    consecutive_failed_checks SMALLINT NOT NULL DEFAULT 0
+);
+-- quick lookup of sectors to pin prioritized by upload time
+CREATE INDEX sectors_contract_id_uploaded_at_idx ON sectors(contract_id, uploaded_at ASC);
+
+-- speed up fetching sectors for slab ordered by their position within the slab
+CREATE UNIQUE INDEX sectors_slab_id_slab_index ON sectors(slab_id, slab_index ASC);
