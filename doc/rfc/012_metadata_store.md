@@ -14,7 +14,7 @@ client-side encrypted, tamper-resistant data. To maximize privacy, there is no
 relation between these blobs of metadata and slabs that the indexer knows of.
 This severely limits the capability of the store as the indexer can't perform
 searches on this data, but the client can add any necessary complexity
-client-side while the metadata store serves as a pure backup mechanism.
+client-side while the metadata store serves purely as a backup mechanism.
 
 ## The Store
 
