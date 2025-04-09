@@ -289,5 +289,5 @@ CREATE TABLE metadata (
     account_id INTEGER REFERENCES accounts(id) NOT NULL,
     key BYTEA NOT NULL
 );
-CREATE UNIQUE INDEX metadata_account_id_key ON metadata(account_id, key)
+CREATE UNIQUE INDEX metadata_account_id_key_idx ON metadata(account_id, key)
 ```
