@@ -139,11 +139,18 @@ func TestPinSlabs(t *testing.T) {
 	}
 }
 
-// BenchmarkSlabs benchmarks Slabs and PinSlabs in various batch sizes
-// Hardware |     Benchmark   |  ms/op  | Throughput    |
+// BenchmarkSlabs benchmarks Slabs and PinSlabs in various batch sizes. The
+// results are expressed in time per operation as well as equivalent
+// upload/download throughput.
+//
+// Hardware |     Benchmark   |  ms/op  | Throughput   |
 // M2 Pro   | PinSlabs-40MiB  |  1.1ms | 36115.26 MB/s |
 // M2 Pro   | PinSlabs-400MiB |  7.8ms |  5363.69 MB/s |
 // M2 Pro   | PinSlabs-4GiB   | 79.8ms |   528.11 MB/s |
+//
+// M2 Pro   | Slabs-40MiB  |  0.6ms |    61408.13 MB/s |
+// M2 Pro   | Slabs-400MiB |  3.2ms |    13007.09 MB/s |
+// M2 Pro   | Slabs-4GiB   | 29.4ms |     1426.31 MB/s |
 func BenchmarkSlabs(b *testing.B) {
 	store := initPostgres(b, zaptest.NewLogger(b).Named("postgres"))
 	account := proto.Account{1}
