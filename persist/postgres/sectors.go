@@ -177,7 +177,7 @@ func (s *Store) pinSlab(ctx context.Context, tx *txn, accountID int64, slab Slab
 		return SlabID{}, ErrSlabExists
 	}
 
-	// insert slab, overwriting existing ones
+	// insert slab
 	var slabID int64
 	err = tx.QueryRow(ctx, `
 		INSERT INTO slabs (account_id, digest, encryption_key, min_shards)
@@ -188,7 +188,7 @@ func (s *Store) pinSlab(ctx context.Context, tx *txn, accountID int64, slab Slab
 		return SlabID{}, err
 	}
 
-	// insert sectors in a single batch
+	// insert slab's sectors in a single batch
 	var placeholders []string
 	var args []any
 	for i, sector := range slab.Sectors {
@@ -197,7 +197,6 @@ func (s *Store) pinSlab(ctx context.Context, tx *txn, accountID int64, slab Slab
 	}
 	values := strings.Join(placeholders, ",")
 
-	// insert sectors, overwriting existing ones
 	_, err = tx.Exec(ctx, fmt.Sprintf(`
 		INSERT INTO sectors (sector_root, host_id, slab_id, slab_index)
 		VALUES %s
