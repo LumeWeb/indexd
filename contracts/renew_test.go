@@ -171,10 +171,11 @@ func TestPerformContractRenewals(t *testing.T) {
 }
 
 func TestSyncRevisionState(t *testing.T) {
+	amMock := &accountsManagerMock{}
 	store := &storeMock{}
 	contractor := newContractorMock()
 	renterKey := types.PublicKey{1, 2, 3, 4, 5}
-	contracts := newContractManager(renterKey, nil, contractor, nil, store, nil, nil)
+	contracts := newContractManager(renterKey, amMock, nil, contractor, nil, store, nil, nil)
 
 	// add a host and contract
 	contractID := types.FileContractID{1}
