@@ -57,15 +57,6 @@ func TestPerformContractRenewals(t *testing.T) {
 	)
 	cmMock.state.Index.Height = 50
 
-	goodSettings := proto.HostSettings{
-		AcceptingContracts: true,
-		RemainingStorage:   minRemainingStorage,
-		Prices: proto.HostPrices{
-			ContractPrice: types.Siacoins(1),
-			Collateral:    types.NewCurrency64(1),
-			StoragePrice:  types.NewCurrency64(1),
-		},
-	}
 	badSettings := proto.HostSettings{}
 
 	// helper to create a good host
@@ -115,7 +106,7 @@ func TestPerformContractRenewals(t *testing.T) {
 		bad.PublicKey:  bad,
 	}
 
-	contractor := &contractorMock{}
+	contractor := newContractorMock()
 	renterKey := types.PublicKey{1, 2, 3, 4, 5}
 	wallet := &walletMock{}
 	contracts := newContractManager(renterKey, amMock, cmMock, contractor, scanner, store, syncerMock, wallet)
@@ -177,4 +168,90 @@ func TestPerformContractRenewals(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestSyncRevisionState(t *testing.T) {
+	store := &storeMock{}
+	contractor := newContractorMock()
+	renterKey := types.PublicKey{1, 2, 3, 4, 5}
+	contracts := newContractManager(renterKey, nil, contractor, nil, store, nil, nil)
+
+	// add a host and contract
+	contractID := types.FileContractID{1}
+	store.hosts = map[types.PublicKey]hosts.Host{
+		types.PublicKey(contractID): {PublicKey: types.PublicKey(contractID)},
+	}
+	err := store.AddFormedContract(context.Background(), contractID, types.PublicKey(contractID), 100, 200, types.Siacoins(1), types.Siacoins(2), types.Siacoins(3), types.Siacoins(4))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// helper to sync and assert contract
+	assertContract := func(revisionParams, expectedParams ContractSyncParams) {
+		t.Helper()
+
+		// update latest revision in mocked contractor
+		contractor.latestRevisions[contractID] = proto.RPCLatestRevisionResponse{
+			Contract: types.V2FileContract{
+				Capacity: revisionParams.Capacity,
+				RenterOutput: types.SiacoinOutput{
+					Value: revisionParams.RemainingAllowance,
+				},
+				RevisionNumber:  revisionParams.RevisionNumber,
+				Filesize:        revisionParams.Size,
+				MissedHostValue: revisionParams.UsedCollateral,
+			},
+		}
+
+		// sync the state
+		if err := contracts.syncRevisionState(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+
+		// check contract was updated in store
+		contract, err := store.Contract(context.Background(), contractID)
+		if err != nil {
+			t.Fatal(err)
+		} else if contract.Capacity != expectedParams.Capacity {
+			t.Fatalf("expected capacity %d, got %d", expectedParams.Capacity, contract.Capacity)
+		} else if contract.RemainingAllowance != expectedParams.RemainingAllowance {
+			t.Fatalf("expected remaining allowance %d, got %d", expectedParams.RemainingAllowance, contract.RemainingAllowance)
+		} else if contract.RevisionNumber != expectedParams.RevisionNumber {
+			t.Fatalf("expected revision number %d, got %d", expectedParams.RevisionNumber, contract.RevisionNumber)
+		} else if contract.Size != expectedParams.Size {
+			t.Fatalf("expected size %d, got %d", expectedParams.Size, contract.Size)
+		} else if contract.UsedCollateral != expectedParams.UsedCollateral {
+			t.Fatalf("expected used collateral %d, got %d", expectedParams.UsedCollateral, contract.UsedCollateral)
+		}
+	}
+
+	// update the latest revision - should update
+	params1 := ContractSyncParams{
+		Capacity:           1000,
+		RemainingAllowance: types.Siacoins(1),
+		RevisionNumber:     100,
+		Size:               900,
+		UsedCollateral:     types.Siacoins(10),
+	}
+	assertContract(params1, params1)
+
+	// try again with different values - should update
+	params2 := ContractSyncParams{
+		Capacity:           2000,
+		RemainingAllowance: types.Siacoins(2),
+		RevisionNumber:     200,
+		Size:               1900,
+		UsedCollateral:     types.Siacoins(20),
+	}
+	assertContract(params2, params2)
+
+	// try again with same revision number - should not update
+	params3 := ContractSyncParams{
+		Capacity:           3000,
+		RemainingAllowance: types.Siacoins(3),
+		RevisionNumber:     params2.RevisionNumber,
+		Size:               2900,
+		UsedCollateral:     types.Siacoins(30),
+	}
+	assertContract(params3, params2)
 }
