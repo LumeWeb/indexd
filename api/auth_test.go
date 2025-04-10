@@ -70,7 +70,7 @@ func TestAuth(t *testing.T) {
 		t.Fatal("unexpected", status)
 	}
 
-	// assert unauthorized if 'X-SiaIdx-ValidUntil' is invalid
+	// assert unauthorized if 'SiaIdx-ValidUntil' is invalid
 	status, errorMsg := doRequest(func(req *http.Request) {
 		val := url.Values{}
 		val.Set(queryParamValidUntil, "notatimestamp")
@@ -84,7 +84,7 @@ func TestAuth(t *testing.T) {
 		t.Fatal("unexpected", errorMsg)
 	}
 
-	// assert unauthorized if 'X-SiaIdx-Credential' is invalid
+	// assert unauthorized if 'SiaIdx-Credential' is invalid
 	cred := sk.PublicKey().String()
 	validUntil := time.Now().Add(time.Hour)
 	validUntilTs := fmt.Sprint(validUntil.Unix())
@@ -101,7 +101,7 @@ func TestAuth(t *testing.T) {
 		t.Fatal("unexpected", errorMsg)
 	}
 
-	// assert unauthorized if 'X-SiaIdx-Signature' is invalid
+	// assert unauthorized if 'SiaIdx-Signature' is invalid
 	var sig types.Signature
 	frand.Read(sig[:])
 	status, errorMsg = doRequest(func(req *http.Request) {
