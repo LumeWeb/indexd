@@ -46,17 +46,25 @@ in the metadata store.
 
 Similar to the HMAC creation, we derive another key for the encryption of the
 value with HKDF as well as a random nonce. This time we use the salt
-`MD-ENCRYPTION-SECRET`. Then we use CHACHA20-Poly1305 to encrypt the plaintext
-value and append the nonce to it. The nonce is appended since it mustn't be
-reused while we still need to know it when decrypting.
+`MD-ENCRYPTION-SECRET`. From that key we derive another one using a random 32
+byte salt. Then we use CHACHA20-Poly1305 to encrypt the plaintext
+value and append the salt to it.
+
+The reason for using a random salt rather than a random 12 byte nonce is to
+avoid nonce reuse. This will always result in a unique key for each stored value
+while reusing the nonce might become a problem when a user reaches billions of
+messages created from the same key since the probability is about 𝑛^2/2^96 for n
+messages.
+If we generate a unique key for each stored value, we can safely encrypt every
+value starting at nonce = 0.
 
 ### Validation
 
 After fetching the value for a key from the store, validation works as follows:
 
-1. derive the needed keys again
-2. validate the value against the key (HMAC)
-3. extract the nonce from the value
+1. derive the `MD-HMAC-SECRET` and `MD-ENCRYPTION-SECRET` keys
+2. validate the value against the HMAC
+3. extract the salt from the value and derive the key for decryption
 4. decrypt the value
 5. use the value
 
