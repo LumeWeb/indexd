@@ -19,11 +19,12 @@ import (
 // BenchmarkHosts is a set of benchmarks that verify the performance of the host
 // methods in the store that use common table expressions.
 //
-// M1 Max | Host       | 3 ms/op
-// M1 Max | Hosts_10   | 21 ms/op
-// M1 Max | Hosts_100  | 150 ms/op
-// M1 Max | Hosts_1000 | 1.5 s/op
-// M1 Max | UpdateHost | 2 ms/op
+// M1 Max | Host       | 1.5 ms/op
+// M1 Max | Hosts_10   | 14.5 ms/op
+// M1 Max | Hosts_100  | 81.6 ms/op
+// M1 Max | Hosts_1000 | 744.8 ms/op
+// M1 Max | UpdateHost | 1.5 ms/op
+
 func BenchmarkHosts(b *testing.B) {
 	// define parameters
 	const (
