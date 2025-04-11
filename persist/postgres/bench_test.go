@@ -10,6 +10,8 @@ import (
 
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
+	"go.sia.tech/coreutils/chain"
+	"go.sia.tech/coreutils/rhp/v4/siamux"
 	"go.sia.tech/indexd/accounts"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
@@ -19,12 +21,11 @@ import (
 // BenchmarkHosts is a set of benchmarks that verify the performance of the host
 // methods in the store that use common table expressions.
 //
-// M1 Max | Host       | 1.5 ms/op
-// M1 Max | Hosts_10   | 14.5 ms/op
-// M1 Max | Hosts_100  | 81.6 ms/op
-// M1 Max | Hosts_1000 | 744.8 ms/op
+// M1 Max | Host       | 1.8 ms/op
+// M1 Max | Hosts_10   | 7.1 ms/op
+// M1 Max | Hosts_100  | 10.5 ms/op
+// M1 Max | Hosts_1000 | 13 ms/op
 // M1 Max | UpdateHost | 1.5 ms/op
-
 func BenchmarkHosts(b *testing.B) {
 	// define parameters
 	const (
@@ -50,6 +51,12 @@ func BenchmarkHosts(b *testing.B) {
 				return err
 			}
 			hosts[i] = hk
+
+			na := chain.NetAddress{Protocol: siamux.Protocol, Address: "foo"}
+			_, err = tx.Exec(ctx, `INSERT INTO host_addresses (host_id, net_address, protocol) VALUES ($1, $2, $3)`, hostID, na.Address, sqlNetworkProtocol(na.Protocol))
+			if err != nil {
+				return fmt.Errorf("failed to insert host address: %w", err)
+			}
 
 			_, err = tx.Exec(ctx, `INSERT INTO host_resolved_cidrs (host_id, cidr) VALUES ($1, $2), ($1, $3)`, hostID, networks[0].String(), networks[1].String())
 			if err != nil {
