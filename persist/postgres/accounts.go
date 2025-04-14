@@ -58,6 +58,18 @@ func (s *Store) AddAccount(ctx context.Context, ak types.PublicKey) error {
 	})
 }
 
+// HasAccount checks if the account with the given public key exists in the
+// database.
+func (s *Store) HasAccount(ctx context.Context, ak types.PublicKey) (bool, error) {
+	var exists bool
+	if err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
+		return tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM accounts WHERE public_key = $1)`, sqlPublicKey(ak)).Scan(&exists)
+	}); err != nil {
+		return false, fmt.Errorf("failed to check if account exists: %w", err)
+	}
+	return exists, nil
+}
+
 // HostAccountsForFunding returns up to limit accounts for the given host key
 // that are due for funding.
 func (s *Store) HostAccountsForFunding(ctx context.Context, hk types.PublicKey, limit int) ([]accounts.HostAccount, error) {
