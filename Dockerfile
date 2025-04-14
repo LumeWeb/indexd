@@ -17,7 +17,7 @@ FROM debian:bookworm-slim
 
 LABEL maintainer="The Sia Foundation <info@sia.tech>" \
     org.opencontainers.image.description.vendor="The Sia Foundation" \
-    org.opencontainers.image.description="A indexd container - provide storage on the Sia network and earn Siacoin" \
+    org.opencontainers.image.description="A indexd container - connect to apps and store data on the Sia network" \
     org.opencontainers.image.source="https://github.com/SiaFoundation/indexd" \
     org.opencontainers.image.licenses=MIT
 
