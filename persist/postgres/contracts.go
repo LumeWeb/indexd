@@ -118,9 +118,35 @@ func (s *Store) Contracts(ctx context.Context, queryOpts ...contracts.ContractQu
 
 // ContractsForFunding returns a list of contracts for the given host key that
 // are good for funding ephemeral accounts with. The contracts are sorted by the
-// remaining allowance in descending fashion.
+// remaining allowance in descending fashion. The number of contracts returned
+// is limited to 50.
 func (s *Store) ContractsForFunding(ctx context.Context, hk types.PublicKey) ([]types.FileContractID, error) {
-	panic("not implemented")
+	var fcids []types.FileContractID
+	err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
+		rows, err := tx.Query(ctx, `
+SELECT c.contract_id
+FROM contracts c
+INNER JOIN hosts h ON c.host_id = h.id
+WHERE h.public_key = $1 AND c.good = TRUE AND c.state <= $2  AND c.remaining_allowance > 0
+ORDER BY c.remaining_allowance DESC
+LIMIT 50
+`, sqlPublicKey(hk), sqlContractState(contracts.ContractStateActive))
+		if err != nil {
+			return fmt.Errorf("failed to fetch contracts for funding: %w", err)
+		}
+		for rows.Next() {
+			var fcid types.FileContractID
+			if err := rows.Scan((*sqlHash256)(&fcid)); err != nil {
+				return fmt.Errorf("failed to scan contract ID: %w", err)
+			}
+			fcids = append(fcids, fcid)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return fcids, nil
 }
 
 // ContractElementsForBroadcast returns the contract elements of contracts that
