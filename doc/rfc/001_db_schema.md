@@ -223,7 +223,9 @@ CREATE TABLE contract_elements (
 ```postgresql
 CREATE TABLE accounts (
     id SERIAL PRIMARY KEY,
-    public_key BYTEA UNIQUE NOT NULL CHECK (LENGTH(public_key) = 32)
+    public_key BYTEA UNIQUE NOT NULL CHECK (LENGTH(public_key) = 32),
+    max_metadata_size BIGINT NOT NULL DEFAULT 1000000000 CHECK (metadata_size <= max_metadata_size), -- 1GB of metadata
+    metadata_size BIGINT NOT NULL DEFAULT 0 -- sum of size of stored metadata (updated on insert and delete)
 );
 
 CREATE TABLE account_hosts (
@@ -242,15 +244,19 @@ CREATE INDEX account_hosts_host_id_next_fund_idx ON account_hosts (host_id, next
 CREATE TABLE slabs (
     id BIGSERIAL PRIMARY KEY, -- internal db id
 
-    account_id SERIAL REFERENCES accounts(id), -- account that owns slab
-    digest BYTEA NOT NULL CHECK(LENGTH(digest) = 32), -- unique identifier for the slab derived from sector roots
-    UNIQUE(account_id, digest), -- deduplicate slabs per account
+    digest BYTEA UNIQUE NOT NULL CHECK(LENGTH(digest) = 32), -- unique identifier for the slab derived from sector roots
 
     encryption_key BYTEA NOT NULL,
     last_repair_attempt TIMESTAMP WITH TIME ZONE,
     min_shards SMALLINT NOT NULL CHECK(min_shards > 0)
 );
 CREATE INDEX slabs_digest_idx ON slabs(digest);
+
+CREATE TABLE account_slabs (
+    account_id INTEGER REFERENCES accounts(id) NOT NULL, -- account that owns slab
+    slab_id BIGSERIAL REFERENCES slabs(id) NOT NULL,
+    CONSTRAINT account_slabs_pk PRIMARY KEY (account_id, slab_id)
+);
 
 CREATE TABLE sectors (
     id BIGSERIAL PRIMARY KEY,
@@ -274,4 +280,16 @@ CREATE INDEX sectors_contract_id_uploaded_at_idx ON sectors(contract_id, uploade
 
 -- speed up fetching sectors for slab ordered by their position within the slab
 CREATE UNIQUE INDEX sectors_slab_id_slab_index ON sectors(slab_id, slab_index ASC);
+```
+
+### 2.7 Metadata
+
+```postgresql
+CREATE TABLE metadata (
+    id BIGSERIAL PRIMARY KEY,
+
+    account_id INTEGER REFERENCES accounts(id) NOT NULL,
+    key BYTEA NOT NULL
+);
+CREATE UNIQUE INDEX metadata_account_id_key_idx ON metadata(account_id, key)
 ```

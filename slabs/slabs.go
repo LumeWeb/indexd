@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 
+	"fmt"
+
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 )
@@ -56,6 +58,23 @@ type (
 		Sectors       []SectorPinParams `json:"sectors"`
 	}
 )
+
+// Digest creates a unique digest for the slab to be pinned by SlabPinParams. It
+// is important, that the same params always result in the same hash since we
+// deduplicate slabs using it. So if one user makes the mistake of pinning a
+// slab with a different encryption key, this shouldn't prevent other users from
+// pinning the same slab with the correct key.
+func (s SlabPinParams) Digest() (SlabID, error) {
+	hasher := types.NewHasher()
+	hasher.E.WriteUint64(uint64(s.MinShards))
+	hasher.E.Write(s.EncryptionKey[:])
+	for _, sector := range s.Sectors {
+		if _, err := hasher.E.Write(sector.Root[:]); err != nil {
+			return SlabID{}, fmt.Errorf("failed to write sector root to hasher: %w", err)
+		}
+	}
+	return SlabID(hasher.Sum()), nil
+}
 
 // String implements the Stringer interface for SlabID.
 func (s SlabID) String() string {

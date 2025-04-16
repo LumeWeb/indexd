@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -67,23 +68,23 @@ func TestPinSlabs(t *testing.T) {
 				},
 			},
 		}
-		hasher := types.NewHasher()
-		for _, sector := range slab.Sectors {
-			hasher.E.Write(sector.Root[:])
+		slabID, err := slab.Digest()
+		if err != nil {
+			t.Fatal(err)
 		}
-		return slabs.SlabID(hasher.Sum()), slab
+		return slabID, slab
 	}
 
-	// pins slabs
+	// pin slabs
 	slab1ID, slab1 := newSlab(1)
 	slab2ID, slab2 := newSlab(2)
-	params := []slabs.SlabPinParams{slab1, slab2}
+	toPin := []slabs.SlabPinParams{slab1, slab2}
 	expectedIDs := []slabs.SlabID{slab1ID, slab2ID}
-	slabIDs, err = store.PinSlabs(context.Background(), proto.Account{1}, params)
+	slabIDs, err = store.PinSlabs(context.Background(), proto.Account{1}, toPin)
 	if err != nil {
 		t.Fatal(err)
-	} else if len(slabIDs) != len(params) {
-		t.Fatalf("expected %d slab IDs, got %d", len(params), len(slabIDs))
+	} else if len(slabIDs) != len(toPin) {
+		t.Fatalf("expected %d slab IDs, got %d", len(toPin), len(slabIDs))
 	} else if slabIDs[0] != expectedIDs[0] || slabIDs[1] != expectedIDs[1] {
 		t.Fatalf("expected slab IDs %v, got %v", expectedIDs, slabIDs)
 	}
@@ -115,8 +116,8 @@ func TestPinSlabs(t *testing.T) {
 	fetched, err := store.Slabs(context.Background(), account, slabIDs)
 	if err != nil {
 		t.Fatal(err)
-	} else if len(fetched) != len(params) {
-		t.Fatalf("expected %d slabs, got %d", len(params), len(fetched))
+	} else if len(fetched) != len(toPin) {
+		t.Fatalf("expected %d slabs, got %d", len(toPin), len(fetched))
 	}
 	assertSlab(slab1ID, slab1, fetched[0])
 	assertSlab(slab2ID, slab2, fetched[1])
@@ -127,17 +128,43 @@ func TestPinSlabs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// pin same slabs again which should return an error
-	slabIDs, err = store.PinSlabs(context.Background(), proto.Account{1}, params)
-	if !errors.Is(err, slabs.ErrSlabExists) {
-		t.Fatal("expected ErrSlabExists, got", err)
-	}
-
-	// pinning them under a different account id should work
-	_, err = store.PinSlabs(context.Background(), proto.Account{2}, params)
+	// pin same slabs for account 2 again which should add links to the join
+	// table
+	slabIDs, err = store.PinSlabs(context.Background(), account2, toPin)
 	if err != nil {
 		t.Fatal(err)
+	} else if len(slabIDs) != len(toPin) {
+		t.Fatalf("expected %d slab IDs, got %d", len(toPin), len(slabIDs))
+	} else if slabIDs[0] != expectedIDs[0] || slabIDs[1] != expectedIDs[1] {
+		t.Fatalf("expected slab IDs %v, got %v", expectedIDs, slabIDs)
 	}
+
+	// fetch slabs for account 2
+	fetched, err = store.Slabs(context.Background(), account2, slabIDs)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(fetched) != len(toPin) {
+		t.Fatalf("expected %d slabs, got %d", len(toPin), len(fetched))
+	}
+	assertSlab(slab1ID, slab1, fetched[0])
+	assertSlab(slab2ID, slab2, fetched[1])
+
+	// assert database has the right number of sectors, slabs and accounts to
+	// make sure deduplication works
+	assertCount := func(table string, rows int64) {
+		t.Helper()
+		var count int64
+		err := store.pool.QueryRow(context.Background(), fmt.Sprintf(`SELECT COUNT(*) FROM %s`, table)).Scan(&count)
+		if err != nil {
+			t.Fatal(err)
+		} else if count != rows {
+			t.Fatalf("expected %d rows in %s, got %d", rows, table, count)
+		}
+	}
+	assertCount("accounts", 2)      // 2 accounts
+	assertCount("account_slabs", 4) // 2 slabs for each account
+	assertCount("slabs", 2)         // 2 slabs
+	assertCount("sectors", 4)       // 2 sectors per slab
 }
 
 // BenchmarkSlabs benchmarks Slabs and PinSlabs in various batch sizes. The
@@ -145,13 +172,13 @@ func TestPinSlabs(t *testing.T) {
 // upload/download throughput.
 //
 // Hardware |     Benchmark   |  ms/op  | Throughput   |
-// M2 Pro   | PinSlabs-40MiB  |  1.1ms | 36115.26 MB/s |
-// M2 Pro   | PinSlabs-400MiB |  7.8ms |  5363.69 MB/s |
-// M2 Pro   | PinSlabs-4GiB   | 79.8ms |   528.11 MB/s |
+// M2 Pro   | PinSlabs-40MiB  |  1.4ms | 28472.56 MB/s |
+// M2 Pro   | PinSlabs-400MiB |  8.9ms |  4698.53 MB/s |
+// M2 Pro   | PinSlabs-4GiB   | 89.6ms |   467.67 MB/s |
 //
-// M2 Pro   | Slabs-40MiB  |  0.6ms |    61408.13 MB/s |
-// M2 Pro   | Slabs-400MiB |  3.2ms |    13007.09 MB/s |
-// M2 Pro   | Slabs-4GiB   | 29.4ms |     1426.31 MB/s |
+// M2 Pro   | Slabs-40MiB  |  0.6ms |    63029.04 MB/s |
+// M2 Pro   | Slabs-400MiB |  3.1ms |    13181.86 MB/s |
+// M2 Pro   | Slabs-4GiB   | 29.8ms |     1404.40 MB/s |
 func BenchmarkSlabs(b *testing.B) {
 	store := initPostgres(b, zaptest.NewLogger(b).Named("postgres"))
 	account := proto.Account{1}
