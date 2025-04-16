@@ -181,7 +181,7 @@ CREATE TABLE slabs (
     digest BYTEA UNIQUE NOT NULL CHECK(LENGTH(digest) = 32), -- unique identifier for the slab derived from sector roots
 
     encryption_key BYTEA NOT NULL,
-    last_repair_attempt TIMESTAMP WITH TIME ZONE,
+    last_repair_attempt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     min_shards SMALLINT NOT NULL CHECK(min_shards > 0)
 );
 CREATE INDEX slabs_digest_idx ON slabs(digest);
@@ -197,8 +197,9 @@ CREATE TABLE sectors (
     sector_root BYTEA NOT NULL,
 
     -- uploading
+    -- NOTE: contract_id should always be NULL when host_id is NULL
     host_id INTEGER REFERENCES hosts(id), -- host that stores sector
-    contract_id INTEGER REFERENCES contracts(id) DEFAULT NULL, -- null if not pinned
+    contract_id INTEGER REFERENCES contracts(id) DEFAULT NULL CHECK((host_id IS NULL AND contract_id IS NULL) OR host_id IS NOT NULL), -- null if not pinned
     uploaded_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(), -- allow sorting by upload time
 
     -- slab

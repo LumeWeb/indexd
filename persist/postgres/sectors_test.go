@@ -167,6 +167,62 @@ func TestPinSlabs(t *testing.T) {
 	assertCount("sectors", 4)       // 2 sectors per slab
 }
 
+func TestUnhealthySlabs(t *testing.T) {
+	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
+
+	// add account
+	account := proto.Account{1}
+	if err := store.AddAccount(context.Background(), types.PublicKey(account)); err != nil {
+		t.Fatal("failed to add account:", err)
+	}
+
+	// add host
+	hk := types.PublicKey{1}
+	ha := chain.NetAddress{Protocol: quic.Protocol, Address: "[::]:4848"}
+	if err := store.UpdateChainState(context.Background(), func(tx subscriber.UpdateTx) error {
+		return tx.AddHostAnnouncement(hk, chain.V2HostAnnouncement{ha}, time.Now())
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// pin a slab to add a few sectors to the database
+	root1 := frand.Entropy256()
+	root2 := frand.Entropy256()
+	root3 := frand.Entropy256()
+	_, err := store.PinSlabs(context.Background(), account, []slabs.SlabPinParams{
+		{
+			EncryptionKey: [32]byte{},
+			MinShards:     10,
+			Sectors: []slabs.SectorPinParams{
+				{
+					Root:    root1,
+					HostKey: hk,
+				},
+				{
+					Root:    root2,
+					HostKey: hk,
+				},
+				{
+					Root:    root3,
+					HostKey: hk,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// after pinning, no slab should be unhealthy
+	_, err = store.UnhealthySlab(context.Background(), time.Now().Add(time.Hour))
+	if !errors.Is(err, slabs.ErrSlabNotFound) {
+		t.Fatal(err)
+	}
+
+	// TODO: make slabs unhealthy and assert
+
+}
+
 // BenchmarkSlabs benchmarks Slabs and PinSlabs in various batch sizes. The
 // results are expressed in time per operation as well as equivalent
 // upload/download throughput.
