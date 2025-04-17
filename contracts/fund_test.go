@@ -2,6 +2,7 @@ package contracts
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"sync"
 	"testing"
@@ -32,8 +33,10 @@ func (am *accountsManagerMock) FundAccounts(ctx context.Context, host hosts.Host
 }
 
 func (s *storeMock) ContractsForFunding(_ context.Context, hk types.PublicKey, limit int) ([]types.FileContractID, error) {
+	cloned := slices.Clone(s.contracts)
+
 	var contracts []Contract
-	for _, c := range s.contracts {
+	for _, c := range cloned {
 		if c.HostKey == hk {
 			contracts = append(contracts, c)
 		}
