@@ -485,9 +485,9 @@ func BenchmarkSlabs(b *testing.B) {
 // BenchmarkUnpinnedSectors benchmarks UnpinnedSectors in various batch sizes.
 //
 // CPU    | BatchSize |	 Count  |    Time/op    |    Throughput
-// M2 Pro |     100   |   1407  |  0.847440 ms  |   494938.30 MB/s
-// M2 Pro |    1000   |    657  |  1.805719 ms  |  2322788.39 MB/s
-// M2 Pro |   10000   |    123  |  8.913824 ms  |  4705392.65 MB/s
+// M2 Pro |     100   |   1357  |  0.847729 ms  |   494769.40 MB/s
+// M2 Pro |    1000   |    434  |  3.023359 ms  |  1387299.30 MB/s
+// M2 Pro |   10000   |     84  | 21.598813 ms  |  1941914.13 MB/s
 func BenchmarkUnpinnedSectors(b *testing.B) {
 	store := initPostgres(b, zap.NewNop())
 
@@ -554,7 +554,11 @@ func BenchmarkUnpinnedSectors(b *testing.B) {
 	// helper to unpin all sectors
 	unpinSectors := func() {
 		b.Helper()
-		_, err := store.pool.Exec(context.Background(), "UPDATE sectors set contract_id = NULL WHERE contract_id IS NOT NULL")
+		_, err := store.pool.Exec(context.Background(), `
+			UPDATE sectors
+			SET contract_id = NULL,
+			uploaded_at = NOW() - interval '1 week' * random()
+			WHERE contract_id IS NOT NULL`)
 		if err != nil {
 			b.Fatal(err)
 		}

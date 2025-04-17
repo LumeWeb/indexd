@@ -156,7 +156,7 @@ func (s *Store) UnpinnedSectors(ctx context.Context, hostKey types.PublicKey, li
 			LIMIT $2
 		`, sqlPublicKey(hostKey), limit)
 		if err != nil {
-			return fmt.Errorf("failed to query host sectors: %w", err)
+			return fmt.Errorf("failed to query sectors: %w", err)
 		}
 		defer rows.Close()
 		for rows.Next() {
