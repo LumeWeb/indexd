@@ -168,6 +168,9 @@ CREATE TABLE contracts (
 );
 CREATE INDEX contracts_state_formation_idx ON contracts(state, formation); -- for rejecting expired contracts
 
+-- foreign key constraint index
+CREATE INDEX contracts_host_id_idx ON contracts(host_id);
+
 CREATE TABLE contract_elements (
     id SERIAL PRIMARY KEY,
     contract_id INTEGER UNIQUE NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,

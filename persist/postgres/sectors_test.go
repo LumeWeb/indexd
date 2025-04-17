@@ -772,3 +772,108 @@ func BenchmarkSectorsForIntegrityCheck(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkPinSectors benchmarks PinSectors in various batch sizes.
+//
+// CPU    | BatchSize |	 Count  |    Time/op    |    Throughput
+// M2 Pro |     10   |   1578  |  0.737270 ms  |   56889.68 MB/s
+// M2 Pro |    100   |    570  |  1.968935 ms  |  213023.95 MB/s
+// M2 Pro |   1000   |     66  | 17.543686 ms  |  239077.69 MB/s
+func BenchmarkPinSectors(b *testing.B) {
+	store := initPostgres(b, zap.NewNop())
+
+	// create account, host and contract
+	account := proto.Account{1}
+	if err := store.AddAccount(context.Background(), types.PublicKey(account)); err != nil {
+		b.Fatal("failed to add account:", err)
+	}
+	hk := types.PublicKey{1}
+	ha := chain.NetAddress{Protocol: quic.Protocol, Address: "[::]:4848"}
+	if err := store.UpdateChainState(context.Background(), func(tx subscriber.UpdateTx) error {
+		return tx.AddHostAnnouncement(hk, chain.V2HostAnnouncement{ha}, time.Now())
+	}); err != nil {
+		b.Fatal(err)
+	}
+	if err := store.AddFormedContract(context.Background(), types.FileContractID(hk), hk, 100, 200, types.Siacoins(1), types.Siacoins(1), types.Siacoins(1), types.Siacoins(1)); err != nil {
+		b.Fatal(err)
+	}
+
+	// prepare base db
+	const (
+		dbBaseSize = 1 << 40 // 1TiB of sectors
+		nSectors   = dbBaseSize / proto.SectorSize
+	)
+
+	// insert sectors in batches
+	for remainingSectors := nSectors; remainingSectors > 0; {
+		batchSize := min(remainingSectors, 10000)
+		remainingSectors -= batchSize
+		var sectors []slabs.SectorPinParams
+		for range batchSize {
+			sectors = append(sectors, slabs.SectorPinParams{
+				Root:    frand.Entropy256(),
+				HostKey: hk,
+			})
+		}
+		slabIDs, err := store.PinSlabs(context.Background(), account, time.Time{}, []slabs.SlabPinParams{{
+			MinShards:     1,
+			EncryptionKey: frand.Entropy256(),
+			Sectors:       sectors,
+		}})
+		if err != nil {
+			b.Fatal(err)
+		} else if len(slabIDs) != 1 {
+			b.Fatal("expected 1 slab id")
+		}
+	}
+
+	// helper to unpin all sectors
+	unpinSectors := func() {
+		b.Helper()
+		_, err := store.pool.Exec(context.Background(), `
+			UPDATE sectors
+			SET contract_id = NULL,
+			uploaded_at = NOW() - interval '1 week' * random()
+			WHERE contract_id IS NOT NULL`)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	// run benchmark for various batch sizes
+	for _, batchSize := range []int{10, 100, 1000} {
+		b.Run(fmt.Sprint(batchSize), func(b *testing.B) {
+			unpinSectors()
+			unpinnedSectors := nSectors
+			b.SetBytes(int64(batchSize) * proto.SectorSize)
+			b.ResetTimer()
+
+			for b.Loop() {
+				b.StopTimer()
+
+				// make sure there are enough unpinned sectors left
+				if unpinnedSectors < batchSize {
+					// unpin all sectors to avoid running out
+					unpinSectors()
+					unpinnedSectors = nSectors
+				}
+
+				// fetch sectors to pin
+				unpinned, err := store.UnpinnedSectors(context.Background(), hk, batchSize)
+				if err != nil {
+					b.Fatal(err)
+				} else if len(unpinned) != batchSize {
+					b.Fatalf("expected %d unpinned sector, got %d (%d unpinned)", batchSize, len(unpinned), unpinnedSectors)
+				}
+				unpinnedSectors -= batchSize
+
+				// pin fetched sectors to fetch different ones next
+				b.StartTimer()
+				err = store.PinSectors(context.Background(), types.FileContractID(hk), unpinned)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
