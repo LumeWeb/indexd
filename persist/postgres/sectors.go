@@ -54,8 +54,10 @@ func (s *Store) PinSlab(ctx context.Context, account proto.Account, nextIntegrit
 	err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
 		var accountID int64
 		err := tx.QueryRow(ctx, "SELECT id FROM accounts WHERE public_key = $1", sqlPublicKey(account)).Scan(&accountID)
-		if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
 			return accounts.ErrNotFound
+		} else if err != nil {
+			return err
 		}
 
 		digest, err = slab.Digest()
@@ -144,7 +146,7 @@ func (s *Store) Slabs(ctx context.Context, accountID proto.Account, slabIDs []sl
 
 		sectorsBatch := &pgx.Batch{}
 		for _, slabID := range dbIDs {
-			sectorsBatch.Queue(`SELECT s.sector_root, h.public_key, c.contract_id 
+			sectorsBatch.Queue(`SELECT s.sector_root, h.public_key, c.contract_id
 FROM sectors s
 LEFT JOIN hosts h ON h.id = s.host_id
 LEFT JOIN contracts c ON c.id = s.contract_id
