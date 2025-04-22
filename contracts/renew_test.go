@@ -50,14 +50,12 @@ func TestPerformContractRenewals(t *testing.T) {
 	amMock := &accountsManagerMock{}
 	cmMock := newChainManagerMock()
 	syncerMock := &syncerMock{}
+	badSettings := proto.HostSettings{}
 
 	const (
-		blockHeight = 50
-		proofHeight = 100
+		period      = 50
+		renewWindow = 10
 	)
-	cmMock.state.Index.Height = 50
-
-	badSettings := proto.HostSettings{}
 
 	// helper to create a good host
 	goodHost := func(i int) hosts.Host {
@@ -73,7 +71,7 @@ func TestPerformContractRenewals(t *testing.T) {
 
 	formContract := func(contractID types.FileContractID, hostKey types.PublicKey, good bool) {
 		t.Helper()
-		err := store.AddFormedContract(context.Background(), contractID, hostKey, proofHeight, 9999, types.Siacoins(1), types.Siacoins(2), types.Siacoins(3), types.Siacoins(4))
+		err := store.AddFormedContract(context.Background(), contractID, hostKey, 111, 9999, types.Siacoins(1), types.Siacoins(2), types.Siacoins(3), types.Siacoins(4))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -109,7 +107,7 @@ func TestPerformContractRenewals(t *testing.T) {
 	contractor := newContractorMock()
 	renterKey := types.PublicKey{1, 2, 3, 4, 5}
 	wallet := &walletMock{}
-	contracts := newContractManager(renterKey, amMock, cmMock, contractor, scanner, store, syncerMock, wallet)
+	contracts := newContractManager(renterKey, amMock, cmMock, contractor, scanner, store, syncerMock, wallet, WithNumThreads(1))
 
 	assertRenewal := func(h hosts.Host, renewedFrom types.FileContractID, proofHeight uint64, call renewContractCall) {
 		t.Helper()
@@ -127,18 +125,21 @@ func TestPerformContractRenewals(t *testing.T) {
 	}
 
 	// perform renewals when no contract is ready for it
-	if err := contracts.performContractRenewals(context.Background(), 49, zap.NewNop()); err != nil {
+	if err := contracts.performContractRenewals(context.Background(), period, renewWindow, zap.NewNop()); err != nil {
 		t.Fatal(err)
 	} else if len(contractor.renewCalls) != 0 {
 		t.Fatalf("expected no renewals, got %v", contractor.renewCalls)
 	}
 
-	if err := contracts.performContractRenewals(context.Background(), 50, zap.NewNop()); err != nil {
+	cmMock.state.Index.Height++
+	blockHeight := cmMock.state.Index.Height
+
+	if err := contracts.performContractRenewals(context.Background(), period, renewWindow, zap.NewNop()); err != nil {
 		t.Fatal(err)
 	} else if len(contractor.renewCalls) != 1 {
 		t.Fatalf("expected one renewal, got %v", len(contractor.renewCalls))
 	}
-	assertRenewal(good, types.FileContractID{1}, blockHeight+50, contractor.renewCalls[0])
+	assertRenewal(good, types.FileContractID{1}, blockHeight+period+renewWindow, contractor.renewCalls[0])
 
 	// assert renewal made it into the store
 	if len(store.contracts) != 4 {
@@ -157,14 +158,12 @@ func TestPerformContractRenewals(t *testing.T) {
 		default:
 			if c.RenewedFrom != (types.FileContractID{1}) {
 				t.Fatal("renewed contract should be renewed from first contract")
-			} else if c.ProofHeight != blockHeight+50 {
-				t.Fatal("renewed contract should have proof height 100")
+			} else if c.ProofHeight != blockHeight+period+renewWindow {
+				t.Fatalf("renewed contract should have proof height %d, got %d", blockHeight+period+renewWindow, c.ProofHeight)
 			} else if c.ExpirationHeight != c.ProofHeight+144 {
-				t.Fatalf("renewed contract should have expiration height %v, got %v", c.ProofHeight+144, c.ExpirationHeight)
+				t.Fatalf("renewed contract should have expiration height %d, got %d", c.ProofHeight+144, c.ExpirationHeight)
 			} else if !c.ContractPrice.Equals(types.Siacoins(1)) {
 				t.Fatalf("renewed contract should have contract price %v, got %v", types.Siacoins(1), c.ContractPrice)
-			} else if c.ProofHeight != blockHeight+50 {
-				t.Fatalf("renewed contract should have proof height %v, got %v", blockHeight+50, c.ProofHeight)
 			}
 		}
 	}
@@ -205,7 +204,7 @@ func TestSyncRevisionState(t *testing.T) {
 		}
 
 		// sync the state
-		if err := contracts.syncRevisionState(context.Background()); err != nil {
+		if err := contracts.performContractRevisionSyncs(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 
