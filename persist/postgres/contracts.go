@@ -67,9 +67,11 @@ INSERT INTO contracts(contract_id, host_id, formation, proof_height, expiration_
 			return fmt.Errorf("expected 1 row to be affected, got %d", res.RowsAffected())
 		}
 
-		_, err = tx.Exec(ctx, `UPDATE contract_sectors_map SET contract_id = $1 WHERE contract_id = $2`, sqlHash256(params.RenewedTo), sqlHash256(params.RenewedFrom))
+		res, err = tx.Exec(ctx, `UPDATE contract_sectors_map SET contract_id = $1 WHERE contract_id = $2`, sqlHash256(params.RenewedTo), sqlHash256(params.RenewedFrom))
 		if err != nil {
 			return fmt.Errorf("failed to update contract sectors map: %w", err)
+		} else if res.RowsAffected() != 1 {
+			return fmt.Errorf("expected 1 row to be affected, got %d", res.RowsAffected())
 		}
 		return nil
 	})
