@@ -167,6 +167,7 @@ CREATE TABLE contracts (
   sector_roots_spending DECIMAL(50, 0) NOT NULL DEFAULT 0
 );
 CREATE INDEX contracts_state_formation_idx ON contracts(state, formation); -- for rejecting expired contracts
+CREATE INDEX contracts_host_id_remaining_allowance_idx ON contracts (host_id, remaining_allowance DESC) WHERE good = true AND remaining_allowance > 0 AND state <= 1; -- for fetching contracts for funding
 
 CREATE TABLE contract_elements (
     id SERIAL PRIMARY KEY,
@@ -215,6 +216,9 @@ CREATE INDEX sectors_contract_id_uploaded_at_idx ON sectors(contract_id, uploade
 
 -- speed up fetching sectors for slab ordered by their position within the slab
 CREATE UNIQUE INDEX sectors_slab_id_slab_idx ON sectors(slab_id, slab_index ASC);
+
+-- speed up lookup of unpinned sectors
+CREATE INDEX sectors_host_id_uploaded_at_idx ON sectors(host_id, uploaded_at ASC) WHERE contract_id IS NULL;
 
 -- foreign key constraint keys
 CREATE INDEX sectors_host_id_idx ON sectors(host_id);
