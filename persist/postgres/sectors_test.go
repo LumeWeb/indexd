@@ -14,6 +14,7 @@ import (
 	"go.sia.tech/coreutils/chain"
 	"go.sia.tech/coreutils/rhp/v4/quic"
 	"go.sia.tech/indexd/accounts"
+	"go.sia.tech/indexd/contracts"
 	"go.sia.tech/indexd/slabs"
 	"go.sia.tech/indexd/subscriber"
 	"go.uber.org/zap"
@@ -371,6 +372,12 @@ func TestPinSectors(t *testing.T) {
 	assertPinned(2, &two)
 	assertPinned(3, &one)
 	assertPinned(4, &two)
+
+	// pin to contract that doesn't exist
+	err = store.PinSectors(context.Background(), types.FileContractID{9}, []types.Hash256{{2}})
+	if !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatal("expected ErrNotFound, got", err)
+	}
 }
 
 func TestUnpinnedSectors(t *testing.T) {

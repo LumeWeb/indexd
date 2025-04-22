@@ -11,6 +11,7 @@ import (
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/accounts"
+	"go.sia.tech/indexd/contracts"
 	"go.sia.tech/indexd/slabs"
 )
 
@@ -150,17 +151,30 @@ func (s *Store) PinSectors(ctx context.Context, contractID types.FileContractID,
 	}
 
 	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
-		_, err := tx.Exec(ctx, `
+		resp, err := tx.Exec(ctx, `
 			UPDATE sectors
-			SET (host_id, contract_id) = (
-				SELECT hosts.id, contracts.id
+			SET (host_id, contract_id) = (result.host_id, result.contract_id)
+			FROM (
+				SELECT hosts.id AS host_id, contracts.id AS contract_id
 				FROM contracts
 				INNER JOIN hosts ON contracts.host_id = hosts.id
 				WHERE contracts.contract_id = $1
-			)
-			WHERE sector_root = ANY($2)
+			) AS result
+			WHERE sector_root = ANY($2) AND result.contract_id IS NOT NULL
 		`, sqlHash256(contractID), sqlRoots)
-		return err
+		if err != nil {
+			return err
+		} else if resp.RowsAffected() == 0 {
+			// if no sectors were updated, check if the contract exists
+			var exists bool
+			if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM contracts WHERE contracts.contract_id = $1)", sqlHash256(contractID)).
+				Scan(&exists); err != nil {
+				return fmt.Errorf("failed to check if contract exists: %w", err)
+			} else if !exists {
+				return contracts.ErrNotFound
+			}
+		}
+		return nil
 	})
 }
 
