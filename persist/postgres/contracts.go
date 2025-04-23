@@ -44,8 +44,8 @@ func (s *Store) AddFormedContract(ctx context.Context, contractID types.FileCont
 func (s *Store) AddRenewedContract(ctx context.Context, params contracts.AddRenewedContractParams) error {
 	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
 		_, err := tx.Exec(ctx, `
-INSERT INTO contracts(contract_id, host_id, formation, proof_height, expiration_height, renewed_from, capacity, size, contract_price, initial_allowance, remaining_allowance, miner_fee, used_collateral, total_collateral)
-(SELECT $1, host_id, NOW(), $2, $3, contract_id, CASE WHEN $2 = proof_height THEN capacity ELSE size END, size, $4, $5, $5, $6, $7, $8 FROM contracts WHERE contract_id = $9)`,
+INSERT INTO contracts(host_id, contract_id, proof_height, expiration_height, renewed_from, capacity, size, contract_price, initial_allowance, remaining_allowance, miner_fee, used_collateral, total_collateral)
+(SELECT host_id, $1, $2, $3, contract_id, CASE WHEN $2 = proof_height THEN capacity ELSE size END, size, $4, $5, $5, $6, $7, $8 FROM contracts WHERE contract_id = $9)`,
 			sqlHash256(params.RenewedTo),
 			params.ProofHeight,
 			params.ExpirationHeight,
