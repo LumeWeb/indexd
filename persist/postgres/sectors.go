@@ -14,6 +14,34 @@ import (
 	"go.sia.tech/indexd/slabs"
 )
 
+// RecordIntegrityCheck records the result of an integrity check for the given
+// sectors stored on the given host.
+func (s *Store) RecordIntegrityCheck(ctx context.Context, success bool, nextCheck time.Time, hostKey types.PublicKey, roots []types.Hash256) error {
+	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
+		sqlRoots := make([]sqlHash256, len(roots))
+		for i, root := range roots {
+			sqlRoots[i] = sqlHash256(root)
+		}
+		var err error
+		if success {
+			_, err = tx.Exec(ctx, `
+				UPDATE sectors
+				SET next_integrity_check = $1, consecutive_failed_checks = 0
+				WHERE host_id = (SELECT id FROM hosts WHERE public_key = $2) AND
+					sector_root = ANY($3)
+			`, nextCheck, sqlPublicKey(hostKey), roots)
+		} else {
+			_, err = tx.Exec(ctx, `
+				UPDATE sectors
+				SET next_integrity_check = $1, consecutive_failed_checks = consecutive_failed_checks + 1
+				WHERE host_id = (SELECT id FROM hosts WHERE public_key = $2) AND
+					sector_root = ANY($3)
+			`)
+		}
+		return err
+	})
+}
+
 // SectorsForIntegrityCheck returns up to `limit` sectors that are due for an
 // integrity check.
 func (s *Store) SectorsForIntegrityCheck(ctx context.Context, hostKey types.PublicKey, limit int) ([]types.Hash256, error) {
@@ -108,7 +136,7 @@ func (s *Store) Slabs(ctx context.Context, accountID proto.Account, slabIDs []sl
 
 		sectorsBatch := &pgx.Batch{}
 		for _, slabID := range dbIDs {
-			sectorsBatch.Queue(`SELECT s.sector_root, h.public_key, c.contract_id 
+			sectorsBatch.Queue(`SELECT s.sector_root, h.public_key, c.contract_id
 FROM sectors s
 LEFT JOIN hosts h ON h.id = s.host_id
 LEFT JOIN contract_sectors_map csm ON s.contract_sectors_map_id = csm.id
