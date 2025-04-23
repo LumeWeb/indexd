@@ -69,9 +69,10 @@ func TestPerformContractRenewals(t *testing.T) {
 	store := &storeMock{}
 	scanner := store.Scanner()
 
+	blockHeight := cmMock.state.Index.Height
 	formContract := func(contractID types.FileContractID, hostKey types.PublicKey, good bool) {
 		t.Helper()
-		err := store.AddFormedContract(context.Background(), contractID, hostKey, 111, 9999, types.Siacoins(1), types.Siacoins(2), types.Siacoins(3), types.Siacoins(4))
+		err := store.AddFormedContract(context.Background(), contractID, hostKey, blockHeight+renewWindow+1, 9999, types.Siacoins(1), types.Siacoins(2), types.Siacoins(3), types.Siacoins(4))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -132,7 +133,7 @@ func TestPerformContractRenewals(t *testing.T) {
 	}
 
 	cmMock.state.Index.Height++
-	blockHeight := cmMock.state.Index.Height
+	blockHeight = cmMock.state.Index.Height
 
 	if err := contracts.performContractRenewals(context.Background(), period, renewWindow, zap.NewNop()); err != nil {
 		t.Fatal(err)
@@ -166,6 +167,13 @@ func TestPerformContractRenewals(t *testing.T) {
 				t.Fatalf("renewed contract should have contract price %v, got %v", types.Siacoins(1), c.ContractPrice)
 			}
 		}
+	}
+
+	// assert consecutive calls don't keep renewing the same contract
+	if err := contracts.performContractRenewals(context.Background(), period, renewWindow, zap.NewNop()); err != nil {
+		t.Fatal(err)
+	} else if len(contractor.renewCalls) > 1 {
+		t.Fatalf("expected no new renewals, got %v", len(contractor.renewCalls))
 	}
 }
 

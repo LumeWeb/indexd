@@ -274,7 +274,7 @@ CREATE TABLE sectors (
 
     -- uploading
     host_id INTEGER REFERENCES hosts(id), -- host that stores sector
-    contract_sectors_map_id INTEGER REFERENCES contract_sectors_map(id) DEFAULT NULL, -- null if not pinned
+    contract_sectors_map_id INTEGER REFERENCES contract_sectors_map(id) DEFAULT NULL CHECK((host_id IS NULL AND contract_sectors_map_id IS NULL) OR host_id IS NOT NULL), -- null if not pinned
     uploaded_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(), -- allow sorting by upload time
 
     -- slab
@@ -296,7 +296,8 @@ CREATE INDEX sectors_host_id_uploaded_at_idx ON sectors(host_id, uploaded_at ASC
 
 -- foreign key constraint keys
 CREATE INDEX sectors_host_id_idx ON sectors(host_id);
-CREATE INDEX sectors_contract_id_idx ON sectors(contract_id);
+-- CREATE INDEX sectors_contract_sectors_map_id_idx ON sectors(contract_sectors_map_id); -- covered by sectors_contract_sectors_map_id_uploaded_at_idx
+CREATE INDEX sectors_slab_id_idx ON sectors(slab_id);
 
 -- speed up integrity check query
 CREATE INDEX sectors_next_integrity_check_idx ON sectors(next_integrity_check ASC);
