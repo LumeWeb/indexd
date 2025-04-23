@@ -99,6 +99,36 @@ func TestContracts(t *testing.T) {
 	}
 }
 
+func TestContractElement(t *testing.T) {
+	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
+
+	// add a host
+	hk := types.PublicKey{1, 1, 1}
+	err := store.UpdateChainState(context.Background(), func(tx subscriber.UpdateTx) error {
+		return tx.AddHostAnnouncement(hk, chain.V2HostAnnouncement{}, time.Now())
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// assert contract element is not found
+	_, err = store.ContractElement(context.Background(), types.FileContractID(hk))
+	if !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatal(err)
+	}
+
+	// add a contract
+	if err := store.AddFormedContract(context.Background(), types.FileContractID(hk), hk, 100, 200, types.Siacoins(1), types.Siacoins(1), types.Siacoins(1), types.Siacoins(1)); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert contract element is found
+	_, err = store.ContractElement(context.Background(), types.FileContractID(hk))
+	if err == nil {
+		t.Fatal(err)
+	}
+}
+
 func TestContractElementsForBroadcast(t *testing.T) {
 	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
 
@@ -828,6 +858,45 @@ func TestMarkUnrenewableContractsBad(t *testing.T) {
 	assertContractGood(false)
 	store.MarkUnrenewableContractsBad(context.Background(), proofHeight+1)
 	assertContractGood(false)
+}
+
+func TestMarkSuccessfulBroadcast(t *testing.T) {
+	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
+
+	// add a host
+	hk := types.PublicKey{1, 1, 1}
+	if err := store.UpdateChainState(context.Background(), func(tx subscriber.UpdateTx) error {
+		return tx.AddHostAnnouncement(hk, chain.V2HostAnnouncement{}, time.Now())
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// add a contract
+	if err := store.AddFormedContract(context.Background(), types.FileContractID(hk), hk, 100, 200, types.Siacoins(1), types.Siacoins(1), types.Siacoins(1), types.Siacoins(1)); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert ts is zero
+	contract, err := store.Contract(context.Background(), types.FileContractID(hk))
+	if err != nil {
+		t.Fatal(err)
+	} else if !contract.LastSuccessFulBroadcast.IsZero() {
+		t.Fatal("unexpected", contract.LastSuccessFulBroadcast)
+	}
+
+	// mark a successful broadcast
+	err = store.MarkSuccessfulBroadcast(context.Background(), types.FileContractID(hk))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// assert ts is not zero
+	contract, err = store.Contract(context.Background(), types.FileContractID(hk))
+	if err != nil {
+		t.Fatal(err)
+	} else if contract.LastSuccessFulBroadcast.IsZero() {
+		t.Fatal("unexpected", contract.LastSuccessFulBroadcast)
+	}
 }
 
 func TestSyncContract(t *testing.T) {

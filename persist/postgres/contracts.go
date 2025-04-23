@@ -176,7 +176,9 @@ func (s *Store) ContractElement(ctx context.Context, contractID types.FileContra
 	if err := s.transaction(ctx, func(ctx context.Context, tx *txn) (err error) {
 		fce, err = scanContractElement(tx.QueryRow(ctx, `SELECT contract_id, contract, leaf_index, merkle_proof FROM contract_elements fces WHERE contract_id = $1`, sqlHash256(contractID)))
 		return
-	}); err != nil {
+	}); errors.Is(err, sql.ErrNoRows) {
+		return types.V2FileContractElement{}, fmt.Errorf("contract %q: %w", contractID, contracts.ErrNotFound)
+	} else if err != nil {
 		return types.V2FileContractElement{}, err
 	}
 	return fce, nil
@@ -341,6 +343,7 @@ func (tx *updateTx) UpdateContractLastChainUpdate(contractID types.FileContractI
 }
 
 func scanContract(row scanner) (contracts.Contract, error) {
+	var lastUpdateOnChain, lastSuccessfulBroadcast sql.NullTime
 	var c contracts.Contract
 	err := row.Scan((*sqlHash256)(&c.ID),
 		&c.Formation,
@@ -363,9 +366,16 @@ func scanContract(row scanner) (contracts.Contract, error) {
 		(*sqlCurrency)(&c.Spending.FreeSector),
 		(*sqlCurrency)(&c.Spending.FundAccount),
 		(*sqlCurrency)(&c.Spending.SectorRoots),
-		&c.LastUpdateOnChain,
-		&c.LastSuccessFulBroadcast,
+		&lastUpdateOnChain,
+		&lastSuccessfulBroadcast,
 	)
+	if lastUpdateOnChain.Valid {
+		c.LastUpdateOnChain = lastUpdateOnChain.Time
+	}
+	if lastSuccessfulBroadcast.Valid {
+		c.LastSuccessFulBroadcast = lastSuccessfulBroadcast.Time
+	}
+
 	return c, err
 }
 
