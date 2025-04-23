@@ -71,7 +71,7 @@ INSERT INTO contracts(contract_id, host_id, formation, proof_height, expiration_
 		if err != nil {
 			return fmt.Errorf("failed to update contract sectors map: %w", err)
 		} else if res.RowsAffected() != 1 {
-			return fmt.Errorf("expected 1 row to be affected, got %d", res.RowsAffected())
+			return fmt.Errorf("failed to update contract sectors map, no entry found for contract %v", sqlHash256(params.RenewedFrom))
 		}
 		return nil
 	})
