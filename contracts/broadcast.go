@@ -39,7 +39,7 @@ func (cm *ContractManager) performBroadcastContractRevisions(ctx context.Context
 					return
 				}
 
-				err = cm.store.MarkSuccessfulBroadcast(ctx, contract.ID)
+				err = cm.store.MarkBroadcasted(ctx, contract.ID)
 				if err != nil {
 					broadcastLog.Error("failed to mark contract as broadcasted", zap.Error(err))
 				}

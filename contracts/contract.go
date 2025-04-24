@@ -128,8 +128,8 @@ type (
 		// ProofHeight. This field is set by the contract maintenance code.
 		Good bool `json:"good"`
 
-		LastUpdateOnChain       time.Time `json:"lastUpdateOnChain"`
-		LastSuccessFulBroadcast time.Time `json:"lastSuccessfulBroadcast"`
+		LastBroadcast   time.Time `json:"lastBroadcast"`
+		LastChainUpdate time.Time `json:"lastChainUpdate"`
 	}
 
 	// ContractSettings contains various settings used by the manager for
@@ -154,8 +154,8 @@ func (c Contract) GoodForUpload(prices proto.HostPrices, maxCollateral types.Cur
 // NeedsBroadcast indicates that a contract should be broadcasted.
 func (c Contract) NeedsBroadcast(interval time.Duration) bool {
 	renewed := c.RenewedTo != (types.FileContractID{})
-	seenRecently := time.Since(c.LastUpdateOnChain) < interval
-	broadcastedRecently := time.Since(c.LastSuccessFulBroadcast) < interval
+	seenRecently := time.Since(c.LastChainUpdate) < interval
+	broadcastedRecently := time.Since(c.LastBroadcast) < interval
 	return !renewed && !seenRecently && !broadcastedRecently
 }
 

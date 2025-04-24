@@ -222,10 +222,10 @@ func (s *storeMock) MarkUnrenewableContractsBad(ctx context.Context, minProofHei
 	return nil
 }
 
-func (s *storeMock) MarkSuccessfulBroadcast(ctx context.Context, contractID types.FileContractID) error {
+func (s *storeMock) MarkBroadcasted(ctx context.Context, contractID types.FileContractID) error {
 	for i := range s.contracts {
 		if s.contracts[i].ID == contractID {
-			s.contracts[i].LastSuccessFulBroadcast = time.Now()
+			s.contracts[i].LastBroadcast = time.Now()
 		}
 	}
 	return nil

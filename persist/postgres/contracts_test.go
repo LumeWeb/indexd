@@ -412,8 +412,8 @@ func TestFormRenewContract(t *testing.T) {
 			t.Fatalf("expected formation time to be after start time but not in the future")
 		}
 		contract.Formation = time.Time{}
-		contract.LastSuccessFulBroadcast = time.Time{}
-		contract.LastUpdateOnChain = time.Time{}
+		contract.LastBroadcast = time.Time{}
+		contract.LastChainUpdate = time.Time{}
 		if !reflect.DeepEqual(contract, expected) {
 			t.Fatalf("mismatch: \n%+v\n%+v", contract, expected)
 		}
@@ -860,7 +860,7 @@ func TestMarkUnrenewableContractsBad(t *testing.T) {
 	assertContractGood(false)
 }
 
-func TestMarkSuccessfulBroadcast(t *testing.T) {
+func TestMarkBroadcasted(t *testing.T) {
 	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
 
 	// add a host
@@ -880,12 +880,12 @@ func TestMarkSuccessfulBroadcast(t *testing.T) {
 	contract, err := store.Contract(context.Background(), types.FileContractID(hk))
 	if err != nil {
 		t.Fatal(err)
-	} else if !contract.LastSuccessFulBroadcast.IsZero() {
-		t.Fatal("unexpected", contract.LastSuccessFulBroadcast)
+	} else if !contract.LastBroadcast.IsZero() {
+		t.Fatal("unexpected", contract.LastBroadcast)
 	}
 
 	// mark a successful broadcast
-	err = store.MarkSuccessfulBroadcast(context.Background(), types.FileContractID(hk))
+	err = store.MarkBroadcasted(context.Background(), types.FileContractID(hk))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -894,12 +894,12 @@ func TestMarkSuccessfulBroadcast(t *testing.T) {
 	contract, err = store.Contract(context.Background(), types.FileContractID(hk))
 	if err != nil {
 		t.Fatal(err)
-	} else if contract.LastSuccessFulBroadcast.IsZero() {
-		t.Fatal("unexpected", contract.LastSuccessFulBroadcast)
+	} else if contract.LastBroadcast.IsZero() {
+		t.Fatal("unexpected", contract.LastBroadcast)
 	}
 }
 
-func TestLastUpdateOnChain(t *testing.T) {
+func TestLastChainUpdate(t *testing.T) {
 	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
 
 	// add a host
@@ -919,8 +919,8 @@ func TestLastUpdateOnChain(t *testing.T) {
 	contract, err := store.Contract(context.Background(), types.FileContractID(hk))
 	if err != nil {
 		t.Fatal(err)
-	} else if !contract.LastUpdateOnChain.IsZero() {
-		t.Fatal("unexpected", contract.LastUpdateOnChain)
+	} else if !contract.LastChainUpdate.IsZero() {
+		t.Fatal("unexpected", contract.LastChainUpdate)
 	}
 
 	// update last chain update ts
@@ -934,8 +934,8 @@ func TestLastUpdateOnChain(t *testing.T) {
 	contract, err = store.Contract(context.Background(), types.FileContractID(hk))
 	if err != nil {
 		t.Fatal(err)
-	} else if contract.LastUpdateOnChain.IsZero() {
-		t.Fatal("unexpected", contract.LastUpdateOnChain)
+	} else if contract.LastChainUpdate.IsZero() {
+		t.Fatal("unexpected", contract.LastChainUpdate)
 	}
 }
 

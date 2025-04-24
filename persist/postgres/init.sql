@@ -145,9 +145,9 @@ CREATE TABLE contracts (
   revision_number INTEGER NOT NULL DEFAULT 0 CHECK(revision_number >= 0),
   state SMALLINT NOT NULL DEFAULT 0, -- 0 = 'pending', 1 = 'active', 2 = 'resolved', 3 = 'expired', 4 = 'rejected'
 
-  -- revision rebroadcast columns
-  last_update_on_chain TIMESTAMP WITH TIME ZONE,
-  last_successful_broadcast TIMESTAMP WITH TIME ZONE,
+  -- revision broadcast related columns
+  last_broadcast TIMESTAMP WITH TIME ZONE,
+  last_chain_update TIMESTAMP WITH TIME ZONE,
 
   -- metrics for visualization (not ACID)
   capacity BIGINT NOT NULL DEFAULT 0 CHECK(capacity >= size),

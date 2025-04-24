@@ -66,22 +66,22 @@ func TestBroadcastContractRevisions(t *testing.T) {
 
 	// c4 is not broadcasted because it was seen on chain recently
 	store.contracts = append(store.contracts, Contract{
-		ID:                types.FileContractID{4},
-		HostKey:           hk,
-		Formation:         time.Now(),
-		State:             ContractStateActive,
-		Good:              true,
-		LastUpdateOnChain: time.Now(),
+		ID:              types.FileContractID{4},
+		HostKey:         hk,
+		Formation:       time.Now(),
+		State:           ContractStateActive,
+		Good:            true,
+		LastChainUpdate: time.Now(),
 	})
 
 	// c5 is not broadcasted because it was broadcasted recently
 	store.contracts = append(store.contracts, Contract{
-		ID:                      types.FileContractID{5},
-		HostKey:                 hk,
-		Formation:               time.Now(),
-		State:                   ContractStateActive,
-		Good:                    true,
-		LastSuccessFulBroadcast: time.Now(),
+		ID:            types.FileContractID{5},
+		HostKey:       hk,
+		Formation:     time.Now(),
+		State:         ContractStateActive,
+		Good:          true,
+		LastBroadcast: time.Now(),
 	})
 
 	// c6 is broadcasted
@@ -106,7 +106,7 @@ func TestBroadcastContractRevisions(t *testing.T) {
 		t.Fatal("unexpected revision", syncerMock.broadcasted[0].FileContractRevisions[0].Revision)
 	} else if contract, err := store.Contract(context.Background(), types.FileContractID{6}); err != nil {
 		t.Fatal(err)
-	} else if contract.LastSuccessFulBroadcast.IsZero() {
+	} else if contract.LastBroadcast.IsZero() {
 		t.Fatal("expected last successful broadcast to be set")
 	}
 }

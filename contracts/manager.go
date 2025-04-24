@@ -75,7 +75,7 @@ type (
 		Hosts(ctx context.Context, offset, limit int, queryOpts ...hosts.HostQueryOpt) ([]hosts.Host, error)
 		MaintenanceSettings(ctx context.Context) (MaintenanceSettings, error)
 		BlockHosts(ctx context.Context, hostKeys []types.PublicKey, reason string) error
-		MarkSuccessfulBroadcast(ctx context.Context, contractID types.FileContractID) error
+		MarkBroadcasted(ctx context.Context, contractID types.FileContractID) error
 		MarkUnrenewableContractsBad(ctx context.Context, maxProofHeight uint64) error
 		RejectPendingContracts(ctx context.Context, maxFormation time.Time) error
 		SyncContract(ctx context.Context, contractID types.FileContractID, params ContractSyncParams) error
