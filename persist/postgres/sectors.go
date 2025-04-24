@@ -11,6 +11,7 @@ import (
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/accounts"
+	"go.sia.tech/indexd/contracts"
 	"go.sia.tech/indexd/slabs"
 )
 
@@ -108,7 +109,7 @@ func (s *Store) Slabs(ctx context.Context, accountID proto.Account, slabIDs []sl
 
 		sectorsBatch := &pgx.Batch{}
 		for _, slabID := range dbIDs {
-			sectorsBatch.Queue(`SELECT s.sector_root, h.public_key, c.contract_id 
+			sectorsBatch.Queue(`SELECT s.sector_root, h.public_key, c.contract_id
 FROM sectors s
 LEFT JOIN hosts h ON h.id = s.host_id
 LEFT JOIN contract_sectors_map csm ON s.contract_sectors_map_id = csm.id
@@ -143,6 +144,45 @@ ORDER BY s.slab_index ASC`, slabID).Query(func(rows pgx.Rows) error {
 		return nil
 	})
 	return results, err
+}
+
+// PinSectors pins a batch of sector roots to a given contract. This also
+// updates the host the sector is associated with to the host that we have the
+// contract with. That way, we can avoid a race where the host changes in the
+// meantime and the contract then no longer matches the host.
+func (s *Store) PinSectors(ctx context.Context, contractID types.FileContractID, roots []types.Hash256) error {
+	sqlRoots := make([]sqlHash256, len(roots))
+	for i, root := range roots {
+		sqlRoots[i] = sqlHash256(root)
+	}
+
+	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
+		resp, err := tx.Exec(ctx, `
+			UPDATE sectors
+			SET (host_id, contract_sectors_map_id) = (result.host_id, result.contract_sectors_map_id)
+			FROM (
+				SELECT hosts.id AS host_id, contracts.id AS contract_sectors_map_id
+				FROM contract_sectors_map
+				INNER JOIN contracts ON contracts.contract_id = contract_sectors_map.contract_id
+				INNER JOIN hosts ON contracts.host_id = hosts.id
+				WHERE contract_sectors_map.contract_id = $1
+			) AS result
+			WHERE sector_root = ANY($2) AND result.contract_sectors_map_id IS NOT NULL
+		`, sqlHash256(contractID), sqlRoots)
+		if err != nil {
+			return err
+		} else if resp.RowsAffected() == 0 {
+			// if no sectors were updated, check if the contract exists
+			var exists bool
+			if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM contracts WHERE contracts.contract_id = $1)", sqlHash256(contractID)).
+				Scan(&exists); err != nil {
+				return fmt.Errorf("failed to check if contract exists: %w", err)
+			} else if !exists {
+				return contracts.ErrNotFound
+			}
+		}
+		return nil
+	})
 }
 
 // UnpinnedSectors returns up to 'limit' sectors which have been uploaded to a host but
