@@ -236,13 +236,9 @@ func (s *storeMock) MarkUnrenewableContractsBad(ctx context.Context, minProofHei
 	return nil
 }
 
-func (s *storeMock) MarkBroadcastAttempt(ctx context.Context, contractIDs []types.FileContractID) error {
-	lookup := make(map[types.FileContractID]struct{}, len(contractIDs))
-	for _, id := range contractIDs {
-		lookup[id] = struct{}{}
-	}
+func (s *storeMock) MarkBroadcastAttempt(ctx context.Context, contractID types.FileContractID) error {
 	for i := range s.contracts {
-		if _, ok := lookup[s.contracts[i].ID]; ok {
+		if s.contracts[i].ID == contractID {
 			s.contracts[i].LastBroadcastAttempt = time.Now()
 		}
 	}

@@ -301,14 +301,10 @@ func (tx *updateTx) IsKnownContract(contractID types.FileContractID) (bool, erro
 	return exists, nil
 }
 
-// MarkBroadcastAttempt marks a broadcast attempt for the given contracts.
-func (s *Store) MarkBroadcastAttempt(ctx context.Context, contractIDs []types.FileContractID) error {
-	var args []sqlHash256
-	for _, contractID := range contractIDs {
-		args = append(args, sqlHash256(contractID))
-	}
+// MarkBroadcastAttempt marks a broadcast attempt for the given contract.
+func (s *Store) MarkBroadcastAttempt(ctx context.Context, contractID types.FileContractID) error {
 	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
-		_, err := tx.Exec(ctx, `UPDATE contracts SET last_broadcast_attempt = NOW() WHERE contract_id = ANY($1)`, args)
+		_, err := tx.Exec(ctx, `UPDATE contracts SET last_broadcast_attempt = NOW() WHERE contract_id = $1`, sqlHash256(contractID))
 		return err
 	})
 }

@@ -263,7 +263,7 @@ func TestContractsForBroadcasting(t *testing.T) {
 	}
 
 	// mark broadcast attempt
-	err = store.MarkBroadcastAttempt(context.Background(), res)
+	err = store.MarkBroadcastAttempt(context.Background(), res[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -977,7 +977,7 @@ func TestMarkBroadcastAttempted(t *testing.T) {
 	}
 
 	// mark broadcast attempt
-	err = store.MarkBroadcastAttempt(context.Background(), []types.FileContractID{fcid})
+	err = store.MarkBroadcastAttempt(context.Background(), fcid)
 	if err != nil {
 		t.Fatal(err)
 	}
