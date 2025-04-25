@@ -3,7 +3,6 @@ package contracts
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	proto "go.sia.tech/core/rhp/v4"
@@ -56,14 +55,13 @@ func (cm *ContractManager) performContractRenewals(ctx context.Context, period, 
 	minProofHeight := bh + renewWindow
 	newProofHeight := bh + period + renewWindow
 
-	batchSize := cm.numThreads
+	batchSize := 50
 	for offset := 0; ; offset += batchSize {
 		contracts, err := cm.store.Contracts(ctx, offset, batchSize, WithGood(true), WithRevisable(true))
 		if err != nil {
 			return fmt.Errorf("failed to fetch contracts for renewal: %w", err)
 		}
 
-		var wg sync.WaitGroup
 		for _, contract := range contracts {
 			if contract.ProofHeight > minProofHeight {
 				continue // too early to renew
@@ -71,18 +69,13 @@ func (cm *ContractManager) performContractRenewals(ctx context.Context, period, 
 				continue // contract is bad
 			}
 
-			wg.Add(1)
-			go func(contract Contract) {
-				defer wg.Done()
-				if err := cm.renewContract(ctx, contract, newProofHeight, renewalLog); err != nil {
-					renewalLog.Error("failed to renew contract",
-						zap.Stringer("contractID", contract.ID),
-						zap.Error(err),
-					)
-				}
-			}(contract)
+			if err := cm.renewContract(ctx, contract, newProofHeight, renewalLog); err != nil {
+				renewalLog.Error("failed to renew contract",
+					zap.Stringer("contractID", contract.ID),
+					zap.Error(err),
+				)
+			}
 		}
-		wg.Wait()
 
 		if len(contracts) < batchSize {
 			break

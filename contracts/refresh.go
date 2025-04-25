@@ -3,7 +3,6 @@ package contracts
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	proto "go.sia.tech/core/rhp/v4"
@@ -45,31 +44,25 @@ func (cf *contractor) RefreshContract(ctx context.Context, hk types.PublicKey, a
 func (cm *ContractManager) performContractRefreshes(ctx context.Context, log *zap.Logger) error {
 	refreshLog := log.Named("refresh")
 
-	batchSize := cm.numThreads
+	batchSize := 50
 	for offset := 0; ; offset += batchSize {
 		contracts, err := cm.store.Contracts(ctx, offset, batchSize, WithGood(true), WithRevisable(true))
 		if err != nil {
 			return fmt.Errorf("failed to fetch contracts for refreshing: %w", err)
 		}
 
-		var wg sync.WaitGroup
 		for _, contract := range contracts {
 			if !contract.NeedsRefresh() {
 				continue
 			}
 
-			wg.Add(1)
-			go func(contract Contract) {
-				defer wg.Done()
-				if err := cm.refreshContract(ctx, contract, refreshLog); err != nil {
-					refreshLog.Error("failed to refresh contract",
-						zap.Stringer("contractID", contract.ID),
-						zap.Error(err),
-					)
-				}
-			}(contract)
+			if err := cm.refreshContract(ctx, contract, refreshLog); err != nil {
+				refreshLog.Error("failed to refresh contract",
+					zap.Stringer("contractID", contract.ID),
+					zap.Error(err),
+				)
+			}
 		}
-		wg.Wait()
 
 		if len(contracts) < batchSize {
 			break

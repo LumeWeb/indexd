@@ -154,15 +154,6 @@ func WithLogger(l *zap.Logger) ContractManagerOpt {
 	}
 }
 
-// WithNumThreads allows overriding the number of threads used by the contract
-// manager when performing various actions like refreshing or renewing
-// contracts, or syncing contract revisions.
-func WithNumThreads(n int) ContractManagerOpt {
-	return func(cm *ContractManager) {
-		cm.numThreads = n
-	}
-}
-
 // NewManager creates a new contract manager. It is responsible for forming and
 // renewing contracts as well as any interactions with hosts that require
 // contracts.
@@ -203,7 +194,6 @@ func newContractManager(renterKey types.PublicKey, accountManager AccountManager
 		expiredContractBroadcastBuffer: 144,           // 144 block after expiration
 		expiredContractPruneBuffer:     144,           // 144 blocks after broadcast
 		maintenanceFrequency:           10 * time.Minute,
-		numThreads:                     50,
 	}
 	for _, opt := range opts {
 		opt(cm)
@@ -425,7 +415,7 @@ func (cm *ContractManager) performContractMaintenance(ctx context.Context, log *
 func (cm *ContractManager) performContractRevisionSyncs(ctx context.Context) error {
 	log := cm.log.Named("sync")
 
-	batchSize := cm.numThreads
+	batchSize := 50
 	for offset := 0; ; offset += batchSize {
 		contracts, err := cm.store.Contracts(ctx, offset, batchSize, WithRevisable(true))
 		if err != nil {
