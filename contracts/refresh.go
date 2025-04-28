@@ -85,22 +85,27 @@ func (cm *ContractManager) performContractRefreshes(ctx context.Context, log *za
 			continue
 		}
 
-		var additionalAllowance, additionalCollateral types.Currency
-
-		if contract.OutOfFunds() {
-			additionalAllowance = contract.InitialAllowance.Mul64(11).Div64(10) // add 10%
-		}
-		if contract.OutOfCollateral() {
-			additionalCollateral = contract.TotalCollateral.Mul64(11).Div64(10) // add 10%
-			if contract.TotalCollateral.Add(additionalCollateral).Cmp(host.Settings.MaxCollateral) > 0 {
-				var underflow bool
-				additionalCollateral, underflow = host.Settings.MaxCollateral.SubWithUnderflow(contract.TotalCollateral)
-				if underflow {
-					additionalCollateral = types.ZeroCurrency
-				}
-				contractLog.Debug("capping additional collateral since total would exceed max collateral of host",
-					zap.Stringer("additionalCollateral", additionalCollateral))
+		capCollateral := func(additionalCollateral types.Currency) types.Currency {
+			if contract.TotalCollateral.Add(additionalCollateral).Cmp(host.Settings.MaxCollateral) <= 0 {
+				return additionalCollateral // nothing to do
 			}
+			var underflow bool
+			additionalCollateral, underflow = host.Settings.MaxCollateral.SubWithUnderflow(contract.TotalCollateral)
+			if underflow {
+				additionalCollateral = types.ZeroCurrency
+			}
+			contractLog.Debug("capping additional collateral since total would exceed max collateral of host",
+				zap.Stringer("additionalCollateral", additionalCollateral))
+			return additionalCollateral
+		}
+
+		var additionalAllowance, additionalCollateral types.Currency
+		if contract.OutOfFunds() {
+			additionalAllowance = contract.InitialAllowance.Mul64(11).Div64(10)                                      // add 10%
+			additionalCollateral = capCollateral(proto.MaxHostCollateral(host.Settings.Prices, additionalAllowance)) // max possible
+		} else if contract.OutOfCollateral() {
+			additionalCollateral = capCollateral(contract.TotalCollateral.Mul64(11).Div64(10))         // add 10%
+			additionalAllowance = proto.MinRenterAllowance(host.Settings.Prices, additionalCollateral) // min possible
 		}
 
 		// only refresh if either allowance or collateral increases
