@@ -86,11 +86,10 @@ func (cm *ContractManager) performContractRefreshes(ctx context.Context, log *za
 		}
 
 		var additionalAllowance, additionalCollateral types.Currency
-
 		if contract.OutOfFunds() {
 			additionalAllowance = contract.InitialAllowance.Mul64(11).Div64(10) // add 10%
-		}
-		if contract.OutOfCollateral() {
+			additionalCollateral = types.ZeroCurrency                           // don't need additional collateral
+		} else if contract.OutOfCollateral() {
 			additionalCollateral = contract.TotalCollateral.Mul64(11).Div64(10) // add 10%
 			if contract.TotalCollateral.Add(additionalCollateral).Cmp(host.Settings.MaxCollateral) > 0 {
 				var underflow bool
@@ -101,6 +100,7 @@ func (cm *ContractManager) performContractRefreshes(ctx context.Context, log *za
 				contractLog.Debug("capping additional collateral since total would exceed max collateral of host",
 					zap.Stringer("additionalCollateral", additionalCollateral))
 			}
+			additionalAllowance = proto.MinRenterAllowance(host.Settings.Prices, additionalCollateral) // min possible
 		}
 
 		// only refresh if either allowance or collateral increases
