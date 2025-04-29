@@ -373,7 +373,10 @@ func (a *api) handlePOSTWalletSend(jc jape.Context) {
 	}
 
 	// broadcast the transaction
-	a.syncer.BroadcastV2TransactionSet(basis, txnset)
+	if jc.Check("failed to broadcast transaction", a.syncer.BroadcastV2TransactionSet(basis, txnset)) != nil {
+		a.wallet.ReleaseInputs(nil, []types.V2Transaction{txn})
+		return
+	}
 
 	jc.Encode(txn.ID())
 }

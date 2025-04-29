@@ -80,7 +80,7 @@ func (h *Host) Announce() error {
 	}
 
 	// broadcast transaction set
-	h.s.BroadcastV2TransactionSet(cs.Index, txnset)
+	_ = h.s.BroadcastV2TransactionSet(cs.Index, txnset)
 	return nil
 }
 
