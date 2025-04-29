@@ -189,25 +189,22 @@ func (s *Store) PinSlab(ctx context.Context, account proto.Account, nextIntegrit
 
 		// insert slab's sectors in a single batch
 		batch := &pgx.Batch{}
-		for _, sector := range slab.Sectors {
+		sectorIDs := make([]int64, len(slab.Sectors))
+		for i, sector := range slab.Sectors {
 			batch.Queue(`
 				INSERT INTO sectors (sector_root, host_id, next_integrity_check) 
 				VALUES ($1, (SELECT id FROM hosts WHERE public_key = $2), $3) 
 				ON CONFLICT (sector_root) DO UPDATE SET sector_root=EXCLUDED.sector_root 
 				RETURNING id
-			`, sqlHash256(sector.Root), sqlPublicKey(sector.HostKey), nextIntegrityCheck)
+			`, sqlHash256(sector.Root), sqlPublicKey(sector.HostKey), nextIntegrityCheck).QueryRow(func(row pgx.Row) error {
+				return row.Scan(&sectorIDs[i])
+			})
 		}
 
 		// fetch sector IDs
-		br := tx.SendBatch(ctx, batch)
-		sectorIDs := make([]int64, len(slab.Sectors))
-		for i := range slab.Sectors {
-			if err := br.QueryRow().Scan(&sectorIDs[i]); err != nil {
-				br.Close()
-				return fmt.Errorf("failed to get sector id for index %d: %w", i, err)
-			}
+		if err := tx.SendBatch(ctx, batch).Close(); err != nil {
+			return fmt.Errorf("failed to insert sectors: %w", err)
 		}
-		br.Close()
 
 		// insert slab sectors into join table
 		batch = &pgx.Batch{}
