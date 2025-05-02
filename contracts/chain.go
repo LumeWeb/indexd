@@ -100,7 +100,7 @@ func (m *ContractManager) applyChainUpdate(tx *updateTx, cau chain.ApplyUpdate) 
 		} else if !known {
 			continue // ignore unknown contracts
 		}
-		if err := m.applyContractDiff(tx, diff); err != nil {
+		if err := m.applyContractDiff(tx, diff, cau.Block.Timestamp); err != nil {
 			return fmt.Errorf("failed to apply contract diff: %w", err)
 		}
 	}
@@ -109,7 +109,7 @@ func (m *ContractManager) applyChainUpdate(tx *updateTx, cau chain.ApplyUpdate) 
 	return updateContractElementProofs(tx, cau)
 }
 
-func (m *ContractManager) applyContractDiff(tx *updateTx, diff consensus.V2FileContractElementDiff) error {
+func (m *ContractManager) applyContractDiff(tx *updateTx, diff consensus.V2FileContractElementDiff, blockTime time.Time) error {
 	// update contract state
 	if diff.Resolution != nil || diff.Created {
 		var state ContractState
@@ -136,6 +136,7 @@ func (m *ContractManager) applyContractDiff(tx *updateTx, diff consensus.V2FileC
 	if err := tx.UpdateContractElements(fce); err != nil {
 		return fmt.Errorf("failed to update contract element: %w", err)
 	}
+
 	return nil
 }
 
@@ -146,14 +147,14 @@ func (m *ContractManager) revertChainUpdate(tx *updateTx, cru chain.RevertUpdate
 		} else if !known {
 			continue // ignore unknown contracts
 		}
-		if err := m.revertContractDiff(tx, diff); err != nil {
-			return fmt.Errorf("failed to apply contract diff: %w", err)
+		if err := m.revertContractDiff(tx, diff, cru.Block.Timestamp); err != nil {
+			return fmt.Errorf("failed to revert contract diff: %w", err)
 		}
 	}
 	return updateContractElementProofs(tx, cru)
 }
 
-func (m *ContractManager) revertContractDiff(tx *updateTx, diff consensus.V2FileContractElementDiff) error {
+func (m *ContractManager) revertContractDiff(tx *updateTx, diff consensus.V2FileContractElementDiff, blockTime time.Time) error {
 	// update contract state
 	if diff.Resolution != nil || diff.Created {
 		var state ContractState
@@ -180,6 +181,7 @@ func (m *ContractManager) revertContractDiff(tx *updateTx, diff consensus.V2File
 	if err := tx.UpdateContractElements(fce); err != nil {
 		return fmt.Errorf("failed to update contract element: %w", err)
 	}
+
 	return nil
 }
 

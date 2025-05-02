@@ -127,6 +127,8 @@ type (
 		// considered bad or failing to renew when being too close to its
 		// ProofHeight. This field is set by the contract maintenance code.
 		Good bool `json:"good"`
+
+		LastBroadcastAttempt time.Time `json:"lastBroadcastAttempt"`
 	}
 
 	// ContractSettings contains various settings used by the manager for
