@@ -3,7 +3,6 @@ package contracts
 import (
 	"context"
 	"fmt"
-	"math"
 	"time"
 
 	proto "go.sia.tech/core/rhp/v4"
@@ -102,9 +101,18 @@ func (cf *contractor) LatestRevision(ctx context.Context, hk types.PublicKey, ad
 // contracts with good hosts in unique CIDRs.
 func (cm *ContractManager) performContractFormation(ctx context.Context, period uint64, wanted uint64, log *zap.Logger) error {
 	formationLog := log.Named("formation")
-	activeContracts, err := cm.store.Contracts(ctx, 0, math.MaxInt64, WithRevisable(true)) // TODO: handle offset/limit
-	if err != nil {
-		return fmt.Errorf("failed to fetch active contracts: %w", err)
+
+	var activeContracts []Contract
+	const batchSize = 50
+	for offset := 0; ; offset += batchSize {
+		batch, err := cm.store.Contracts(ctx, offset, batchSize, WithRevisable(true))
+		if err != nil {
+			return fmt.Errorf("failed to fetch active contracts: %w", err)
+		}
+		activeContracts = append(activeContracts, batch...)
+		if len(batch) < batchSize {
+			break
+		}
 	}
 
 	// helpers for CIDR check
@@ -172,7 +180,6 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 
 	// fetch all hosts that are usable and not blocked
 	var candidates []hosts.Host
-	const batchSize = 50
 	for offset := 0; ; offset += batchSize {
 		batch, err := cm.store.Hosts(ctx, offset, batchSize, hosts.WithUsable(true), hosts.WithBlocked(false))
 		if err != nil {
@@ -212,7 +219,7 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 		}
 		hostAddr := host.SiamuxAddr()
 
-		allowance, collateral := initialContractFunding(host.Settings.Prices, period)
+		allowance, collateral := initialContractFunding(host.Settings.Prices, host.Settings.MaxCollateral, period)
 		formationCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		res, err := cm.contractor.FormContract(formationCtx, host.PublicKey, hostAddr, host.Settings, proto.RPCFormContractParams{
 			RenterPublicKey: cm.renterKey,
@@ -242,19 +249,25 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 	return nil
 }
 
-func initialContractFunding(prices proto.HostPrices, period uint64) (allowance, collateral types.Currency) {
+func initialContractFunding(prices proto.HostPrices, maxCollateral types.Currency, period uint64) (allowance, collateral types.Currency) {
 	// each 10GB of upload + download + storage
 	basePrice := prices.ContractPrice
 	writeUsage := prices.RPCWriteSectorCost(proto.SectorSize).Mul(10 * sectorsPerGiB)
 	readUsage := prices.RPCReadSectorCost(proto.SectorSize).Mul(10 * sectorsPerGiB)
 	storageUsage := prices.RPCAppendSectorsCost(10*sectorsPerGiB, period)
 	total := writeUsage.Add(readUsage).Add(storageUsage)
-	allowance, collateral = total.RenterCost().Add(basePrice), total.HostRiskedCollateral()
+	allowance = total.RenterCost().Add(basePrice)
 
 	// don't go below a sane minimum to make sure we can fill an account without
 	// immediately draining the contract and requiring a refresh.
 	if allowance.Cmp(minAllowance) < 0 {
 		allowance = minAllowance
+	}
+
+	// don't go beyond the host's max collateral limits
+	collateral = proto.MaxHostCollateral(prices, allowance)
+	if collateral.Cmp(maxCollateral) > 0 {
+		collateral = maxCollateral
 	}
 	return allowance, collateral
 }
