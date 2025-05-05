@@ -258,6 +258,8 @@ CREATE UNIQUE INDEX slab_sectors_slab_id_slab_index_idx ON slab_sectors(slab_id,
 
 -- speeds up lookup of unhealthy slabs
 CREATE INDEX slabs_id_last_repair_attempt_idx ON slabs(last_repair_attempt ASC);
+CREATE INDEX slab_sectors_sector_id_idx ON slab_sectors(sector_id);
 CREATE INDEX sectors_id_idx ON sectors(id) INCLUDE (host_id, contract_sectors_map_id);
+CREATE INDEX sectors_id_host_null_idx ON sectors(id) WHERE host_id IS NULL;
 CREATE INDEX sectors_contract_sectors_map_id_host_id_idx ON sectors(contract_sectors_map_id, host_id);
 CREATE INDEX contracts_contract_id_good_idx ON contracts(contract_id, good);

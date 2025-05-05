@@ -1089,7 +1089,7 @@ func BenchmarkPinSectors(b *testing.B) {
 // BenchmarkUnhealthySlab benchmarks UnhealthySlab
 //
 //	CPU    |  Count  |   Time/op
-//	M1 Max |   100   |    77 ms
+//	M1 Max |   100   |    53.84 ms
 func BenchmarkUnhealthySlab(b *testing.B) {
 	store := initPostgres(b, zaptest.NewLogger(b).Named("postgres"))
 	account := proto.Account{1}
