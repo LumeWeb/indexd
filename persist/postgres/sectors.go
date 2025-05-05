@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -404,8 +403,6 @@ func (s *Store) UnhealthySlab(ctx context.Context, maxRepairAttempt time.Time) (
 		conditionA, conditionB = conditionB, conditionA
 	}
 
-	existsExpr := strings.Join([]string{conditionA, conditionB}, " UNION ALL ")
-
 	var slabID slabs.SlabID
 	err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
 		err := tx.QueryRow(ctx, `
@@ -413,7 +410,7 @@ func (s *Store) UnhealthySlab(ctx context.Context, maxRepairAttempt time.Time) (
 				SELECT id AS slab_id
 				FROM slabs
 				WHERE last_repair_attempt <= $1
-				AND EXISTS (`+existsExpr+`)
+				AND EXISTS (`+conditionA+" UNION ALL "+conditionB+`)
 				LIMIT 1
 			)
 			UPDATE slabs
