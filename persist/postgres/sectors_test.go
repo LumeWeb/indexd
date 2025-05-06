@@ -497,6 +497,19 @@ func TestPinSectors(t *testing.T) {
 func TestUnhealthySlabs(t *testing.T) {
 	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
 
+	// exec is a helper to execute a query and refresh unhealthy slabs
+	exec := func(query string) {
+		t.Helper()
+		_, err := store.pool.Exec(context.Background(), query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = store.RefreshUnhealthySlabs(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	// add account
 	account := proto.Account{1}
 	if err := store.AddAccount(context.Background(), types.PublicKey(account)); err != nil {
@@ -556,18 +569,15 @@ func TestUnhealthySlabs(t *testing.T) {
 	}
 
 	// pin one sector to the contract - we should still not have any unhealthy sectors
-	if _, err := store.pool.Exec(context.Background(), "UPDATE sectors SET contract_sectors_map_id = 1 WHERE id = 1"); err != nil {
-		t.Fatal(err)
-	}
+	exec("UPDATE sectors SET contract_sectors_map_id = 1 WHERE id = 1")
+
 	_, err = store.UnhealthySlab(context.Background(), time.Now().Add(time.Hour))
 	if !errors.Is(err, slabs.ErrSlabNotFound) {
 		t.Fatal(err)
 	}
 
 	// update the contract to be bad
-	if _, err := store.pool.Exec(context.Background(), "UPDATE contracts SET good = FALSE"); err != nil {
-		t.Fatal(err)
-	}
+	exec("UPDATE contracts SET good = FALSE")
 
 	// fetch unhealthy slabs which haven't had a repair attempted in at least 1 hour - should not have any
 	_, err = store.UnhealthySlab(context.Background(), time.Now().Add(-time.Hour))
@@ -590,18 +600,14 @@ func TestUnhealthySlabs(t *testing.T) {
 	}
 
 	// fix the contract again
-	if _, err := store.pool.Exec(context.Background(), "UPDATE contracts SET good = TRUE"); err != nil {
-		t.Fatal(err)
-	}
+	exec("UPDATE contracts SET good = TRUE")
 	_, err = store.UnhealthySlab(context.Background(), time.Now().Add(-time.Hour))
 	if !errors.Is(err, slabs.ErrSlabNotFound) {
 		t.Fatal(err)
 	}
 
 	// remove a sector from its host - the unhealthy slab should be back
-	if _, err := store.pool.Exec(context.Background(), "UPDATE sectors SET host_id = NULL WHERE id = 2"); err != nil {
-		t.Fatal(err)
-	}
+	exec("UPDATE sectors SET host_id = NULL WHERE id = 2")
 	unhealthyID, err = store.UnhealthySlab(context.Background(), time.Now())
 	if err != nil {
 		t.Fatal(err)
