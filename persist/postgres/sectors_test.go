@@ -504,7 +504,7 @@ func TestUnhealthySlabs(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		err = store.RefreshUnhealthySlabs(context.Background())
+		_, err = store.pool.Exec(context.Background(), `REFRESH MATERIALIZED VIEW CONCURRENTLY unhealthy_slabs`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1187,7 +1187,7 @@ func BenchmarkUnhealthySlab(b *testing.B) {
 	}
 
 	// populate the materialized view
-	err = store.RefreshUnhealthySlabs(context.Background())
+	_, err = store.pool.Exec(context.Background(), `REFRESH MATERIALIZED VIEW CONCURRENTLY unhealthy_slabs`)
 	if err != nil {
 		b.Fatal(err)
 	}

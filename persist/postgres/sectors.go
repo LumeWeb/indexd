@@ -369,10 +369,11 @@ func (s *Store) UnpinnedSectors(ctx context.Context, hostKey types.PublicKey, li
 }
 
 // UnhealthySlab returns an unhealthy slab that hasn't had a repair attempted
-// since 'maxRepairAttempt'. When no slab is found, ErrSlabNotFound is returned.
-// If a slab is found, it will have its last_repair_attempt updated to the time
-// of the call. To prevent subsequent or parallel calls from returning the same
-// slab.
+// since 'maxRepairAttempt'. A slab is considered unhealthy if it has at least
+// one sector that is not stored on a host or stored in a bad contract. When no
+// slab is found, ErrSlabNotFound is returned. If a slab is found, it will have
+// its last_repair_attempt updated to the time of the call. To prevent
+// subsequent or parallel calls from returning the same slab.
 func (s *Store) UnhealthySlab(ctx context.Context, maxRepairAttempt time.Time) (slabs.SlabID, error) {
 	var slabID slabs.SlabID
 	err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
@@ -395,17 +396,4 @@ func (s *Store) UnhealthySlab(ctx context.Context, maxRepairAttempt time.Time) (
 		return err
 	})
 	return slabID, err
-}
-
-// RefreshUnhealthySlabs refreshes a materialized view that contains slabs with
-// at least one sector that needs to be migrated to a new host. The condition
-// for such a sector is that it's either not stored on a host, or stored in a
-// bad contract. This function is meant to be called periodically to keep the view
-// up to date. The view is refreshed concurrently to avoid blocking other
-// transactions.
-func (s *Store) RefreshUnhealthySlabs(ctx context.Context) error {
-	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
-		_, err := tx.Exec(ctx, `REFRESH MATERIALIZED VIEW CONCURRENTLY unhealthy_slabs`)
-		return err
-	})
 }

@@ -3,10 +3,13 @@ package postgres
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.sia.tech/coreutils/threadgroup"
 	"go.uber.org/zap"
 	"lukechampine.com/frand"
 )
@@ -27,6 +30,7 @@ type (
 	Store struct {
 		pool *pgxpool.Pool
 		log  *zap.Logger
+		tg   *threadgroup.ThreadGroup
 	}
 )
 
@@ -53,6 +57,7 @@ func (s *Store) transaction(ctx context.Context, fn func(context.Context, *txn) 
 
 // Close closes the underlying database connection.
 func (s *Store) Close() error {
+	s.tg.Stop()
 	s.pool.Close()
 	return nil
 }
@@ -68,9 +73,37 @@ func Connect(ctx context.Context, ci ConnectionInfo, log *zap.Logger) (*Store, e
 	store := &Store{
 		pool: pool,
 		log:  log,
+		tg:   threadgroup.New(),
 	}
 	if err := store.init(ctx); err != nil {
 		return nil, fmt.Errorf("failed to initialize store: %w", err)
 	}
+
+	ctx, cancel, err := store.tg.AddContext(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		defer cancel()
+
+		refreshTicker := time.NewTicker(time.Hour)
+		defer refreshTicker.Stop()
+
+		for {
+			select {
+			case <-refreshTicker.C:
+			case <-ctx.Done():
+				return
+			}
+
+			if err := store.transaction(ctx, func(ctx context.Context, tx *txn) error {
+				_, err := tx.Exec(ctx, `REFRESH MATERIALIZED VIEW CONCURRENTLY unhealthy_slabs`)
+				return err
+			}); err != nil && !errors.Is(err, context.Canceled) {
+				store.log.Warn("failed to refresh materialized view", zap.Error(err))
+			}
+		}
+	}()
+
 	return store, nil
 }
