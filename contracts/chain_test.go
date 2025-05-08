@@ -18,6 +18,7 @@ import (
 	"go.sia.tech/coreutils/syncer"
 	"go.sia.tech/coreutils/wallet"
 	"go.sia.tech/indexd/hosts"
+	"go.sia.tech/indexd/slabs"
 )
 
 type mockProofUpdater struct {
@@ -29,12 +30,22 @@ func (u *mockProofUpdater) UpdateElementProof(stateElement *types.StateElement) 
 }
 
 type storeMock struct {
-	contracts   []Contract
 	toBroadcast []types.V2FileContractElement
 	pruneCalls  int
 	rejectCalls int
 	settings    MaintenanceSettings
 	hosts       map[types.PublicKey]hosts.Host
+
+	mu        sync.Mutex
+	contracts []Contract
+	sectors   map[types.PublicKey][]*slabs.Sector
+}
+
+func newStoreMock() *storeMock {
+	return &storeMock{
+		hosts:   make(map[types.PublicKey]hosts.Host),
+		sectors: make(map[types.PublicKey][]*slabs.Sector),
+	}
 }
 
 func (s *storeMock) AddFormedContract(ctx context.Context, contractID types.FileContractID, hostKey types.PublicKey, proofHeight, expirationHeight uint64, contractPrice, allowance, minerFee, totalCollateral types.Currency) error {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"go.sia.tech/coreutils/rhp/v4/quic"
 	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/contracts"
+	"go.sia.tech/indexd/hosts"
 	"go.sia.tech/indexd/slabs"
 	"go.sia.tech/indexd/subscriber"
 	"go.uber.org/zap"
@@ -583,6 +585,102 @@ func TestPinSectors(t *testing.T) {
 	if !errors.Is(err, contracts.ErrNotFound) {
 		t.Fatal("expected ErrNotFound, got", err)
 	}
+}
+
+func TestRemoveSectors(t *testing.T) {
+	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
+
+	assertCount := func(hk types.PublicKey, expected int) {
+		t.Helper()
+		var got int
+		if err := store.pool.QueryRow(context.Background(), "SELECT COUNT(*) FROM sectors WHERE host_id = (SELECT id FROM hosts WHERE public_key = $1)", sqlPublicKey(hk)).Scan(&got); err != nil {
+			t.Fatal(err)
+		} else if got != expected {
+			t.Fatalf("expected %d sectors for host %v, got %d", expected, hk, got)
+		}
+	}
+
+	// create account
+	account := proto.Account{1}
+	if err := store.AddAccount(context.Background(), types.PublicKey(account)); err != nil {
+		t.Fatal("failed to add account:", err)
+	}
+
+	// create h1
+	hk1 := types.PublicKey{1}
+	if err := store.UpdateChainState(context.Background(), func(tx subscriber.UpdateTx) error {
+		return tx.AddHostAnnouncement(hk1, chain.V2HostAnnouncement{chain.NetAddress{Protocol: quic.Protocol, Address: "[::]:4848"}}, time.Now())
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// create h2
+	hk2 := types.PublicKey{2}
+	if err := store.UpdateChainState(context.Background(), func(tx subscriber.UpdateTx) error {
+		return tx.AddHostAnnouncement(hk2, chain.V2HostAnnouncement{chain.NetAddress{Protocol: quic.Protocol, Address: "[::]:4848"}}, time.Now())
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// add sectors for both h1 and h2
+	_, err := store.PinSlab(context.Background(), account, time.Time{}, slabs.SlabPinParams{
+		EncryptionKey: frand.Entropy256(),
+		MinShards:     10,
+		Sectors: []slabs.SectorPinParams{
+			{
+				HostKey: hk1,
+				Root:    types.Hash256{1},
+			},
+			{
+				HostKey: hk1,
+				Root:    types.Hash256{2},
+			},
+			{
+				HostKey: hk2,
+				Root:    types.Hash256{3},
+			},
+			{
+				HostKey: hk2,
+				Root:    types.Hash256{4},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertCount(hk1, 2)
+	assertCount(hk2, 2)
+
+	// assert [hosts.ErrNotFound] is returned when trying to remove sectors for an unknown host
+	err = store.RemoveSectors(context.Background(), types.PublicKey{3}, []types.Hash256{{1}, {2}})
+	if !errors.Is(err, hosts.ErrNotFound) {
+		t.Fatal("expected ErrNotFound, got", err)
+	}
+
+	// assert removing sectors fails when an unexpected number of sectors were updated
+	err = store.RemoveSectors(context.Background(), hk1, []types.Hash256{{1}, {2}, {3}})
+	if err == nil || !strings.Contains(err.Error(), "failed to remove all sectors: 2/3 removed") {
+		t.Fatal("unexpected err", err)
+	}
+
+	// remove sectors for h2
+	err = store.RemoveSectors(context.Background(), hk2, []types.Hash256{{3}, {4}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertCount(hk1, 2)
+	assertCount(hk2, 0)
+
+	// remove sectors for h1
+	err = store.RemoveSectors(context.Background(), hk1, []types.Hash256{{1}, {2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertCount(hk1, 0)
+	assertCount(hk2, 0)
 }
 
 func TestUnhealthySlabs(t *testing.T) {

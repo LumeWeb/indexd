@@ -381,6 +381,69 @@ func TestContractsForFunding(t *testing.T) {
 	}
 }
 
+func TestContractsForPinning(t *testing.T) {
+	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
+
+	addContract := func(hk types.PublicKey, fcid types.FileContractID, allowance types.Currency, size, capacity uint64, state contracts.ContractState, good bool) {
+		t.Helper()
+		if err := store.AddFormedContract(context.Background(), fcid, hk, 100, 200, types.ZeroCurrency, allowance, types.ZeroCurrency, types.ZeroCurrency); err != nil {
+			t.Fatal(err)
+		}
+		query := `UPDATE contracts SET size = $1, capacity = $2, state = $3, good = $4 WHERE contract_id = $5`
+		_, err := store.pool.Exec(context.Background(), query, size, capacity, sqlContractState(state), good, sqlHash256(fcid))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// add two hosts
+	hk1 := types.PublicKey{1}
+	hk2 := types.PublicKey{2}
+	if err := store.UpdateChainState(context.Background(), func(tx subscriber.UpdateTx) error {
+		return errors.Join(
+			tx.AddHostAnnouncement(hk1, chain.V2HostAnnouncement{}, time.Now()),
+			tx.AddHostAnnouncement(hk2, chain.V2HostAnnouncement{}, time.Now()),
+		)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// add contracts for h1
+	addContract(hk1, types.FileContractID{1}, types.ZeroCurrency, 100, 100, contracts.ContractStateActive, true)       // no allowance
+	addContract(hk1, types.FileContractID{2}, types.NewCurrency64(1), 100, 100, contracts.ContractStateResolved, true) // resolved
+	addContract(hk1, types.FileContractID{3}, types.NewCurrency64(1), 100, 100, contracts.ContractStateActive, false)  // bad
+	addContract(hk1, types.FileContractID{4}, types.NewCurrency64(1), 100, 100, contracts.ContractStateActive, true)   // ok - small size
+	addContract(hk1, types.FileContractID{5}, types.NewCurrency64(1), 200, 200, contracts.ContractStateActive, true)   // ok - big - lower capacity
+	addContract(hk1, types.FileContractID{6}, types.NewCurrency64(1), 200, 300, contracts.ContractStateActive, true)   // ok - big - highest capacity
+
+	// add contracts for h2
+	addContract(hk2, types.FileContractID{7}, types.NewCurrency64(1), 100, 100, contracts.ContractStateActive, true) // ok
+
+	// assert contracts for pinning for h1
+	contractIDs, err := store.ContractsForPinning(context.Background(), hk1)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(contractIDs) != 3 {
+		t.Fatalf("expected 3 contracts, got %d", len(contractIDs))
+	} else if contractIDs[0] != (types.FileContractID{6}) {
+		t.Fatalf("expected contract %v, got %v", types.FileContractID{6}, contractIDs[0])
+	} else if contractIDs[1] != (types.FileContractID{5}) {
+		t.Fatalf("expected contract %v, got %v", types.FileContractID{5}, contractIDs[1])
+	} else if contractIDs[2] != (types.FileContractID{4}) {
+		t.Fatalf("expected contract %v, got %v", types.FileContractID{4}, contractIDs[1])
+	}
+
+	// assert contracts for pinning for h2
+	contractIDs, err = store.ContractsForPinning(context.Background(), hk2)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(contractIDs) != 1 {
+		t.Fatalf("expected 1 contract, got %d", len(contractIDs))
+	} else if contractIDs[0] != (types.FileContractID{7}) {
+		t.Fatalf("expected contract %v, got %v", types.FileContractID{7}, contractIDs[0])
+	}
+}
+
 func TestPruneExpiredContractElements(t *testing.T) {
 	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
 

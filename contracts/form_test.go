@@ -6,6 +6,7 @@ import (
 	"net"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	proto "go.sia.tech/core/rhp/v4"
@@ -46,11 +47,16 @@ type contractorMock struct {
 	refreshCalls    []refreshContractCall
 	renewCalls      []renewContractCall
 	latestRevisions map[types.FileContractID]proto.RPCLatestRevisionResponse
+
+	mu             sync.Mutex
+	pinSectorCalls []pinSectorsCall
+	missingSectors map[types.Hash256]struct{}
 }
 
 func newContractorMock() *contractorMock {
 	return &contractorMock{
 		latestRevisions: map[types.FileContractID]proto.RPCLatestRevisionResponse{},
+		missingSectors:  map[types.Hash256]struct{}{},
 	}
 }
 

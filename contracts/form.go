@@ -54,6 +54,7 @@ func (s *formContractSigner) SignV2Inputs(txn *types.V2Transaction, toSign []int
 type contractor struct {
 	cm     *chain.Manager
 	signer *formContractSigner
+	sk     types.PrivateKey
 }
 
 // NewContractor creates a production Contractor that forms, refreshes and renews contracts by
@@ -66,6 +67,7 @@ func NewContractor(cm *chain.Manager, w rhp.Wallet, renterKey types.PrivateKey) 
 			renterKey: renterKey,
 			w:         w,
 		},
+		sk: renterKey,
 	}
 }
 
@@ -84,17 +86,6 @@ func (c *contractor) FormContract(ctx context.Context, hk types.PublicKey, addr 
 	}
 
 	return res, nil
-}
-
-func (cf *contractor) LatestRevision(ctx context.Context, hk types.PublicKey, addr string, contractID types.FileContractID) (proto.RPCLatestRevisionResponse, error) {
-	dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
-	defer cancel()
-	t, err := siamux.Dial(dialCtx, addr, hk)
-	if err != nil {
-		return proto.RPCLatestRevisionResponse{}, fmt.Errorf("failed to dial host: %w", err)
-	}
-	defer t.Close()
-	return rhp.RPCLatestRevision(ctx, t, contractID)
 }
 
 // performContractFormation makes sure that we have at least 'wanted' good

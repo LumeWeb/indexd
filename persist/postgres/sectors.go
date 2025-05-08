@@ -12,6 +12,7 @@ import (
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/contracts"
+	"go.sia.tech/indexd/hosts"
 	"go.sia.tech/indexd/slabs"
 )
 
@@ -306,6 +307,37 @@ func (s *Store) PinSectors(ctx context.Context, contractID types.FileContractID,
 			} else if !exists {
 				return contracts.ErrNotFound
 			}
+		}
+		return nil
+	})
+}
+
+// RemoveSectors removes the sectors for the given host from the database by
+// unsetting their host_id. This should be called when we failed to pin the
+// sectors on the host because the host could not find the sector.
+func (s *Store) RemoveSectors(ctx context.Context, hostKey types.PublicKey, roots []types.Hash256) error {
+	sqlRoots := make([]sqlHash256, len(roots))
+	for i, root := range roots {
+		sqlRoots[i] = sqlHash256(root)
+	}
+	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
+		var hID int64
+		err := tx.QueryRow(ctx, "SELECT id FROM hosts WHERE public_key = $1", sqlPublicKey(hostKey)).Scan(&hID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return hosts.ErrNotFound
+		} else if err != nil {
+			return fmt.Errorf("failed to get host ID: %w", err)
+		}
+
+		res, err := tx.Exec(ctx, `
+			UPDATE sectors
+			SET host_id = NULL
+			WHERE host_id = $1 AND sector_root = ANY($2) AND contract_sectors_map_id IS NULL
+		`, hID, sqlRoots)
+		if err != nil {
+			return fmt.Errorf("failed to remove sectors: %w", err)
+		} else if res.RowsAffected() != int64(len(roots)) {
+			return fmt.Errorf("failed to remove all sectors: %d/%d removed", res.RowsAffected(), len(roots))
 		}
 		return nil
 	})

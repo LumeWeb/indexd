@@ -5,9 +5,23 @@ import (
 	"fmt"
 	"time"
 
+	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
+	"go.sia.tech/coreutils/rhp/v4"
+	"go.sia.tech/coreutils/rhp/v4/siamux"
 	"go.uber.org/zap"
 )
+
+func (cf *contractor) LatestRevision(ctx context.Context, hk types.PublicKey, addr string, contractID types.FileContractID) (proto.RPCLatestRevisionResponse, error) {
+	dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
+	defer cancel()
+	t, err := siamux.Dial(dialCtx, addr, hk)
+	if err != nil {
+		return proto.RPCLatestRevisionResponse{}, fmt.Errorf("failed to dial host: %w", err)
+	}
+	defer t.Close()
+	return rhp.RPCLatestRevision(ctx, t, contractID)
+}
 
 func (cm *ContractManager) performBroadcastContractRevisions(ctx context.Context, log *zap.Logger) error {
 	broadcastLog := log.Named("broadcast")
