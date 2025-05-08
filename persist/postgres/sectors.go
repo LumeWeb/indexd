@@ -321,25 +321,18 @@ func (s *Store) RemoveSectors(ctx context.Context, hostKey types.PublicKey, root
 		sqlRoots[i] = sqlHash256(root)
 	}
 	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
-		var hID int64
-		err := tx.QueryRow(ctx, "SELECT id FROM hosts WHERE public_key = $1", sqlPublicKey(hostKey)).Scan(&hID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return hosts.ErrNotFound
-		} else if err != nil {
-			return fmt.Errorf("failed to get host ID: %w", err)
-		}
-
-		res, err := tx.Exec(ctx, `
+		_, err := tx.Exec(ctx, `
+			WITH
+				hid AS (SELECT id FROM hosts WHERE public_key = $1),
+				removed(root) AS (SELECT UNNEST($2::bytea[]))
 			UPDATE sectors
 			SET host_id = NULL
-			WHERE host_id = $1 AND sector_root = ANY($2) AND contract_sectors_map_id IS NULL
-		`, hID, sqlRoots)
-		if err != nil {
-			return fmt.Errorf("failed to remove sectors: %w", err)
-		} else if res.RowsAffected() != int64(len(roots)) {
-			return fmt.Errorf("failed to remove all sectors: %d/%d removed", res.RowsAffected(), len(roots))
-		}
-		return nil
+			FROM removed, hid
+			WHERE host_id = hid.id
+				AND contract_sectors_map_id IS NULL
+				AND sector_root = removed.root;
+		`, sqlPublicKey(hostKey), sqlRoots)
+		return err
 	})
 }
 

@@ -652,20 +652,17 @@ func TestRemoveSectors(t *testing.T) {
 	assertCount(hk1, 2)
 	assertCount(hk2, 2)
 
-	// assert [hosts.ErrNotFound] is returned when trying to remove sectors for an unknown host
+	// assert removing sectors for an unknown host is a no-op
 	err = store.RemoveSectors(context.Background(), types.PublicKey{3}, []types.Hash256{{1}, {2}})
-	if !errors.Is(err, hosts.ErrNotFound) {
-		t.Fatal("expected ErrNotFound, got", err)
-	}
-
-	// assert removing sectors fails when an unexpected number of sectors were updated
-	err = store.RemoveSectors(context.Background(), hk1, []types.Hash256{{1}, {2}, {3}})
-	if err == nil || !strings.Contains(err.Error(), "failed to remove all sectors: 2/3 removed") {
+	if err != nil {
 		t.Fatal("unexpected err", err)
 	}
 
-	// remove sectors for h2
-	err = store.RemoveSectors(context.Background(), hk2, []types.Hash256{{3}, {4}})
+	assertCount(hk1, 2)
+	assertCount(hk2, 2)
+
+	// remove sectors for h2 (passing r1 we assert sectors not belonging to the host are left alone)
+	err = store.RemoveSectors(context.Background(), hk2, []types.Hash256{{3}, {4}, {1}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -992,6 +989,87 @@ func BenchmarkSlabs(b *testing.B) {
 	b.Run("Slabs-4GiB", func(b *testing.B) {
 		runSlabsBenchmark(b, 100)
 	})
+}
+
+// BenchmarkRemoveSectors benchmarks the performance of RemoveSectors by
+// removing various sized batches of sectors from a random host .
+//
+// Hardware |  BatchSize |   ms/op    |  Throughput   |
+// M1 Max   |  	 100	 |   4.68ms   |   89.49 GB/s  |
+// M1 Max   |  	 500	 |  15.51ms   |  135.16 GB/s  |
+// M1 Max   |   1000	 |  25.78ms   |  162.69 GB/s  |
+func BenchmarkRemoveSectors(b *testing.B) {
+	store := initPostgres(b, zap.NewNop())
+
+	// create account
+	account := proto.Account{1}
+	if err := store.AddAccount(context.Background(), types.PublicKey(account)); err != nil {
+		b.Fatal("failed to add account:", err)
+	}
+
+	// prepare base db
+	const (
+		dbBaseSize         = 4 << 40 // 4TiB of sectors
+		maxRemoveBatchSize = 1000
+		nSectors           = dbBaseSize / proto.SectorSize
+	)
+
+	var hks []types.PublicKey
+	roots := make(map[types.PublicKey][]types.Hash256)
+	for remainingSectors := nSectors; remainingSectors > 0; {
+		hk := types.GeneratePrivateKey().PublicKey()
+		hks = append(hks, hk)
+
+		// add host
+		ha := chain.NetAddress{Protocol: quic.Protocol, Address: "[::]:4848"}
+		if err := store.UpdateChainState(context.Background(), func(tx subscriber.UpdateTx) error {
+			return tx.AddHostAnnouncement(hk, chain.V2HostAnnouncement{ha}, time.Now())
+		}); err != nil {
+			b.Fatal(err)
+		}
+
+		// add sectors
+		batchSize := min(remainingSectors, maxRemoveBatchSize)
+		remainingSectors -= batchSize
+		var sectors []slabs.SectorPinParams
+		for range batchSize {
+			root := frand.Entropy256()
+			roots[hk] = append(roots[hk], root)
+			sectors = append(sectors, slabs.SectorPinParams{
+				Root:    root,
+				HostKey: hk,
+			})
+		}
+		if _, err := store.PinSlab(context.Background(), account, time.Time{}, slabs.SlabPinParams{
+			MinShards:     1,
+			EncryptionKey: frand.Entropy256(),
+			Sectors:       sectors,
+		}); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	for _, batchSize := range []int64{100, 500, maxRemoveBatchSize} {
+		b.Run(fmt.Sprint(batchSize), func(b *testing.B) {
+			b.ResetTimer()
+			b.SetBytes(batchSize * proto.SectorSize)
+
+			for b.Loop() {
+				// break if we're exhausted
+				if len(hks) == 0 {
+					b.StopTimer()
+					break
+				}
+
+				hk := hks[len(hks)-1]
+				hks = hks[:len(hks)-1]
+				if err := store.RemoveSectors(context.Background(), hk, roots[hk][:batchSize]); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+
 }
 
 // BenchmarkUnpinnedSectors benchmarks UnpinnedSectors in various batch sizes.
