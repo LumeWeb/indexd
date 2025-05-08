@@ -497,19 +497,6 @@ func TestPinSectors(t *testing.T) {
 func TestUnhealthySlabs(t *testing.T) {
 	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
 
-	// exec is a helper to execute a query and refresh unhealthy slabs
-	exec := func(query string) {
-		t.Helper()
-		_, err := store.pool.Exec(context.Background(), query)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, err = store.pool.Exec(context.Background(), `REFRESH MATERIALIZED VIEW CONCURRENTLY unhealthy_slabs`)
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-
 	// add account
 	account := proto.Account{1}
 	if err := store.AddAccount(context.Background(), types.PublicKey(account)); err != nil {
@@ -569,7 +556,10 @@ func TestUnhealthySlabs(t *testing.T) {
 	}
 
 	// pin one sector to the contract - we should still not have any unhealthy sectors
-	exec("UPDATE sectors SET contract_sectors_map_id = 1 WHERE id = 1")
+	_, err = store.pool.Exec(context.Background(), "UPDATE sectors SET contract_sectors_map_id = 1 WHERE id = 1")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	_, err = store.UnhealthySlab(context.Background(), time.Now().Add(time.Hour))
 	if !errors.Is(err, slabs.ErrSlabNotFound) {
@@ -577,7 +567,10 @@ func TestUnhealthySlabs(t *testing.T) {
 	}
 
 	// update the contract to be bad
-	exec("UPDATE contracts SET good = FALSE")
+	_, err = store.pool.Exec(context.Background(), "UPDATE contracts SET good = FALSE")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// fetch unhealthy slabs which haven't had a repair attempted in at least 1 hour - should not have any
 	_, err = store.UnhealthySlab(context.Background(), time.Now().Add(-time.Hour))
@@ -600,14 +593,20 @@ func TestUnhealthySlabs(t *testing.T) {
 	}
 
 	// fix the contract again
-	exec("UPDATE contracts SET good = TRUE")
+	_, err = store.pool.Exec(context.Background(), "UPDATE contracts SET good = TRUE")
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = store.UnhealthySlab(context.Background(), time.Now().Add(-time.Hour))
 	if !errors.Is(err, slabs.ErrSlabNotFound) {
 		t.Fatal(err)
 	}
 
 	// remove a sector from its host - the unhealthy slab should be back
-	exec("UPDATE sectors SET host_id = NULL WHERE id = 2")
+	_, err = store.pool.Exec(context.Background(), "UPDATE sectors SET host_id = NULL WHERE id = 2")
+	if err != nil {
+		t.Fatal(err)
+	}
 	unhealthyID, err = store.UnhealthySlab(context.Background(), time.Now())
 	if err != nil {
 		t.Fatal(err)
@@ -1095,7 +1094,7 @@ func BenchmarkPinSectors(b *testing.B) {
 // BenchmarkUnhealthySlab benchmarks UnhealthySlab
 //
 //	CPU    |  Count  |   Time/op
-//	M1 Max |   100   |   1.63 ms
+//	M1 Max |   132   |   32.45 ms
 func BenchmarkUnhealthySlab(b *testing.B) {
 	store := initPostgres(b, zaptest.NewLogger(b).Named("postgres"))
 	account := proto.Account{1}
@@ -1182,12 +1181,6 @@ func BenchmarkUnhealthySlab(b *testing.B) {
 
 	// 25% of the sectors don't have a host at all
 	_, err = store.pool.Exec(context.Background(), `UPDATE sectors SET host_id = NULL, contract_sectors_map_id = NULL WHERE id % 4 = 1`)
-	if err != nil {
-		b.Fatal(err)
-	}
-
-	// populate the materialized view
-	_, err = store.pool.Exec(context.Background(), `REFRESH MATERIALIZED VIEW CONCURRENTLY unhealthy_slabs`)
 	if err != nil {
 		b.Fatal(err)
 	}

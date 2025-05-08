@@ -261,14 +261,3 @@ CREATE INDEX slab_sectors_sector_id_idx ON slab_sectors(sector_id);
 
 -- speed up fetching sectors for slab ordered by their position within the slab
 CREATE UNIQUE INDEX slab_sectors_slab_id_slab_index_idx ON slab_sectors(slab_id, slab_index ASC);
-
--- materialized view to speed up lookup of unhealthy slabs
-CREATE MATERIALIZED VIEW unhealthy_slabs AS
-    SELECT slab_id
-    FROM slab_sectors
-    INNER JOIN sectors ON sectors.id = slab_sectors.sector_id
-    LEFT JOIN contract_sectors_map csm ON sectors.contract_sectors_map_id = csm.id
-    LEFT JOIN contracts ON csm.contract_id = contracts.contract_id WHERE sectors.host_id IS NULL OR contracts.good = FALSE
-    GROUP BY slab_sectors.slab_id;
-
-CREATE UNIQUE INDEX unhealthy_slabs_slab_id_idx ON unhealthy_slabs(slab_id);
