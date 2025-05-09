@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -469,6 +470,158 @@ func TestPinSlabs(t *testing.T) {
 	assertCount("account_slabs", 4) // 2 slabs for each account
 	assertCount("slabs", 2)         // 2 slabs
 	assertCount("sectors", 4)       // 2 sectors per slab
+
+	// swap roots of slab 2 and re-pin on account 2
+	slab2.Sectors[0].Root, slab2.Sectors[1].Root = slab2.Sectors[1].Root, slab2.Sectors[0].Root
+	slabID, err := store.PinSlab(context.Background(), account2, nextCheck, slab2)
+	if err != nil {
+		t.Fatal(err)
+	} else if slabID == expectedIDs[0] || slabID == expectedIDs[1] {
+		t.Fatalf("expected new slab ID, got %v (%v)", slabID, expectedIDs)
+	}
+
+	// assert we still have 3 slabs now, but still only have 4 sectors
+	assertCount("account_slabs", 5) // 2 slabs for each account + the new one
+	assertCount("slabs", 3)         // 3 slabs
+	assertCount("sectors", 4)       // 2 sectors per slab + 0 new ones
+}
+
+func TestUnpinSlab(t *testing.T) {
+	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
+
+	assertAccountSlabs := func(acc proto.Account, expected int64) {
+		t.Helper()
+		var got int64
+		query := `SELECT COUNT(*) FROM account_slabs INNER JOIN accounts ON account_slabs.account_id = accounts.id WHERE accounts.public_key = $1`
+		err := store.pool.QueryRow(context.Background(), query, sqlHash256(acc)).Scan(&got)
+		if err != nil {
+			t.Fatal(err)
+		} else if got != expected {
+			t.Fatalf("expected %d slabs for account %v, got %d", expected, acc, got)
+		}
+	}
+
+	assertCount := func(name string, expected int64) {
+		t.Helper()
+		var got int64
+		if err := store.pool.QueryRow(context.Background(), fmt.Sprintf("SELECT COUNT(*) FROM %s", name)).Scan(&got); err != nil {
+			t.Fatal(err)
+		} else if got != expected {
+			t.Fatalf("expected %d rows in %s, got %d", expected, name, got)
+		}
+	}
+
+	// add host
+	hk := types.PublicKey{1}
+	ha := chain.NetAddress{Protocol: quic.Protocol, Address: "[::]:4848"}
+	if err := store.UpdateChainState(context.Background(), func(tx subscriber.UpdateTx) error {
+		return tx.AddHostAnnouncement(hk, chain.V2HostAnnouncement{ha}, time.Now())
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// precreate 3 slabs, 2 sectors each
+	var params []slabs.SlabPinParams
+	for range 3 {
+		params = append(params, slabs.SlabPinParams{
+			EncryptionKey: [32]byte{},
+			MinShards:     2,
+			Sectors: []slabs.SectorPinParams{
+				{Root: frand.Entropy256(), HostKey: hk},
+				{Root: frand.Entropy256(), HostKey: hk},
+			},
+		})
+	}
+	slab1, _ := params[0].Digest()
+	slab2, _ := params[1].Digest()
+	slab3, _ := params[2].Digest()
+
+	// add an account with 2 slabs, 2 sectors each
+	acc1 := proto.Account{1}
+	if err := store.AddAccount(context.Background(), types.PublicKey(acc1)); err != nil {
+		t.Fatal("failed to add account:", err)
+	}
+	if _, err := store.PinSlab(context.Background(), acc1, time.Time{}, params[0]); err != nil {
+		t.Fatal(err)
+	} else if _, err := store.PinSlab(context.Background(), acc1, time.Time{}, params[1]); err != nil {
+		t.Fatal(err)
+	}
+
+	// add another account with 2 slabs, the first one is shared with acc1
+	acc2 := proto.Account{2}
+	if err := store.AddAccount(context.Background(), types.PublicKey(acc2)); err != nil {
+		t.Fatal("failed to add account:", err)
+	}
+	if _, err := store.PinSlab(context.Background(), acc2, time.Time{}, params[1]); err != nil {
+		t.Fatal(err)
+	} else if _, err := store.PinSlab(context.Background(), acc2, time.Time{}, params[2]); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert counts
+	assertAccountSlabs(acc1, 2)
+	assertAccountSlabs(acc2, 2)
+	assertCount("slabs", 3)
+	assertCount("sectors", 6)
+	assertCount("account_slabs", 4)
+
+	// unpinning a slab that's not pinned to an account should return [slabs.ErrNotFound]
+	err := store.UnpinSlab(context.Background(), acc2, slab1)
+	if !errors.Is(err, slabs.ErrSlabNotFound) {
+		t.Fatal("unexpected error:", err)
+	}
+
+	// unpin first slab
+	err = store.UnpinSlab(context.Background(), acc1, slab1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// assert counts
+	assertAccountSlabs(acc1, 1)
+	assertAccountSlabs(acc2, 2)
+	assertCount("slabs", 2)
+	assertCount("sectors", 4)
+	assertCount("account_slabs", 3)
+
+	// unpin second slab
+	err = store.UnpinSlab(context.Background(), acc1, slab2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// assert counts
+	assertAccountSlabs(acc1, 0)
+	assertAccountSlabs(acc2, 2)
+	assertCount("slabs", 2)
+	assertCount("sectors", 4)
+	assertCount("account_slabs", 2)
+
+	// unpin second slab on second account
+	err = store.UnpinSlab(context.Background(), acc2, slab2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// assert counts
+	assertAccountSlabs(acc1, 0)
+	assertAccountSlabs(acc2, 1)
+	assertCount("slabs", 1)
+	assertCount("sectors", 2)
+	assertCount("account_slabs", 1)
+
+	// unpin third slab on second account
+	err = store.UnpinSlab(context.Background(), acc2, slab3)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// assert counts
+	assertAccountSlabs(acc1, 0)
+	assertAccountSlabs(acc2, 0)
+	assertCount("slabs", 0)
+	assertCount("sectors", 0)
+	assertCount("account_slabs", 0)
 }
 
 func TestPinSectors(t *testing.T) {
@@ -647,16 +800,19 @@ func TestUnhealthySlabs(t *testing.T) {
 	}
 
 	// pin one sector to the contract - we should still not have any unhealthy sectors
-	if _, err := store.pool.Exec(context.Background(), "UPDATE sectors SET contract_sectors_map_id = 1 WHERE id = 1"); err != nil {
+	_, err = store.pool.Exec(context.Background(), "UPDATE sectors SET contract_sectors_map_id = 1 WHERE id = 1")
+	if err != nil {
 		t.Fatal(err)
 	}
+
 	_, err = store.UnhealthySlab(context.Background(), time.Now().Add(time.Hour))
 	if !errors.Is(err, slabs.ErrSlabNotFound) {
 		t.Fatal(err)
 	}
 
 	// update the contract to be bad
-	if _, err := store.pool.Exec(context.Background(), "UPDATE contracts SET good = FALSE"); err != nil {
+	_, err = store.pool.Exec(context.Background(), "UPDATE contracts SET good = FALSE")
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -681,7 +837,8 @@ func TestUnhealthySlabs(t *testing.T) {
 	}
 
 	// fix the contract again
-	if _, err := store.pool.Exec(context.Background(), "UPDATE contracts SET good = TRUE"); err != nil {
+	_, err = store.pool.Exec(context.Background(), "UPDATE contracts SET good = TRUE")
+	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = store.UnhealthySlab(context.Background(), time.Now().Add(-time.Hour))
@@ -690,7 +847,8 @@ func TestUnhealthySlabs(t *testing.T) {
 	}
 
 	// remove a sector from its host - the unhealthy slab should be back
-	if _, err := store.pool.Exec(context.Background(), "UPDATE sectors SET host_id = NULL WHERE id = 2"); err != nil {
+	_, err = store.pool.Exec(context.Background(), "UPDATE sectors SET host_id = NULL WHERE id = 2")
+	if err != nil {
 		t.Fatal(err)
 	}
 	unhealthyID, err = store.UnhealthySlab(context.Background(), time.Now())
@@ -1179,9 +1337,8 @@ func BenchmarkPinSectors(b *testing.B) {
 
 // BenchmarkUnhealthySlab benchmarks UnhealthySlab
 //
-//	CPU   |	  Count  |   Time/op
-//
-// M1 Max |   782   |    3.5 ms
+//	CPU    |  Count  |   Time/op
+//	M1 Max |   132   |   32.45 ms
 func BenchmarkUnhealthySlab(b *testing.B) {
 	store := initPostgres(b, zaptest.NewLogger(b).Named("postgres"))
 	account := proto.Account{1}
@@ -1284,6 +1441,82 @@ func BenchmarkUnhealthySlab(b *testing.B) {
 			b.Fatal("known slab was returned")
 		}
 		seenSlabs[slabID] = struct{}{}
+	}
+}
+
+// BenchmarkUnpinSlab precreates slabs and benchmarks the performance of
+// UnpinSlab. All slabs are referenced by the same account, every slab is only
+// referenced once, that means that unpinning the slab will delete the
+// reference, as well as the slab itself.
+//
+//	CPU    |   Count  |    Time/op
+//	M1 Max |    342   |    3.2 ms
+func BenchmarkUnpinSlab(b *testing.B) {
+	store := initPostgres(b, zap.NewNop())
+
+	// add account
+	account := proto.Account{1}
+	if err := store.AddAccount(context.Background(), types.PublicKey(account)); err != nil {
+		b.Fatal("failed to add account:", err)
+	}
+
+	// add host
+	hk := types.PublicKey{1}
+	ha := chain.NetAddress{Protocol: quic.Protocol, Address: "[::]:4848"}
+	if err := store.UpdateChainState(context.Background(), func(tx subscriber.UpdateTx) error {
+		return tx.AddHostAnnouncement(hk, chain.V2HostAnnouncement{ha}, time.Now())
+	}); err != nil {
+		b.Fatal(err)
+	}
+
+	// add contract
+	if err := store.AddFormedContract(context.Background(), types.FileContractID(hk), hk, 100, 200, types.Siacoins(1), types.Siacoins(1), types.Siacoins(1), types.Siacoins(1)); err != nil {
+		b.Fatal(err)
+	}
+
+	// prepare base db
+	const (
+		dbBaseSize = 1 << 40 // 1TiB of sectors
+		nSlabs     = dbBaseSize / (30 * proto.SectorSize)
+	)
+
+	// insert slabs
+	slabIDs := make([]slabs.SlabID, nSlabs)
+	sectors := make([]slabs.SectorPinParams, 30)
+	for i := range nSlabs {
+		for j := range 30 {
+			sectors[j] = slabs.SectorPinParams{
+				Root:    frand.Entropy256(),
+				HostKey: hk,
+			}
+		}
+		slabID, err := store.PinSlab(context.Background(), account, time.Time{}, slabs.SlabPinParams{
+			MinShards:     1,
+			EncryptionKey: frand.Entropy256(),
+			Sectors:       sectors,
+		})
+		if err != nil {
+			b.Fatal(err)
+		}
+		slabIDs[i] = slabID
+	}
+
+	var iter int
+	for b.Loop() {
+		rIdx := frand.Intn(len(slabIDs))
+		if err := store.UnpinSlab(context.Background(), account, slabIDs[rIdx]); err != nil {
+			b.Fatal(err)
+		}
+
+		slabIDs = slices.Delete(slabIDs, rIdx, rIdx+1)
+		if len(slabIDs) == 0 {
+			if iter < 100 {
+				b.Fatalf("expected at least 100 iterations, got %d", iter) // sanity check
+			}
+			b.StopTimer()
+			break // exhausted
+		}
+		iter++
 	}
 }
 
