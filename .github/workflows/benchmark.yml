@@ -46,7 +46,7 @@ jobs:
 
       - name: Run benchmarks
         run: |
-          go test -run='^$' -bench=. -count=5 -benchtime=50x -timeout=2h ./... 2>&1 | tee new_bench.txt
+          go test -run='^$' -bench=. -count=5 -benchtime=3s -timeout=2h ./... 2>&1 | tee new_bench.txt
 
       - name: Save latest benchmark as artifact
         uses: actions/upload-artifact@v4
@@ -69,7 +69,7 @@ jobs:
       - name: Compare benchmarks
         if: steps.lookup_baseline.outputs.baseline_found == 'true'
         run: |
-          benchstat baseline_bench.txt new_bench.txt > benchdiff.txt
+          benchstat -delta-test=none baseline_bench.txt new_bench.txt > benchdiff.txt
           cat benchdiff.txt
 
       - name: Fail on regression
