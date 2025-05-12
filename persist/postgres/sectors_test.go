@@ -999,12 +999,10 @@ func BenchmarkSlabs(b *testing.B) {
 		return slab
 	}
 
-	// prepare base db
-	const (
-		dbBaseSize = 1 << 40           // 1TiB of sectors
-		slabSize   = 40 * int64(1<<20) // 40MiB
-	)
+	const dbBaseSize = 1 << 40         // 1TiB of sectors
+	const slabSize = 40 * int64(1<<20) // 40MiB
 
+	// prepare base db
 	var initialSlabIDs []slabs.SlabID
 	for range dbBaseSize / slabSize {
 		slabID, err := store.PinSlab(context.Background(), account, time.Time{}, newSlab())
@@ -1017,7 +1015,6 @@ func BenchmarkSlabs(b *testing.B) {
 	runSlabsBenchmark := func(b *testing.B, nSlabs int) {
 		b.SetBytes(slabSize)
 		b.ResetTimer()
-
 		for b.Loop() {
 			b.StopTimer()
 			frand.Shuffle(len(initialSlabIDs), func(i, j int) {
@@ -1037,7 +1034,6 @@ func BenchmarkSlabs(b *testing.B) {
 	b.Run("PinSlab", func(b *testing.B) {
 		b.SetBytes(slabSize)
 		b.ResetTimer()
-
 		for b.Loop() {
 			_, err := store.PinSlab(context.Background(), proto.Account{1}, time.Time{}, newSlab())
 			if err != nil {
