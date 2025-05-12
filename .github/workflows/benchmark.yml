@@ -51,9 +51,9 @@ jobs:
             exit 1
           fi
       
-          # Check for known failure patterns
-          if grep -qE 'panic:|FAIL|fatal error' new_bench.txt; then
-            echo "Benchmark failed with panic or test failure"
+          # Fail on any FAIL, panic, or fatal error in output
+          if grep -E -m1 'FAIL|panic:|fatal error' new_bench.txt; then
+            echo "Detected failure pattern in benchmark output"
             exit 1
           fi
 
