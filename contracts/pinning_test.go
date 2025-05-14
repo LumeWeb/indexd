@@ -33,7 +33,7 @@ func newMockSectorPinner(hp proto.HostPrices, c Contractor) *mockSectorPinner {
 
 func (m *mockSectorPinner) PinSectors(ctx context.Context, contractIDs []types.FileContractID, sectors []types.Hash256, log *zap.Logger) (usedContractID types.FileContractID, missing []types.Hash256, _ error) {
 	for _, contractID := range contractIDs {
-		res, err := m.c.AppendSectors(ctx, nil, m.hp, contractID, sectors)
+		res, err := m.c.AppendSectors(ctx, m.hp, contractID, sectors)
 		if err != nil {
 			continue
 		} else if len(res.Sectors) == 0 {
@@ -71,7 +71,7 @@ type pinCall struct {
 	roots      []types.Hash256
 }
 
-func (c *contractorMock) AppendSectors(ctx context.Context, tc rhp.TransportClient, hostPrices proto.HostPrices, contractID types.FileContractID, sectors []types.Hash256) (rhp.RPCAppendSectorsResult, error) {
+func (c *contractorMock) AppendSectors(ctx context.Context, hostPrices proto.HostPrices, contractID types.FileContractID, sectors []types.Hash256) (rhp.RPCAppendSectorsResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -307,7 +307,8 @@ func TestPerformSectorPinningOnHost(t *testing.T) {
 	contractor.missingSectors[r4] = struct{}{}
 
 	// prepare contract manager
-	cm := newContractManager(types.PublicKey{}, nil, nil, contractor, nil, store, nil, nil)
+	dialer := newDialerMock()
+	cm := newContractManager(types.PublicKey{}, nil, nil, dialer, nil, store, nil, nil)
 
 	// pin sectors on h1
 	h1Prices := h1.Settings.Prices

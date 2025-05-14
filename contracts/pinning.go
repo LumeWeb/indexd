@@ -11,7 +11,6 @@ import (
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/rhp/v4"
-	"go.sia.tech/coreutils/rhp/v4/siamux"
 	"go.sia.tech/indexd/hosts"
 	"go.uber.org/zap"
 )
@@ -26,18 +25,9 @@ type (
 
 	sectorPinner struct {
 		contractor Contractor
-		tc         rhp.TransportClient
 		hp         proto.HostPrices
 	}
 )
-
-func newSectorPinner(ctx context.Context, contractor Contractor, hostAddr string, hostKey types.PublicKey, hostPrices proto.HostPrices) (*sectorPinner, error) {
-	tc, err := siamux.Dial(ctx, hostAddr, hostKey)
-	if err != nil {
-		return nil, err
-	}
-	return &sectorPinner{contractor: contractor, tc: tc, hp: hostPrices}, nil
-}
 
 // PinSectors pins a set of sectors using the given set of contracts The
 // contracts are tried in order, the contract ID that ends up being used is
@@ -47,7 +37,7 @@ func (p *sectorPinner) PinSectors(ctx context.Context, contractIDs []types.FileC
 		contractLog := log.With(zap.Stringer("contractID", contractID))
 
 		// try to pin sectors to the contract
-		res, err := p.contractor.AppendSectors(ctx, p.tc, p.hp, contractID, sectors)
+		res, err := p.contractor.AppendSectors(ctx, p.hp, contractID, sectors)
 		if err != nil {
 			contractLog.Debug("failed to pin sectors", zap.Error(err))
 			continue
@@ -80,18 +70,14 @@ func (p *sectorPinner) PinSectors(ctx context.Context, contractIDs []types.FileC
 	return types.FileContractID{}, nil, errors.New("no usable contract found")
 }
 
-func (p *sectorPinner) Close() error {
-	return p.tc.Close()
-}
-
-func (c *contractor) AppendSectors(ctx context.Context, tc rhp.TransportClient, hostPrices proto.HostPrices, contractID types.FileContractID, sectors []types.Hash256) (rhp.RPCAppendSectorsResult, error) {
+func (c *contractor) AppendSectors(ctx context.Context, hostPrices proto.HostPrices, contractID types.FileContractID, sectors []types.Hash256) (rhp.RPCAppendSectorsResult, error) {
 	// sanity check
 	if len(sectors) > proto.MaxSectorBatchSize {
 		return rhp.RPCAppendSectorsResult{}, fmt.Errorf("too many sectors, %d > %d", len(sectors), proto.MaxSectorBatchSize) // developer error
 	}
 
 	// fetch revision and check if it meets the requirements
-	rev, err := rhp.RPCLatestRevision(ctx, tc, contractID)
+	rev, err := rhp.RPCLatestRevision(ctx, c.client, contractID)
 	if err != nil {
 		return rhp.RPCAppendSectorsResult{}, fmt.Errorf("failed to fetch latest revision: %w", err)
 	} else if !rev.Revisable {
@@ -104,7 +90,7 @@ func (c *contractor) AppendSectors(ctx context.Context, tc rhp.TransportClient, 
 
 	// append sectors
 	revision := rhp.ContractRevision{ID: contractID, Revision: rev.Contract}
-	return rhp.RPCAppendSectors(ctx, tc, c.cm.TipState(), hostPrices, c.sk, revision, sectors)
+	return rhp.RPCAppendSectors(ctx, c.client, c.cm.TipState(), hostPrices, c.ownKey, revision, sectors)
 }
 
 func (cm *ContractManager) performSectorPinning(ctx context.Context, log *zap.Logger) error {
@@ -149,14 +135,14 @@ func (cm *ContractManager) performSectorPinning(ctx context.Context, log *zap.Lo
 					wg.Done()
 				}()
 
-				pinner, err := newSectorPinner(ctx, cm.contractor, host.SiamuxAddr(), host.PublicKey, host.Settings.Prices)
+				contractor, err := cm.dialer.NewContractor(ctx, host.PublicKey, host.SiamuxAddr())
 				if err != nil {
-					hostLog.Debug("failed to create sector pinner", zap.Error(err))
+					hostLog.Debug("failed to create contractor", zap.Error(err))
 					return
 				}
-				defer pinner.Close()
+				defer contractor.Close()
 
-				err = cm.performSectorPinningOnHost(ctx, pinner, host, hostLog)
+				err = cm.performSectorPinningOnHost(ctx, &sectorPinner{contractor: contractor, hp: host.Settings.Prices}, host, hostLog)
 				if err != nil {
 					hostLog.Debug("failed to pin sectors", zap.Error(err))
 				}
