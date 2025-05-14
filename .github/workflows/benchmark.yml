@@ -3,8 +3,6 @@ name: Benchmark Check
 on:
   push:
     branches: [ master ]
-  pull_request:
-    branches: [ master ]
 
 jobs:
   benchmark:
@@ -45,7 +43,7 @@ jobs:
         run: |
           set -euo pipefail
       
-          if ! go test -run='^$' -benchmem -benchtime=10x -bench=. -timeout=1h ./... 2>&1 | tee indexd_benchmarks.txt; then
+          if ! go test -run='^$' -benchmem -benchtime=200x -bench=. -timeout=2h ./... 2>&1 | tee indexd_benchmarks.txt; then
             echo "go test exited with an error"
             exit 1
           fi
