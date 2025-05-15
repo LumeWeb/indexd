@@ -56,7 +56,13 @@ func (cm *ContractManager) broadcastContractRevision(ctx context.Context, contra
 	}
 
 	// fetch the latest revision
-	resp, err := cm.contractor.LatestRevision(ctx, host.PublicKey, host.SiamuxAddr(), contractID)
+	hc, err := cm.dialer.Dial(ctx, host.PublicKey, host.SiamuxAddr())
+	if err != nil {
+		return fmt.Errorf("failed to dial host: %w", err)
+	}
+	defer hc.Close()
+
+	resp, err := hc.LatestRevision(ctx, contractID)
 	if err != nil {
 		log.Warn("failed to fetch latest revision", zap.Error(err))
 		return nil

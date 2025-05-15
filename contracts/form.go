@@ -7,7 +7,6 @@ import (
 
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
-	"go.sia.tech/coreutils/chain"
 	"go.sia.tech/coreutils/rhp/v4"
 	"go.sia.tech/coreutils/rhp/v4/siamux"
 	"go.sia.tech/indexd/hosts"
@@ -51,34 +50,60 @@ func (s *formContractSigner) SignV2Inputs(txn *types.V2Transaction, toSign []int
 	s.w.SignV2Inputs(txn, toSign)
 }
 
-type contractor struct {
-	cm     *chain.Manager
-	signer *formContractSigner
+// dialer is an interface for dialing a host.
+type dialer interface {
+	Dial(ctx context.Context, hostKey types.PublicKey, addr string) (HostClient, error)
 }
 
-// NewContractor creates a production Contractor that forms, refreshes and renews contracts by
-// dialing up hosts using the SiaMux protocol and fetching fresh settings right
-// before the RPC call.
-func NewContractor(cm *chain.Manager, w rhp.Wallet, renterKey types.PrivateKey) Contractor {
-	return &contractor{
-		cm: cm,
-		signer: &formContractSigner{
-			renterKey: renterKey,
-			w:         w,
-		},
+type hostClient struct {
+	cm      ChainManager
+	client  rhp.TransportClient
+	hostKey types.PublicKey
+	signer  *formContractSigner
+}
+
+type siamuxDialer struct {
+	cm     ChainManager
+	ownKey types.PrivateKey
+	w      rhp.Wallet
+}
+
+// newSiamuxDialer creates a new Dialer that uses the SiaMux protocol to dial a
+// host.
+func newSiamuxDialer(cm ChainManager, w rhp.Wallet, ownKey types.PrivateKey) dialer {
+	return &siamuxDialer{
+		cm:     cm,
+		ownKey: ownKey,
+		w:      w,
 	}
 }
 
-func (c *contractor) FormContract(ctx context.Context, hk types.PublicKey, addr string, settings proto.HostSettings, params proto.RPCFormContractParams) (rhp.RPCFormContractResult, error) {
-	dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
+// Dial creates a production HostClient that forms, refreshes and renews
+// contracts by dialing up hosts using the SiaMux protocol.
+func (d *siamuxDialer) Dial(ctx context.Context, hostKey types.PublicKey, addr string) (HostClient, error) {
+	ctx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
-	t, err := siamux.Dial(dialCtx, addr, hk)
+	client, err := siamux.Dial(ctx, addr, hostKey)
 	if err != nil {
-		return rhp.RPCFormContractResult{}, fmt.Errorf("failed to dial host: %w", err)
+		return nil, fmt.Errorf("failed to dial host: %w", err)
 	}
-	defer t.Close()
+	return &hostClient{
+		client:  client,
+		cm:      d.cm,
+		hostKey: hostKey,
+		signer: &formContractSigner{
+			renterKey: d.ownKey,
+			w:         d.w,
+		},
+	}, nil
+}
 
-	res, err := rhp.RPCFormContract(ctx, t, c.cm, c.signer, c.cm.TipState(), settings.Prices, hk, settings.WalletAddress, params)
+func (c *hostClient) Close() error {
+	return c.client.Close()
+}
+
+func (c *hostClient) FormContract(ctx context.Context, settings proto.HostSettings, params proto.RPCFormContractParams) (rhp.RPCFormContractResult, error) {
+	res, err := rhp.RPCFormContract(ctx, c.client, c.cm, c.signer, c.cm.TipState(), settings.Prices, c.hostKey, settings.WalletAddress, params)
 	if err != nil {
 		return rhp.RPCFormContractResult{}, fmt.Errorf("failed to form contract: %w", err)
 	}
@@ -86,15 +111,8 @@ func (c *contractor) FormContract(ctx context.Context, hk types.PublicKey, addr 
 	return res, nil
 }
 
-func (cf *contractor) LatestRevision(ctx context.Context, hk types.PublicKey, addr string, contractID types.FileContractID) (proto.RPCLatestRevisionResponse, error) {
-	dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
-	defer cancel()
-	t, err := siamux.Dial(dialCtx, addr, hk)
-	if err != nil {
-		return proto.RPCLatestRevisionResponse{}, fmt.Errorf("failed to dial host: %w", err)
-	}
-	defer t.Close()
-	return rhp.RPCLatestRevision(ctx, t, contractID)
+func (c *hostClient) LatestRevision(ctx context.Context, contractID types.FileContractID) (proto.RPCLatestRevisionResponse, error) {
+	return rhp.RPCLatestRevision(ctx, c.client, contractID)
 }
 
 // performContractFormation makes sure that we have at least 'wanted' good
@@ -217,11 +235,15 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 		if !isGood(host, hostLog) {
 			continue // ignore bad host
 		}
-		hostAddr := host.SiamuxAddr()
 
 		allowance, collateral := initialContractFunding(host.Settings.Prices, host.Settings.MaxCollateral, period)
 		formationCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		res, err := cm.contractor.FormContract(formationCtx, host.PublicKey, hostAddr, host.Settings, proto.RPCFormContractParams{
+		hc, err := cm.dialer.Dial(formationCtx, host.PublicKey, host.SiamuxAddr())
+		if err != nil {
+			cancel()
+			return fmt.Errorf("failed to dial host: %w", err)
+		}
+		res, err := hc.FormContract(formationCtx, host.Settings, proto.RPCFormContractParams{
 			RenterPublicKey: cm.renterKey,
 			RenterAddress:   cm.w.Address(),
 			Allowance:       allowance,
@@ -229,6 +251,7 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 			ProofHeight:     cm.cm.TipState().Index.Height + period,
 		})
 		cancel()
+		_ = hc.Close()
 		if err != nil {
 			hostLog.Error("failed to form contract", zap.Error(err))
 			continue
