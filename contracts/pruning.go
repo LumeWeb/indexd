@@ -89,7 +89,6 @@ func (cp *contractPruner) PruneContract(ctx context.Context, contractID types.Fi
 		if err != nil {
 			return pruned, fmt.Errorf("failed to prune contract sectors: %w", err)
 		}
-
 	}
 
 	return pruned, nil
