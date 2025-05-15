@@ -6,7 +6,6 @@ import (
 	"net"
 	"sort"
 	"testing"
-	"time"
 
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
@@ -14,7 +13,6 @@ import (
 	"go.sia.tech/coreutils/rhp/v4"
 	"go.sia.tech/coreutils/rhp/v4/siamux"
 	"go.sia.tech/indexd/hosts"
-	"go.sia.tech/indexd/slabs"
 	"go.uber.org/zap"
 	"lukechampine.com/frand"
 )
@@ -112,18 +110,6 @@ func (s *storeMock) ContractsForPinning(ctx context.Context, hk types.PublicKey,
 	return out, nil
 }
 
-func (s *storeMock) PinSlab(ctx context.Context, account proto.Account, nextIntegrityCheck time.Time, slab slabs.SlabPinParams) (slabs.SlabID, error) {
-	// only keep track of sectors
-	for _, sector := range slab.Sectors {
-		s.sectors[sector.HostKey] = append(s.sectors[sector.HostKey], slabs.Sector{
-			Root:       sector.Root,
-			ContractID: nil,
-			HostKey:    &sector.HostKey,
-		})
-	}
-	return slabs.SlabID{}, nil
-}
-
 func (s *storeMock) PinSectors(ctx context.Context, contractID types.FileContractID, roots []types.Hash256) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -148,8 +134,8 @@ func (s *storeMock) PinSectors(ctx context.Context, contractID types.FileContrac
 	// pin sectors
 	if updated, ok := s.sectors[hk]; ok {
 		for i, sector := range updated {
-			if _, ok := lookup[sector.Root]; ok {
-				updated[i].ContractID = &contractID
+			if _, ok := lookup[sector.root]; ok {
+				updated[i].contractID = &contractID
 			}
 		}
 		s.sectors[hk] = updated
@@ -173,12 +159,8 @@ func (s *storeMock) MarkSectorsLost(ctx context.Context, hk types.PublicKey, roo
 		panic("no host sectors found")
 	}
 	for i, sector := range updated {
-		if _, ok := lookup[sector.Root]; ok {
-			if sector.HostKey == nil || *sector.HostKey != hk {
-				panic("sector host key mismatch")
-			}
-			updated[i].HostKey = nil
-			updated[i].ContractID = nil
+		if _, ok := lookup[sector.root]; ok {
+			updated[i].contractID = nil
 		}
 	}
 	s.sectors[hk] = updated
@@ -195,8 +177,8 @@ func (s *storeMock) UnpinnedSectors(ctx context.Context, hostKey types.PublicKey
 	}
 	var unpinned []types.Hash256
 	for _, sector := range sectors {
-		if sector.ContractID == nil {
-			unpinned = append(unpinned, sector.Root)
+		if sector.contractID == nil {
+			unpinned = append(unpinned, sector.root)
 		}
 	}
 	if len(unpinned) > limit {
@@ -269,38 +251,27 @@ func TestPerformSectorPinningOnHost(t *testing.T) {
 	r7 := types.Hash256{7}
 	r8 := types.Hash256{8}
 
-	// pin sectors for h1
-	_, err := store.PinSlab(context.Background(), proto.Account{}, time.Time{}, slabs.SlabPinParams{
-		EncryptionKey: [32]byte{},
-		MinShards:     10,
-		Sectors: []slabs.SectorPinParams{
-			{Root: r1, HostKey: hk1},
-			{Root: r2, HostKey: hk1},
-			{Root: r3, HostKey: hk1},
-			{Root: r4, HostKey: hk1},
-			{Root: r5, HostKey: hk1},
-			{Root: r6, HostKey: hk1},
-		},
-	})
-	// pin sectors for h2
-	_, err = store.PinSlab(context.Background(), proto.Account{}, time.Time{}, slabs.SlabPinParams{
-		EncryptionKey: [32]byte{},
-		MinShards:     10,
-		Sectors: []slabs.SectorPinParams{
-			{Root: r7, HostKey: hk2},
-			{Root: r8, HostKey: hk2},
-		},
-	})
+	// prepare sectors for h1
+	store.sectors[hk1] = []sector{
+		{root: r1},
+		{root: r2},
+		{root: r3},
+		{root: r4},
+		{root: r5},
+		{root: r6},
+	}
 
-	// pin sectors for h3 - these will remain unpinned
-	_, err = store.PinSlab(context.Background(), proto.Account{}, time.Time{}, slabs.SlabPinParams{
-		EncryptionKey: [32]byte{},
-		MinShards:     10,
-		Sectors: []slabs.SectorPinParams{
-			{Root: frand.Entropy256(), HostKey: types.PublicKey{3}},
-			{Root: frand.Entropy256(), HostKey: types.PublicKey{3}},
-		},
-	})
+	// prepare sectors for h2
+	store.sectors[hk2] = []sector{
+		{root: r7},
+		{root: r8},
+	}
+
+	// prepare sectors for h3 - these will remain unpinned
+	store.sectors[types.PublicKey{3}] = []sector{
+		{root: frand.Entropy256()},
+		{root: frand.Entropy256()},
+	}
 
 	// indicate that root 4 is missing
 	host := newHostClientMock()
@@ -312,7 +283,7 @@ func TestPerformSectorPinningOnHost(t *testing.T) {
 
 	// pin sectors on h1
 	h1Prices := h1.Settings.Prices
-	err = cm.performSectorPinningOnHost(context.Background(), newMockSectorPinner(host, h1Prices), h1, zap.NewNop())
+	err := cm.performSectorPinningOnHost(context.Background(), newMockSectorPinner(host, h1Prices), h1, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,17 +322,17 @@ func TestPerformSectorPinningOnHost(t *testing.T) {
 		t.Fatalf("expected sectors for host %v", hk1)
 	} else {
 		for _, sector := range h1Sectors {
-			switch sector.Root {
+			switch sector.root {
 			case r1, r2, r3, r5, r6:
-				if *sector.ContractID != fcid2 {
-					t.Fatalf("expected contract ID %v, got %v", fcid2, *sector.ContractID)
+				if *sector.contractID != fcid2 {
+					t.Fatalf("expected contract ID %v, got %v", fcid2, *sector.contractID)
 				}
 			case r4:
-				if sector.ContractID != nil {
-					t.Fatalf("expected unpinned sector, got %v", *sector.ContractID)
+				if sector.contractID != nil {
+					t.Fatalf("expected unpinned sector, got %v", *sector.contractID)
 				}
 			default:
-				t.Fatalf("unexpected root %v", sector.Root)
+				t.Fatalf("unexpected root %v", sector.root)
 			}
 		}
 	}
@@ -370,13 +341,13 @@ func TestPerformSectorPinningOnHost(t *testing.T) {
 		t.Fatalf("expected sectors for host %v", hk2)
 	} else {
 		for _, sector := range h2Sectors {
-			switch sector.Root {
+			switch sector.root {
 			case r7, r8:
-				if *sector.ContractID != fcid3 {
-					t.Fatalf("expected contract ID %v, got %v", fcid3, *sector.ContractID)
+				if *sector.contractID != fcid3 {
+					t.Fatalf("expected contract ID %v, got %v", fcid3, *sector.contractID)
 				}
 			default:
-				t.Fatalf("unexpected root %v", sector.Root)
+				t.Fatalf("unexpected root %v", sector.root)
 			}
 		}
 	}
@@ -388,8 +359,8 @@ func TestPerformSectorPinningOnHost(t *testing.T) {
 			t.Fatalf("expected 2 sectors, got %v", len(h3Sectors))
 		}
 		for _, sector := range h3Sectors {
-			if sector.ContractID != nil {
-				t.Fatalf("expected unpinned sector, got %v", *sector.ContractID)
+			if sector.contractID != nil {
+				t.Fatalf("expected unpinned sector, got %v", *sector.contractID)
 			}
 		}
 	}

@@ -18,7 +18,6 @@ import (
 	"go.sia.tech/coreutils/syncer"
 	"go.sia.tech/coreutils/wallet"
 	"go.sia.tech/indexd/hosts"
-	"go.sia.tech/indexd/slabs"
 )
 
 type mockProofUpdater struct {
@@ -38,13 +37,18 @@ type storeMock struct {
 
 	mu        sync.Mutex
 	contracts []Contract
-	sectors   map[types.PublicKey][]slabs.Sector
+	sectors   map[types.PublicKey][]sector
+}
+
+type sector struct {
+	root       types.Hash256
+	contractID *types.FileContractID
 }
 
 func newStoreMock() *storeMock {
 	return &storeMock{
 		hosts:   make(map[types.PublicKey]hosts.Host),
-		sectors: make(map[types.PublicKey][]slabs.Sector),
+		sectors: make(map[types.PublicKey][]sector),
 	}
 }
 
