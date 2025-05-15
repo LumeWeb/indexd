@@ -380,15 +380,17 @@ WHERE contract_id = $6
 	})
 }
 
-// PrunableContractRoots returns the indices of the roots that are not present
-// in the database, and thus can be pruned.
-func (s *Store) PrunableContractRoots(ctx context.Context, hostKey types.PublicKey, contractID types.FileContractID, roots []types.Hash256) ([]uint64, error) {
+// PrunableContractRoots diffs the given roots with the roots in the database
+// and returns the roots that can be pruned.
+func (s *Store) PrunableContractRoots(ctx context.Context, hostKey types.PublicKey, contractID types.FileContractID, roots []types.Hash256) ([]types.Hash256, error) {
+	copied := append([]types.Hash256(nil), roots...)
+
 	var sqlRoots []sqlHash256
-	for _, root := range roots {
+	for _, root := range copied {
 		sqlRoots = append(sqlRoots, sqlHash256(root))
 	}
 
-	var indices []uint64
+	var prunable []types.Hash256
 	if err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
 		rows, err := tx.Query(ctx, `
 			SELECT s.sector_root
@@ -413,9 +415,10 @@ func (s *Store) PrunableContractRoots(ctx context.Context, hostKey types.PublicK
 			return fmt.Errorf("failed to iterate over rows: %w", err)
 		}
 
-		for idx, root := range roots {
+		prunable = copied[:0]
+		for _, root := range copied {
 			if _, ok := lookup[sqlHash256(root)]; !ok {
-				indices = append(indices, uint64(idx))
+				prunable = append(prunable, root)
 			}
 		}
 		return nil
@@ -423,7 +426,7 @@ func (s *Store) PrunableContractRoots(ctx context.Context, hostKey types.PublicK
 		return nil, err
 	}
 
-	return indices, nil
+	return prunable, nil
 }
 
 func (tx *updateTx) UpdateContractElements(fces ...types.V2FileContractElement) error {

@@ -543,14 +543,14 @@ func TestPrunableContractRoots(t *testing.T) {
 	}
 
 	// assert prunable roots for both contracts
-	if indices, err := store.PrunableContractRoots(context.Background(), hk1, fcid1, roots[:2]); err != nil {
+	if prunable, err := store.PrunableContractRoots(context.Background(), hk1, fcid1, roots[:2]); err != nil {
 		t.Fatal(err)
-	} else if len(indices) != 1 || indices[0] != 1 {
-		t.Fatalf("unexpected prunable indices, %+v", indices)
-	} else if indices, err := store.PrunableContractRoots(context.Background(), hk2, fcid2, roots[2:]); err != nil {
+	} else if len(prunable) != 1 || prunable[0] != roots[1] {
+		t.Fatalf("unexpected prunable roots, %+v", prunable)
+	} else if prunable, err := store.PrunableContractRoots(context.Background(), hk2, fcid2, roots[2:]); err != nil {
 		t.Fatal(err)
-	} else if len(indices) != 1 || indices[0] != 1 {
-		t.Fatalf("unexpected prunable indices, %+v", indices)
+	} else if len(prunable) != 1 || prunable[0] != roots[3] {
+		t.Fatalf("unexpected prunable roots, %+v", prunable)
 	}
 }
 
@@ -1633,11 +1633,12 @@ func BenchmarkPrunableContractRoots(b *testing.B) {
 			b.SetBytes(batchSize * proto.SectorSize)
 			for b.Loop() {
 				hk := hks[frand.Intn(len(hks))]
-				indices, err := store.PrunableContractRoots(context.Background(), hk, types.FileContractID(hk), rootsByContract[types.FileContractID(hk)][:batchSize])
+				fcid := types.FileContractID(hk)
+				prunable, err := store.PrunableContractRoots(context.Background(), hk, fcid, rootsByContract[fcid][:batchSize])
 				if err != nil {
 					b.Fatal(err)
-				} else if len(indices) == 0 || len(indices) == int(batchSize) {
-					b.Fatal("unexpected number of indices", len(indices)) // assert it's not empty or all
+				} else if len(prunable) == 0 || len(prunable) == int(batchSize) {
+					b.Fatal("unexpected number of prunable roots", len(prunable)) // assert it's not empty or all
 				}
 			}
 		})
