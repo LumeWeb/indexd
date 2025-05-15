@@ -382,12 +382,11 @@ WHERE contract_id = $6
 
 // PrunableContractRoots diffs the given roots with the roots in the database
 // and returns the roots that can be pruned.
-func (s *Store) PrunableContractRoots(ctx context.Context, hostKey types.PublicKey, contractID types.FileContractID, roots []types.Hash256) ([]types.Hash256, error) {
+func (s *Store) PrunableContractRoots(ctx context.Context, contractID types.FileContractID, roots []types.Hash256) ([]types.Hash256, error) {
 	var sqlRoots []sqlHash256
 	for _, root := range roots {
 		sqlRoots = append(sqlRoots, sqlHash256(root))
 	}
-	_ = hostKey
 
 	prunable := make([]types.Hash256, 0, len(roots))
 	if err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {

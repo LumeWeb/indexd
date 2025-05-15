@@ -527,11 +527,11 @@ func TestPrunableContractRoots(t *testing.T) {
 	}
 
 	// assert no prunable roots for either contract
-	if indices, err := store.PrunableContractRoots(context.Background(), hk1, fcid1, roots[:2]); err != nil {
+	if indices, err := store.PrunableContractRoots(context.Background(), fcid1, roots[:2]); err != nil {
 		t.Fatal(err)
 	} else if len(indices) != 0 {
 		t.Fatalf("unexpected prunable indices, %+v", indices)
-	} else if indices, err := store.PrunableContractRoots(context.Background(), hk2, fcid2, roots[2:]); err != nil {
+	} else if indices, err := store.PrunableContractRoots(context.Background(), fcid2, roots[2:]); err != nil {
 		t.Fatal(err)
 	} else if len(indices) != 0 {
 		t.Fatalf("unexpected prunable indices, %+v", indices)
@@ -543,11 +543,11 @@ func TestPrunableContractRoots(t *testing.T) {
 	}
 
 	// assert prunable roots for both contracts
-	if prunable, err := store.PrunableContractRoots(context.Background(), hk1, fcid1, roots[:2]); err != nil {
+	if prunable, err := store.PrunableContractRoots(context.Background(), fcid1, roots[:2]); err != nil {
 		t.Fatal(err)
 	} else if len(prunable) != 1 || prunable[0] != roots[1] {
 		t.Fatalf("unexpected prunable roots, %+v", prunable)
-	} else if prunable, err := store.PrunableContractRoots(context.Background(), hk2, fcid2, roots[2:]); err != nil {
+	} else if prunable, err := store.PrunableContractRoots(context.Background(), fcid2, roots[2:]); err != nil {
 		t.Fatal(err)
 	} else if len(prunable) != 1 || prunable[0] != roots[3] {
 		t.Fatalf("unexpected prunable roots, %+v", prunable)
@@ -1632,9 +1632,8 @@ func BenchmarkPrunableContractRoots(b *testing.B) {
 			b.ResetTimer()
 			b.SetBytes(batchSize * proto.SectorSize)
 			for b.Loop() {
-				hk := hks[frand.Intn(len(hks))]
-				fcid := types.FileContractID(hk)
-				prunable, err := store.PrunableContractRoots(context.Background(), hk, fcid, rootsByContract[fcid][:batchSize])
+				fcid := types.FileContractID(hks[frand.Intn(len(hks))])
+				prunable, err := store.PrunableContractRoots(context.Background(), fcid, rootsByContract[fcid][:batchSize])
 				if err != nil {
 					b.Fatal(err)
 				} else if len(prunable) == 0 || len(prunable) == int(batchSize) {
