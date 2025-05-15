@@ -224,8 +224,7 @@ func TestPerformSectorPinningOnHost(t *testing.T) {
 	host.missingSectors[r4] = struct{}{}
 
 	// prepare contract manager
-	dialer := newDialerMock()
-	cm := newContractManager(types.PublicKey{}, nil, nil, dialer, nil, store, nil, nil)
+	cm := newContractManager(types.PublicKey{}, nil, nil, newDialerMock(), nil, store, nil, nil)
 
 	// pin sectors on h1
 	h1Prices := h1.Settings.Prices
