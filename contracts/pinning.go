@@ -24,8 +24,8 @@ type (
 	}
 
 	sectorPinner struct {
-		contractor Contractor
-		hp         proto.HostPrices
+		host   HostClient
+		prices proto.HostPrices
 	}
 )
 
@@ -37,7 +37,7 @@ func (p *sectorPinner) PinSectors(ctx context.Context, contractIDs []types.FileC
 		contractLog := log.With(zap.Stringer("contractID", contractID))
 
 		// try to pin sectors to the contract
-		res, err := p.contractor.AppendSectors(ctx, p.hp, contractID, sectors)
+		res, err := p.host.AppendSectors(ctx, p.prices, contractID, sectors)
 		if err != nil {
 			contractLog.Debug("failed to pin sectors", zap.Error(err))
 			continue
@@ -70,7 +70,7 @@ func (p *sectorPinner) PinSectors(ctx context.Context, contractIDs []types.FileC
 	return types.FileContractID{}, nil, errors.New("no usable contract found")
 }
 
-func (c *contractor) AppendSectors(ctx context.Context, hostPrices proto.HostPrices, contractID types.FileContractID, sectors []types.Hash256) (rhp.RPCAppendSectorsResult, error) {
+func (c *hostClient) AppendSectors(ctx context.Context, hostPrices proto.HostPrices, contractID types.FileContractID, sectors []types.Hash256) (rhp.RPCAppendSectorsResult, error) {
 	// sanity check
 	if len(sectors) > proto.MaxSectorBatchSize {
 		return rhp.RPCAppendSectorsResult{}, fmt.Errorf("too many sectors, %d > %d", len(sectors), proto.MaxSectorBatchSize) // developer error
@@ -135,14 +135,14 @@ func (cm *ContractManager) performSectorPinning(ctx context.Context, log *zap.Lo
 					wg.Done()
 				}()
 
-				contractor, err := cm.dialer.NewContractor(ctx, host.PublicKey, host.SiamuxAddr())
+				client, err := cm.dialer.Dial(ctx, host.PublicKey, host.SiamuxAddr())
 				if err != nil {
 					hostLog.Debug("failed to create contractor", zap.Error(err))
 					return
 				}
-				defer contractor.Close()
+				defer client.Close()
 
-				err = cm.performSectorPinningOnHost(ctx, &sectorPinner{contractor: contractor, hp: host.Settings.Prices}, host, hostLog)
+				err = cm.performSectorPinningOnHost(ctx, &sectorPinner{host: client, prices: host.Settings.Prices}, host, hostLog)
 				if err != nil {
 					hostLog.Debug("failed to pin sectors", zap.Error(err))
 				}

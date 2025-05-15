@@ -11,7 +11,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func (c *contractor) LatestRevision(ctx context.Context, contractID types.FileContractID) (proto.RPCLatestRevisionResponse, error) {
+func (c *hostClient) LatestRevision(ctx context.Context, contractID types.FileContractID) (proto.RPCLatestRevisionResponse, error) {
 	return rhp.RPCLatestRevision(ctx, c.client, contractID)
 }
 
@@ -62,13 +62,13 @@ func (cm *ContractManager) broadcastContractRevision(ctx context.Context, contra
 	}
 
 	// fetch the latest revision
-	contractor, err := cm.dialer.NewContractor(ctx, host.PublicKey, host.SiamuxAddr())
+	hc, err := cm.dialer.Dial(ctx, host.PublicKey, host.SiamuxAddr())
 	if err != nil {
-		return fmt.Errorf("failed to create contractor: %w", err)
+		return fmt.Errorf("failed to dial host: %w", err)
 	}
-	defer contractor.Close()
+	defer hc.Close()
 
-	resp, err := contractor.LatestRevision(ctx, contractID)
+	resp, err := hc.LatestRevision(ctx, contractID)
 	if err != nil {
 		log.Warn("failed to fetch latest revision", zap.Error(err))
 		return nil

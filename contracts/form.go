@@ -52,10 +52,10 @@ func (s *formContractSigner) SignV2Inputs(txn *types.V2Transaction, toSign []int
 
 // dialer is an interface for dialing a host.
 type dialer interface {
-	NewContractor(ctx context.Context, hostKey types.PublicKey, addr string) (Contractor, error)
+	Dial(ctx context.Context, hostKey types.PublicKey, addr string) (HostClient, error)
 }
 
-type contractor struct {
+type hostClient struct {
 	cm      ChainManager
 	client  rhp.TransportClient
 	hostKey types.PublicKey
@@ -79,16 +79,16 @@ func newSiamuxDialer(cm ChainManager, w rhp.Wallet, ownKey types.PrivateKey) dia
 	}
 }
 
-// NewContractor creates a production Contractor that forms, refreshes and renews contracts by
-// dialing up hosts using the SiaMux protocol.
-func (d *siamuxDialer) NewContractor(ctx context.Context, hostKey types.PublicKey, addr string) (Contractor, error) {
+// Dial creates a production HostClient that forms, refreshes and renews
+// contracts by dialing up hosts using the SiaMux protocol.
+func (d *siamuxDialer) Dial(ctx context.Context, hostKey types.PublicKey, addr string) (HostClient, error) {
 	ctx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
 	client, err := siamux.Dial(ctx, addr, hostKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial host: %w", err)
 	}
-	return &contractor{
+	return &hostClient{
 		client:  client,
 		cm:      d.cm,
 		hostKey: hostKey,
@@ -100,11 +100,11 @@ func (d *siamuxDialer) NewContractor(ctx context.Context, hostKey types.PublicKe
 	}, nil
 }
 
-func (c *contractor) Close() error {
+func (c *hostClient) Close() error {
 	return c.client.Close()
 }
 
-func (c *contractor) FormContract(ctx context.Context, settings proto.HostSettings, params proto.RPCFormContractParams) (rhp.RPCFormContractResult, error) {
+func (c *hostClient) FormContract(ctx context.Context, settings proto.HostSettings, params proto.RPCFormContractParams) (rhp.RPCFormContractResult, error) {
 	res, err := rhp.RPCFormContract(ctx, c.client, c.cm, c.signer, c.cm.TipState(), settings.Prices, c.hostKey, settings.WalletAddress, params)
 	if err != nil {
 		return rhp.RPCFormContractResult{}, fmt.Errorf("failed to form contract: %w", err)
@@ -236,12 +236,12 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 
 		allowance, collateral := initialContractFunding(host.Settings.Prices, host.Settings.MaxCollateral, period)
 		formationCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		contractor, err := cm.dialer.NewContractor(formationCtx, host.PublicKey, host.SiamuxAddr())
+		hc, err := cm.dialer.Dial(formationCtx, host.PublicKey, host.SiamuxAddr())
 		if err != nil {
 			cancel()
-			return fmt.Errorf("failed to create contractor: %w", err)
+			return fmt.Errorf("failed to dial host: %w", err)
 		}
-		res, err := contractor.FormContract(formationCtx, host.Settings, proto.RPCFormContractParams{
+		res, err := hc.FormContract(formationCtx, host.Settings, proto.RPCFormContractParams{
 			RenterPublicKey: cm.renterKey,
 			RenterAddress:   cm.w.Address(),
 			Allowance:       allowance,
@@ -249,7 +249,7 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 			ProofHeight:     cm.cm.TipState().Index.Height + period,
 		})
 		cancel()
-		_ = contractor.Close()
+		_ = hc.Close()
 		if err != nil {
 			hostLog.Error("failed to form contract", zap.Error(err))
 			continue

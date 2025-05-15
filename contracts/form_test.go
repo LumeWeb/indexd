@@ -40,30 +40,30 @@ type formContractCall struct {
 }
 
 type dialerMock struct {
-	contractor map[types.PublicKey]*contractorMock
+	clients map[types.PublicKey]*hostClientMock
 }
 
 func newDialerMock() *dialerMock {
 	return &dialerMock{
-		contractor: make(map[types.PublicKey]*contractorMock),
+		clients: make(map[types.PublicKey]*hostClientMock),
 	}
 }
 
-func (d *dialerMock) Contractor(hostKey types.PublicKey) *contractorMock {
-	if _, ok := d.contractor[hostKey]; !ok {
-		d.contractor[hostKey] = newContractorMock()
+func (d *dialerMock) HostClient(hostKey types.PublicKey) *hostClientMock {
+	if _, ok := d.clients[hostKey]; !ok {
+		d.clients[hostKey] = newHostClientMock()
 	}
-	return d.contractor[hostKey]
+	return d.clients[hostKey]
 }
 
-func (d *dialerMock) NewContractor(ctx context.Context, hostKey types.PublicKey, addr string) (Contractor, error) {
-	if _, ok := d.contractor[hostKey]; !ok {
-		d.contractor[hostKey] = newContractorMock()
+func (d *dialerMock) Dial(ctx context.Context, hostKey types.PublicKey, addr string) (HostClient, error) {
+	if _, ok := d.clients[hostKey]; !ok {
+		d.clients[hostKey] = newHostClientMock()
 	}
-	return d.contractor[hostKey], nil
+	return d.clients[hostKey], nil
 }
 
-type contractorMock struct {
+type hostClientMock struct {
 	formCalls       []formContractCall
 	refreshCalls    []refreshContractCall
 	renewCalls      []renewContractCall
@@ -74,22 +74,22 @@ type contractorMock struct {
 	missingSectors    map[types.Hash256]struct{}
 }
 
-func newContractorMock() *contractorMock {
-	return &contractorMock{
+func newHostClientMock() *hostClientMock {
+	return &hostClientMock{
 		latestRevisions: map[types.FileContractID]proto.RPCLatestRevisionResponse{},
 		missingSectors:  map[types.Hash256]struct{}{},
 	}
 }
 
-func (c *contractorMock) Close() error {
+func (c *hostClientMock) Close() error {
 	return nil
 }
 
-func (c *contractorMock) Calls() []formContractCall {
+func (c *hostClientMock) Calls() []formContractCall {
 	return slices.Clone(c.formCalls)
 }
 
-func (c *contractorMock) FormContract(ctx context.Context, settings proto.HostSettings, params proto.RPCFormContractParams) (rhp.RPCFormContractResult, error) {
+func (c *hostClientMock) FormContract(ctx context.Context, settings proto.HostSettings, params proto.RPCFormContractParams) (rhp.RPCFormContractResult, error) {
 	c.formCalls = append(c.formCalls, formContractCall{
 		settings: settings,
 		params:   params,
@@ -113,7 +113,7 @@ func (c *contractorMock) FormContract(ctx context.Context, settings proto.HostSe
 	}, nil
 }
 
-func (c *contractorMock) LatestRevision(ctx context.Context, contractID types.FileContractID) (proto.RPCLatestRevisionResponse, error) {
+func (c *hostClientMock) LatestRevision(ctx context.Context, contractID types.FileContractID) (proto.RPCLatestRevisionResponse, error) {
 	resp, ok := c.latestRevisions[contractID]
 	if !ok {
 		return proto.RPCLatestRevisionResponse{}, fmt.Errorf("contract %v not found", contractID)
@@ -246,7 +246,7 @@ func TestPerformContractFormationWithoutContracts(t *testing.T) {
 
 	assertFormation := func(h hosts.Host) {
 		t.Helper()
-		call := dialer.Contractor(h.PublicKey).Calls()[0]
+		call := dialer.HostClient(h.PublicKey).Calls()[0]
 		if call.settings != goodSettings {
 			t.Fatalf("expected settings %v+, got %v+", goodSettings, call.settings)
 		}
@@ -273,7 +273,7 @@ func TestPerformContractFormationWithoutContracts(t *testing.T) {
 	// assert that we attempted to form contracts with the right hosts,
 	// settings and params
 	var nCalls int
-	for _, calls := range dialer.contractor {
+	for _, calls := range dialer.clients {
 		nCalls += len(calls.formCalls)
 	}
 	if nCalls != wanted {
@@ -411,7 +411,7 @@ func TestPerformContractFormationWithContracts(t *testing.T) {
 
 	assertFormation := func(h hosts.Host) {
 		t.Helper()
-		call := dialer.Contractor(h.PublicKey).Calls()[0]
+		call := dialer.HostClient(h.PublicKey).Calls()[0]
 		if call.settings != goodSettings {
 			t.Fatalf("expected settings %v+, got %v+", goodSettings, call.settings)
 		}
@@ -438,7 +438,7 @@ func TestPerformContractFormationWithContracts(t *testing.T) {
 	// assert that we attempted to form contracts with the right hosts,
 	// settings and params
 	var nCalls int
-	for _, calls := range dialer.contractor {
+	for _, calls := range dialer.clients {
 		nCalls += len(calls.formCalls)
 	}
 	if nCalls != wanted-1 {

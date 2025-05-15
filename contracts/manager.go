@@ -46,9 +46,9 @@ type (
 		V2TransactionSet(basis types.ChainIndex, txn types.V2Transaction) (types.ChainIndex, []types.V2Transaction, error)
 	}
 
-	// Contractor defines the dependencies required to form, renew and refresh
-	// contracts. It also provides a way to pin sectors to a contract.
-	Contractor interface {
+	// HostClient defines the dependencies required to form, renew and refresh
+	// contracts.
+	HostClient interface {
 		io.Closer
 		AppendSectors(ctx context.Context, hostPrices proto.HostPrices, contractID types.FileContractID, sectors []types.Hash256) (rhp.RPCAppendSectorsResult, error)
 		FormContract(ctx context.Context, settings proto.HostSettings, params proto.RPCFormContractParams) (rhp.RPCFormContractResult, error)
@@ -472,13 +472,13 @@ func (cm *ContractManager) syncContract(ctx context.Context, contract Contract, 
 	revisionCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
-	contractor, err := cm.dialer.NewContractor(ctx, host.PublicKey, host.SiamuxAddr())
+	hc, err := cm.dialer.Dial(ctx, host.PublicKey, host.SiamuxAddr())
 	if err != nil {
-		contractLog.Warn("failed to create contractor", zap.Error(err))
+		contractLog.Warn("failed to dial host", zap.Error(err))
 		return err
 	}
-	defer contractor.Close()
-	resp, err := contractor.LatestRevision(revisionCtx, contract.ID)
+	defer hc.Close()
+	resp, err := hc.LatestRevision(revisionCtx, contract.ID)
 	if err != nil {
 		contractLog.Warn("failed to fetch latest revision", zap.Error(err))
 		return nil

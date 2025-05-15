@@ -20,20 +20,20 @@ import (
 )
 
 type mockSectorPinner struct {
-	hp proto.HostPrices
-	c  Contractor
+	host   HostClient
+	prices proto.HostPrices
 }
 
-func newMockSectorPinner(hp proto.HostPrices, c Contractor) *mockSectorPinner {
+func newMockSectorPinner(hc HostClient, hp proto.HostPrices) *mockSectorPinner {
 	return &mockSectorPinner{
-		hp: hp,
-		c:  c,
+		host:   hc,
+		prices: hp,
 	}
 }
 
 func (m *mockSectorPinner) PinSectors(ctx context.Context, contractIDs []types.FileContractID, sectors []types.Hash256, log *zap.Logger) (usedContractID types.FileContractID, missing []types.Hash256, _ error) {
 	for _, contractID := range contractIDs {
-		res, err := m.c.AppendSectors(ctx, m.hp, contractID, sectors)
+		res, err := m.host.AppendSectors(ctx, m.prices, contractID, sectors)
 		if err != nil {
 			continue
 		} else if len(res.Sectors) == 0 {
@@ -71,7 +71,7 @@ type pinCall struct {
 	roots      []types.Hash256
 }
 
-func (c *contractorMock) AppendSectors(ctx context.Context, hostPrices proto.HostPrices, contractID types.FileContractID, sectors []types.Hash256) (rhp.RPCAppendSectorsResult, error) {
+func (c *hostClientMock) AppendSectors(ctx context.Context, hostPrices proto.HostPrices, contractID types.FileContractID, sectors []types.Hash256) (rhp.RPCAppendSectorsResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -303,8 +303,8 @@ func TestPerformSectorPinningOnHost(t *testing.T) {
 	})
 
 	// indicate that root 4 is missing
-	contractor := newContractorMock()
-	contractor.missingSectors[r4] = struct{}{}
+	host := newHostClientMock()
+	host.missingSectors[r4] = struct{}{}
 
 	// prepare contract manager
 	dialer := newDialerMock()
@@ -312,15 +312,15 @@ func TestPerformSectorPinningOnHost(t *testing.T) {
 
 	// pin sectors on h1
 	h1Prices := h1.Settings.Prices
-	err = cm.performSectorPinningOnHost(context.Background(), newMockSectorPinner(h1Prices, contractor), h1, zap.NewNop())
+	err = cm.performSectorPinningOnHost(context.Background(), newMockSectorPinner(host, h1Prices), h1, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// assert sector pinning on h1
-	if len(contractor.appendSectorCalls) != 1 {
-		t.Fatalf("expected one call, got %v", len(contractor.appendSectorCalls))
-	} else if call := contractor.appendSectorCalls[0]; call.hostPrices != h1Prices {
+	if len(host.appendSectorCalls) != 1 {
+		t.Fatalf("expected one call, got %v", len(host.appendSectorCalls))
+	} else if call := host.appendSectorCalls[0]; call.hostPrices != h1Prices {
 		t.Fatalf("unexpected host prices %v, expected %v", call.hostPrices, h1Prices)
 	} else if call.contractID != fcid2 {
 		t.Fatalf("unexpected contract ID %v, expected %v", call.contractID, fcid2)
@@ -330,15 +330,15 @@ func TestPerformSectorPinningOnHost(t *testing.T) {
 
 	// pin sectors on h2
 	h2Prices := h2.Settings.Prices
-	err = cm.performSectorPinningOnHost(context.Background(), newMockSectorPinner(h2Prices, contractor), h2, zap.NewNop())
+	err = cm.performSectorPinningOnHost(context.Background(), newMockSectorPinner(host, h2Prices), h2, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// assert sector pinning on h2
-	if len(contractor.appendSectorCalls) != 2 {
-		t.Fatalf("expected two calls, got %v", len(contractor.appendSectorCalls))
-	} else if call := contractor.appendSectorCalls[1]; call.hostPrices != h2Prices {
+	if len(host.appendSectorCalls) != 2 {
+		t.Fatalf("expected two calls, got %v", len(host.appendSectorCalls))
+	} else if call := host.appendSectorCalls[1]; call.hostPrices != h2Prices {
 		t.Fatalf("unexpected host prices %v, got %v", call.hostPrices, h2Prices)
 	} else if call.contractID != fcid3 {
 		t.Fatalf("expected contract ID %v, got %v", call.contractID, fcid3)
