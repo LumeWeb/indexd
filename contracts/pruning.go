@@ -158,7 +158,7 @@ func (cm *ContractManager) performContractPruning(ctx context.Context, log *zap.
 			return fmt.Errorf("failed to fetch hosts for pruning: %w", err)
 		}
 
-		// prune contracts in
+		// prune contracts in parallel
 		for _, h := range batch {
 			select {
 			case <-ctx.Done():
@@ -184,7 +184,6 @@ func (cm *ContractManager) performContractPruning(ctx context.Context, log *zap.
 				err = cm.performContractPruningOnHost(ctx, pruner, host.PublicKey, hostLog)
 				if err != nil {
 					hostLog.Debug("failed to prune contracts", zap.Error(err))
-					return
 				}
 			}(ctx, h, log.With(zap.Stringer("hostKey", h.PublicKey)))
 		}
@@ -205,9 +204,12 @@ func (cm *ContractManager) performContractPruningOnHost(ctx context.Context, pru
 	contracts, err := cm.store.ContractsForPruning(ctx, hostKey, time.Now().Add(-time.Hour*24))
 	if err != nil {
 		return fmt.Errorf("failed to fetch contracts for pruning: %w", err)
+	} else if len(contracts) == 0 {
+		hostLog.Debug("no contracts for pruning")
+		return nil
 	}
 
-	// prune sectors
+	hostLog.Debug("pruning contracts on host", zap.Int("contracts", len(contracts)))
 	for _, contract := range contracts {
 		select {
 		case <-ctx.Done():
