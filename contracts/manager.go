@@ -76,6 +76,7 @@ type (
 		ContractsForPinning(ctx context.Context, hk types.PublicKey, maxContractSize uint64) ([]types.FileContractID, error)
 		Host(ctx context.Context, hostKey types.PublicKey) (hosts.Host, error)
 		Hosts(ctx context.Context, offset, limit int, queryOpts ...hosts.HostQueryOpt) ([]hosts.Host, error)
+		HostsForPinning(ctx context.Context) ([]types.PublicKey, error)
 		MaintenanceSettings(ctx context.Context) (MaintenanceSettings, error)
 		MarkSectorsLost(ctx context.Context, hostKey types.PublicKey, roots []types.Hash256) error
 		BlockHosts(ctx context.Context, hostKeys []types.PublicKey, reason string) error

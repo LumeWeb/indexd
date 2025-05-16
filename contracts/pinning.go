@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"sync"
 	"time"
 
@@ -28,6 +27,13 @@ type (
 		prices proto.HostPrices
 	}
 )
+
+func newSectorPinner(host HostClient, prices proto.HostPrices) SectorPinner {
+	return &sectorPinner{
+		host:   host,
+		prices: prices,
+	}
+}
 
 // PinSectors pins a set of sectors using the given set of contracts The
 // contracts are tried in order, the contract ID that ends up being used is
@@ -97,15 +103,18 @@ func (cm *ContractManager) performSectorPinning(ctx context.Context, log *zap.Lo
 	start := time.Now()
 	log = log.Named("sectorpinning")
 
-	// pin sectors on usable hosts with active contracts
-	opts := []hosts.HostQueryOpt{
-		hosts.WithUsable(true),
-		hosts.WithBlocked(false),
-		hosts.WithActiveContracts(true),
+	// fetch hosts for pinning, a host is eligble for pinning if it is not
+	// blocked, has unpinned sectors and has an active contract
+	hosts, err := cm.store.HostsForPinning(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to fetch hosts for pinning: %w", err)
+	} else if len(hosts) == 0 {
+		log.Warn("no hosts for pinning")
+		return nil
 	}
 
 	const (
-		batchSize        = 50
+		nThreads         = 50
 		sectorsBatchSize = (1 << 40) / proto.SectorSize // 1TB of sectors
 	)
 
@@ -113,46 +122,54 @@ func (cm *ContractManager) performSectorPinning(ctx context.Context, log *zap.Lo
 	sema := make(chan struct{}, 50)
 	defer close(sema)
 
-	for offset := 0; ctx.Err() == nil; offset += batchSize {
-		// fetch hosts
-		batch, err := cm.store.Hosts(ctx, offset, batchSize, opts...)
-		if err != nil {
-			return fmt.Errorf("failed to fetch hosts for pinning: %w", err)
+	for _, hostKey := range hosts {
+		select {
+		case <-ctx.Done():
+			break
+		case sema <- struct{}{}:
 		}
 
-		// pin sectors on each host in parallel
-		for _, h := range batch {
-			select {
-			case <-ctx.Done():
-				break
-			case sema <- struct{}{}:
+		wg.Add(1)
+		go func(ctx context.Context, hostKey types.PublicKey, hostLog *zap.Logger) {
+			defer func() {
+				<-sema
+				wg.Done()
+			}()
+
+			host, err := cm.store.Host(ctx, hostKey)
+			if err != nil {
+				hostLog.Debug("failed to fetch host", zap.Error(err))
+				return
+			} else if host.Blocked {
+				hostLog.Debug("host is blocked")
+				return
 			}
 
-			wg.Add(1)
-			go func(ctx context.Context, host hosts.Host, hostLog *zap.Logger) {
-				defer func() {
-					<-sema
-					wg.Done()
-				}()
-
-				client, err := cm.dialer.Dial(ctx, host.PublicKey, host.SiamuxAddr())
+			ts := host.Settings.Prices.ValidUntil
+			if !host.Usability.Usable() || time.Until(ts) < 30*time.Minute {
+				host, err = cm.scanner.ScanHost(ctx, hostKey)
 				if err != nil {
-					hostLog.Debug("failed to create contractor", zap.Error(err))
+					hostLog.Debug("failed to scan host", zap.Error(err))
+					return
+				} else if !host.IsGood() {
+					hostLog.Debug("host is not good", zap.Bool("blocked", host.Blocked), zap.Bool("usable", host.Usability.Usable()), zap.Bool("networks", len(host.Networks) > 0))
 					return
 				}
-				defer client.Close()
+			}
 
-				err = cm.performSectorPinningOnHost(ctx, &sectorPinner{host: client, prices: host.Settings.Prices}, host, hostLog)
-				if err != nil {
-					hostLog.Debug("failed to pin sectors", zap.Error(err))
-				}
-			}(ctx, h, log.With(zap.Stringer("hostKey", h.PublicKey)))
-		}
+			client, err := cm.dialer.Dial(ctx, host.PublicKey, host.SiamuxAddr())
+			if err != nil {
+				hostLog.Debug("failed to create host client", zap.Error(err))
+				return
+			}
+			defer client.Close()
 
-		// break if hosts are exhausted
-		if len(batch) < batchSize {
-			break
-		}
+			pinner := newSectorPinner(client, host.Settings.Prices)
+			err = cm.performSectorPinningOnHost(ctx, pinner, host, hostLog)
+			if err != nil {
+				hostLog.Debug("failed to pin sectors", zap.Error(err))
+			}
+		}(ctx, hostKey, log.With(zap.Stringer("hostKey", hostKey)))
 	}
 
 	wg.Wait()
@@ -181,8 +198,8 @@ func (cm *ContractManager) performSectorPinningOnHost(ctx context.Context, pinne
 	}()
 
 	const (
-		dbBatchSize      = 1000
-		sectorsBatchSize = (1 << 40) / proto.SectorSize // 1TB of sectors
+		sectorsBatchSize  = (1 << 40) / proto.SectorSize // 1TB of sectors
+		updateDBBatchSize = 1000
 	)
 
 	var exhausted bool
@@ -200,35 +217,34 @@ func (cm *ContractManager) performSectorPinningOnHost(ctx context.Context, pinne
 		}
 
 		if len(missing) > 0 {
-			lookup := make(map[types.Hash256]struct{}, len(missing))
-			for _, sector := range missing {
-				lookup[sector] = struct{}{}
-			}
-
-			filtered := roots[:0]
-			for _, root := range roots {
-				if _, missing := lookup[root]; !missing {
-					filtered = append(filtered, root)
-				}
-			}
-			roots = slices.Clone(filtered)
-
-			for i := 0; i < len(missing); i += dbBatchSize {
-				end := min(i+dbBatchSize, len(missing))
+			for i := 0; i < len(missing); i += updateDBBatchSize {
+				end := min(i+updateDBBatchSize, len(missing))
 				if err := cm.store.MarkSectorsLost(ctx, host.PublicKey, missing[i:end]); err != nil {
 					return fmt.Errorf("failed to mark sectors as lost: %w", err)
 				}
 			}
-			nMissing += uint64(len(missing))
+
+			isMissing := make(map[types.Hash256]struct{}, len(missing))
+			for _, sector := range missing {
+				isMissing[sector] = struct{}{}
+			}
+
+			filtered := roots[:0]
+			for _, root := range roots {
+				if _, missing := isMissing[root]; !missing {
+					filtered = append(filtered, root)
+				}
+			}
+			roots = filtered
 		}
 
-		if len(roots) > 0 {
-			err = cm.store.PinSectors(ctx, contractID, roots)
-			if err != nil {
-				return fmt.Errorf("failed to pin sectors: %w", err)
-			}
-			nPinned += uint64(len(roots))
+		err = cm.store.PinSectors(ctx, contractID, roots)
+		if err != nil {
+			return fmt.Errorf("failed to pin sectors: %w", err)
 		}
+
+		nMissing += uint64(len(missing))
+		nPinned += uint64(len(roots))
 	}
 
 	return ctx.Err()

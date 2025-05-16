@@ -44,6 +44,10 @@ func (c *hostClientMock) AppendSectors(ctx context.Context, hostPrices proto.Hos
 	return rhp.RPCAppendSectorsResult{Sectors: appended}, nil
 }
 
+func (c *hostClientMock) Settings(ctx context.Context) (proto.HostSettings, error) {
+	return proto.HostSettings{}, nil
+}
+
 func (s *storeMock) ContractsForPinning(ctx context.Context, hk types.PublicKey, maxContractSize uint64) ([]types.FileContractID, error) {
 	var contracts []Contract
 	for _, c := range s.contracts {
@@ -63,6 +67,22 @@ func (s *storeMock) ContractsForPinning(ctx context.Context, hk types.PublicKey,
 		out[i] = c.ID
 	}
 	return out, nil
+}
+
+func (s *storeMock) HostsForPinning(ctx context.Context) ([]types.PublicKey, error) {
+	hasContract := make(map[types.PublicKey]struct{})
+	for _, c := range s.contracts {
+		hasContract[c.HostKey] = struct{}{}
+	}
+
+	var hosts []types.PublicKey
+	for hk := range s.hosts {
+		if _, ok := hasContract[hk]; ok {
+			hosts = append(hosts, hk)
+		}
+	}
+
+	return hosts, nil
 }
 
 func (s *storeMock) PinSectors(ctx context.Context, contractID types.FileContractID, roots []types.Hash256) error {
