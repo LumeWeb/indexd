@@ -35,6 +35,10 @@ func newContractPruner(store Store, hostClient HostClient, hostPrices proto.Host
 	}
 }
 
+func (c *hostClient) Settings(ctx context.Context) (proto.HostSettings, error) {
+	return rhp.RPCSettings(ctx, c.client)
+}
+
 func (cp *contractPruner) PruneContract(ctx context.Context, contractID types.FileContractID) (int, error) {
 	const (
 		oneTB          = 1 << 40
@@ -180,7 +184,13 @@ func (cm *ContractManager) performContractPruning(ctx context.Context, log *zap.
 				}
 				defer client.Close()
 
-				pruner := newContractPruner(cm.store, client, host.Settings.Prices)
+				settings, err := client.Settings(ctx)
+				if err != nil {
+					hostLog.Debug("failed to fetch host settings", zap.Error(err))
+					return
+				}
+
+				pruner := newContractPruner(cm.store, client, settings.Prices)
 				err = cm.performContractPruningOnHost(ctx, pruner, host.PublicKey, hostLog)
 				if err != nil {
 					hostLog.Debug("failed to prune contracts", zap.Error(err))
