@@ -57,7 +57,6 @@ type (
 		RefreshContract(ctx context.Context, settings proto.HostSettings, params proto.RPCRefreshContractParams) (rhp.RPCRefreshContractResult, error)
 		RenewContract(ctx context.Context, settings proto.HostSettings, contractID types.FileContractID, proofHeight uint64) (rhp.RPCRenewContractResult, error)
 		SectorRoots(ctx context.Context, hostPrices proto.HostPrices, contractID types.FileContractID, offset, length uint64) (rhp.RPCSectorRootsResult, error)
-		Settings(ctx context.Context) (proto.HostSettings, error)
 	}
 
 	// HostManager defines the minimal interface of HostManager functionality
@@ -81,6 +80,7 @@ type (
 		ContractsForPruning(ctx context.Context, hk types.PublicKey, maxLastPrune time.Time) ([]types.FileContractID, error)
 		Host(ctx context.Context, hostKey types.PublicKey) (hosts.Host, error)
 		Hosts(ctx context.Context, offset, limit int, queryOpts ...hosts.HostQueryOpt) ([]hosts.Host, error)
+		HostsForPinning(ctx context.Context) ([]types.PublicKey, error)
 		MaintenanceSettings(ctx context.Context) (MaintenanceSettings, error)
 		MarkSectorsLost(ctx context.Context, hostKey types.PublicKey, roots []types.Hash256) error
 		MarkBroadcastAttempt(ctx context.Context, contractID types.FileContractID) error

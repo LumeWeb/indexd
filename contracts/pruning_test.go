@@ -160,54 +160,65 @@ func TestPerformContractPruningOnHost(t *testing.T) {
 	store.sectors[hk1] = []sector{{root: r1, contractID: &fcid1}, {root: r2, contractID: &fcid1}, {root: r4, contractID: &fcid2}, {root: r7, contractID: &fcid2}, {root: r8, contractID: &fcid2}} // r3, r5, r6 dropped
 	store.sectors[hk2] = []sector{{root: r9, contractID: &fcid3}}                                                                                                                                 // none dropped                                                                                                                                                // r5, r6 dropped
 
+	// prepare dialer
+	h1Mock := newHostClientMock()
+	h2Mock := newHostClientMock()
+
+	dialer := newDialerMock()
+	dialer.clients[hk1] = h1Mock
+	dialer.clients[hk2] = h2Mock
+
 	// prepare roots
-	host := newHostClientMock()
-	host.sectorRoots[fcid1] = []types.Hash256{r1, r2, r3}
-	host.sectorRoots[fcid2] = []types.Hash256{r4, r5, r6, r7, r8}
-	host.sectorRoots[fcid3] = []types.Hash256{r9}
+	h1Mock.sectorRoots[fcid1] = []types.Hash256{r1, r2, r3}
+	h1Mock.sectorRoots[fcid2] = []types.Hash256{r4, r5, r6, r7, r8}
+	h2Mock.sectorRoots[fcid3] = []types.Hash256{r9}
 
 	// set contract sizes
 	for i, c := range store.contracts {
 		switch c.ID {
 		case fcid1:
-			store.contracts[i].Size = proto.SectorSize * uint64(len(host.sectorRoots[fcid1]))
+			store.contracts[i].Size = proto.SectorSize * uint64(len(h1Mock.sectorRoots[fcid1]))
 		case fcid2:
-			store.contracts[i].Size = proto.SectorSize * uint64(len(host.sectorRoots[fcid2]))
+			store.contracts[i].Size = proto.SectorSize * uint64(len(h1Mock.sectorRoots[fcid2]))
 		case fcid3:
-			store.contracts[i].Size = proto.SectorSize * uint64(len(host.sectorRoots[fcid3]))
+			store.contracts[i].Size = proto.SectorSize * uint64(len(h2Mock.sectorRoots[fcid3]))
 		}
 	}
 
+	// prepare scanner
+	scanner := store.Scanner()
+	scanner.settings[hk1] = h1.Settings
+	scanner.settings[hk2] = h2.Settings
+
 	// prepare contract manager
-	cm := newContractManager(types.PublicKey{}, nil, nil, newDialerMock(), nil, store, nil, nil)
+	cm := newContractManager(types.PublicKey{}, nil, nil, dialer, scanner, store, nil, nil)
 
 	// prune contracts on h1
-	pruner := &contractPruner{host: host, prices: h1.Settings.Prices, store: store}
-	err := cm.performContractPruningOnHost(context.Background(), pruner, hk1, zap.NewNop())
+	err := cm.performContractPruningOnHost(context.Background(), h1, zap.NewNop())
 	if err != nil {
 		t.Fatalf("failed to perform contract pruning: %v", err)
 	}
 
 	// assert rpc calls
-	if len(host.sectorRootsCalls) != 2 {
-		t.Fatalf("expected 2 sector roots calls, got %d", len(host.sectorRootsCalls))
-	} else if call := host.sectorRootsCalls[0]; call.contractID != fcid2 {
+	if len(h1Mock.sectorRootsCalls) != 2 {
+		t.Fatalf("expected 2 sector roots calls, got %d", len(h1Mock.sectorRootsCalls))
+	} else if call := h1Mock.sectorRootsCalls[0]; call.contractID != fcid2 {
 		t.Fatalf("expected contract ID %v, got %v", fcid2, call.contractID)
 	} else if call.offset != 0 || call.length != 5 {
 		t.Fatalf("expected offset 0 and length 5, got offset %d and length %d", call.offset, call.length)
-	} else if call = host.sectorRootsCalls[1]; call.contractID != fcid1 {
+	} else if call = h1Mock.sectorRootsCalls[1]; call.contractID != fcid1 {
 		t.Fatalf("expected contract ID %v, got %v", fcid1, call.contractID)
 	} else if call.offset != 0 || call.length != 3 {
 		t.Fatalf("expected offset 0 and length 3, got offset %d and length %d", call.offset, call.length)
-	} else if len(host.freeSectorsCalls) != 2 {
-		t.Fatalf("expected 2 free sectors calls, got %d", len(host.freeSectorsCalls))
-	} else if call := host.freeSectorsCalls[0]; call.contractID != fcid2 {
+	} else if len(h1Mock.freeSectorsCalls) != 2 {
+		t.Fatalf("expected 2 free sectors calls, got %d", len(h1Mock.freeSectorsCalls))
+	} else if call := h1Mock.freeSectorsCalls[0]; call.contractID != fcid2 {
 		t.Fatalf("expected contract ID %v, got %v", fcid2, call.contractID)
 	} else if len(call.indices) != 2 {
 		t.Fatalf("expected 2 indices, got %d", len(call.indices))
 	} else if call.indices[0] != 1 || call.indices[1] != 2 {
 		t.Fatalf("expected indices [1, 2], got %v", call.indices)
-	} else if call = host.freeSectorsCalls[1]; call.contractID != fcid1 {
+	} else if call = h1Mock.freeSectorsCalls[1]; call.contractID != fcid1 {
 		t.Fatalf("expected contract ID %v, got %v", fcid1, call.contractID)
 	} else if len(call.indices) != 1 {
 		t.Fatalf("expected 1 index, got %d", len(call.indices))
@@ -216,21 +227,20 @@ func TestPerformContractPruningOnHost(t *testing.T) {
 	}
 
 	// prune contracts on h2
-	pruner = &contractPruner{host: host, prices: h2.Settings.Prices, store: store}
-	err = cm.performContractPruningOnHost(context.Background(), pruner, hk2, zap.NewNop())
+	err = cm.performContractPruningOnHost(context.Background(), h2, zap.NewNop())
 	if err != nil {
 		t.Fatalf("failed to perform contract pruning: %v", err)
 	}
 
 	// assert rpc calls
-	if len(host.sectorRootsCalls) != 3 {
-		t.Fatalf("expected 3 sector roots calls, got %d", len(host.sectorRootsCalls))
-	} else if call := host.sectorRootsCalls[2]; call.contractID != fcid3 {
+	if len(h2Mock.sectorRootsCalls) != 1 {
+		t.Fatalf("expected 1 sector roots calls, got %d", len(h2Mock.sectorRootsCalls))
+	} else if call := h2Mock.sectorRootsCalls[0]; call.contractID != fcid3 {
 		t.Fatalf("expected contract ID %v, got %v", fcid2, call.contractID)
 	} else if call.offset != 0 || call.length != 1 {
 		t.Fatalf("expected offset 0 and length 1, got offset %d and length %d", call.offset, call.length)
-	} else if len(host.freeSectorsCalls) != 2 {
-		t.Fatalf("expected 2 free sectors calls, got %d", len(host.freeSectorsCalls))
+	} else if len(h2Mock.freeSectorsCalls) != 0 {
+		t.Fatalf("expected 0 free sectors calls, got %d", len(h2Mock.freeSectorsCalls))
 	}
 
 	// assert contracts are marked as pruned

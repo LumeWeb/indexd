@@ -44,6 +44,10 @@ func (c *hostClientMock) AppendSectors(ctx context.Context, hostPrices proto.Hos
 	return rhp.RPCAppendSectorsResult{Sectors: appended}, nil
 }
 
+func (c *hostClientMock) Settings(ctx context.Context) (proto.HostSettings, error) {
+	return proto.HostSettings{}, nil
+}
+
 func (s *storeMock) ContractsForPinning(ctx context.Context, hk types.PublicKey, maxContractSize uint64) ([]types.FileContractID, error) {
 	var contracts []Contract
 	for _, c := range s.contracts {
@@ -63,6 +67,22 @@ func (s *storeMock) ContractsForPinning(ctx context.Context, hk types.PublicKey,
 		out[i] = c.ID
 	}
 	return out, nil
+}
+
+func (s *storeMock) HostsForPinning(ctx context.Context) ([]types.PublicKey, error) {
+	hasContract := make(map[types.PublicKey]struct{})
+	for _, c := range s.contracts {
+		hasContract[c.HostKey] = struct{}{}
+	}
+
+	var hosts []types.PublicKey
+	for hk := range s.hosts {
+		if _, ok := hasContract[hk]; ok {
+			hosts = append(hosts, hk)
+		}
+	}
+
+	return hosts, nil
 }
 
 func (s *storeMock) PinSectors(ctx context.Context, contractID types.FileContractID, roots []types.Hash256) error {
@@ -219,24 +239,36 @@ func TestPerformSectorPinningOnHost(t *testing.T) {
 		{root: frand.Entropy256()},
 	}
 
+	// prepare dialer
+	h1Mock := newHostClientMock()
+	h2Mock := newHostClientMock()
+
+	dialer := newDialerMock()
+	dialer.clients[hk1] = h1Mock
+	dialer.clients[hk2] = h2Mock
+
 	// indicate that root 4 is missing
-	host := newHostClientMock()
-	host.missingSectors[r4] = struct{}{}
+	dialer.clients[hk1].missingSectors[r4] = struct{}{}
+
+	// prepare scanner
+	scanner := store.Scanner()
+	scanner.settings[hk1] = h1.Settings
+	scanner.settings[hk2] = h2.Settings
 
 	// prepare contract manager
-	cm := newContractManager(types.PublicKey{}, nil, nil, newDialerMock(), nil, store, nil, nil)
+	cm := newContractManager(types.PublicKey{}, nil, nil, dialer, scanner, store, nil, nil)
 
 	// pin sectors on h1
 	h1Prices := h1.Settings.Prices
-	err := cm.performSectorPinningOnHost(context.Background(), &sectorPinner{host: host, prices: h1Prices}, h1, zap.NewNop())
+	err := cm.performSectorPinningOnHost(context.Background(), h1, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// assert sector pinning on h1
-	if len(host.appendSectorCalls) != 1 {
-		t.Fatalf("expected one call, got %v", len(host.appendSectorCalls))
-	} else if call := host.appendSectorCalls[0]; call.hostPrices != h1Prices {
+	if len(h1Mock.appendSectorCalls) != 1 {
+		t.Fatalf("expected one call, got %v", len(h1Mock.appendSectorCalls))
+	} else if call := h1Mock.appendSectorCalls[0]; call.hostPrices != h1Prices {
 		t.Fatalf("unexpected host prices %v, expected %v", call.hostPrices, h1Prices)
 	} else if call.contractID != fcid2 {
 		t.Fatalf("unexpected contract ID %v, expected %v", call.contractID, fcid2)
@@ -246,15 +278,15 @@ func TestPerformSectorPinningOnHost(t *testing.T) {
 
 	// pin sectors on h2
 	h2Prices := h2.Settings.Prices
-	err = cm.performSectorPinningOnHost(context.Background(), &sectorPinner{host: host, prices: h2Prices}, h2, zap.NewNop())
+	err = cm.performSectorPinningOnHost(context.Background(), h2, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// assert sector pinning on h2
-	if len(host.appendSectorCalls) != 2 {
-		t.Fatalf("expected two calls, got %v", len(host.appendSectorCalls))
-	} else if call := host.appendSectorCalls[1]; call.hostPrices != h2Prices {
+	if len(h2Mock.appendSectorCalls) != 1 {
+		t.Fatalf("expected one calls, got %v", len(h2Mock.appendSectorCalls))
+	} else if call := h2Mock.appendSectorCalls[0]; call.hostPrices != h2Prices {
 		t.Fatalf("unexpected host prices %v, got %v", call.hostPrices, h2Prices)
 	} else if call.contractID != fcid3 {
 		t.Fatalf("expected contract ID %v, got %v", call.contractID, fcid3)

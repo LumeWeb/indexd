@@ -1069,7 +1069,7 @@ func BenchmarkUnpinnedSectors(b *testing.B) {
 
 	// prepare base db
 	const (
-		dbBaseSize = 4 << 40 // 4TiB of sectors
+		dbBaseSize = 1 << 40 // 1TiB of sectors
 		nSectors   = dbBaseSize / proto.SectorSize
 	)
 
@@ -1123,10 +1123,10 @@ func BenchmarkUnpinnedSectors(b *testing.B) {
 					b.Fatal(err)
 				}
 
-				// check if benchmark is exhausted
+				// check if unpinned sectors are exhausted
 				b.StopTimer()
 				if len(unpinned) < batchSize {
-					b.Fatalf("exhausted unpinned sectors: %d", len(unpinned))
+					unpinSectors()
 				}
 
 				// pin sectors to ensure we fetch different ones next time
