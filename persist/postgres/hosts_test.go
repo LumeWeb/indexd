@@ -1274,6 +1274,7 @@ func BenchmarkHostsForPinning(b *testing.B) {
 
 		nHosts            = 1000
 		nContractsPerHost = 100
+		nBlocklistHosts   = 1000
 		nSectorsPerHost   = dbBaseSize / proto4.SectorSize / nHosts
 	)
 
@@ -1312,6 +1313,15 @@ func BenchmarkHostsForPinning(b *testing.B) {
 			}
 			hostToContractID[hk] = fcid
 		}
+
+		// we LEFT JOIN the blocklist so we populate it with random entries
+		for range nBlocklistHosts {
+			_, err := tx.Exec(ctx, "INSERT INTO hosts_blocklist (public_key, reason) VALUES ($1, 'none') ON CONFLICT (public_key) DO NOTHING", sqlPublicKey(types.GeneratePrivateKey().PublicKey()))
+			if err != nil {
+				return err
+			}
+		}
+
 		return nil
 	}); err != nil {
 		b.Fatal(err)
@@ -1352,8 +1362,8 @@ func BenchmarkHostsForPinning(b *testing.B) {
 		batch, err := store.HostsForPinning(context.Background())
 		if err != nil {
 			b.Fatal(err)
-		} else if len(batch) == 0 {
-			b.Fatal("expected hosts, got none")
+		} else if len(batch) != len(batch) {
+			b.Fatal("unexpected number of hosts", len(batch))
 		}
 	}
 }
