@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/chain"
 	"go.sia.tech/coreutils/rhp/v4/siamux"
@@ -78,7 +77,7 @@ func TestBroadcastContractRevisions(t *testing.T) {
 	rev := types.V2FileContract{RevisionNumber: 1}
 	hc := newHostClientMock()
 	dialer.clients[hk] = hc
-	hc.latestRevisions[types.FileContractID{4}] = proto.RPCLatestRevisionResponse{Contract: rev}
+	hc.latestRevisions[types.FileContractID{4}] = rev
 
 	// assert revision was broadcasted and contract was marked as such
 	if err := contracts.performBroadcastContractRevisions(context.Background(), zap.NewNop()); err != nil {

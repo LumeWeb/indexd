@@ -51,9 +51,9 @@ type (
 	HostClient interface {
 		io.Closer
 		FormContract(ctx context.Context, settings proto.HostSettings, params proto.RPCFormContractParams) (rhp.RPCFormContractResult, error)
-		LatestRevision(ctx context.Context, contractID types.FileContractID) (proto.RPCLatestRevisionResponse, error)
 		RefreshContract(ctx context.Context, settings proto.HostSettings, params proto.RPCRefreshContractParams) (rhp.RPCRefreshContractResult, error)
 		RenewContract(ctx context.Context, settings proto.HostSettings, contractID types.FileContractID, proofHeight uint64) (rhp.RPCRenewContractResult, error)
+		SyncRevision(ctx context.Context, contractID types.FileContractID, revision types.V2FileContract) (types.V2FileContract, bool, error)
 	}
 
 	// HostManager defines the minimal interface of HostManager functionality
@@ -79,8 +79,15 @@ type (
 		MarkBroadcastAttempt(ctx context.Context, contractID types.FileContractID) error
 		MarkUnrenewableContractsBad(ctx context.Context, maxProofHeight uint64) error
 		RejectPendingContracts(ctx context.Context, maxFormation time.Time) error
+		RevisionStore
 		SyncContract(ctx context.Context, contractID types.FileContractID, params ContractSyncParams) error
 		PruneExpiredContractElements(ctx context.Context, maxBlocksSinceExpiry uint64) error
+	}
+
+	// RevisionStore will soon be removed
+	RevisionStore interface {
+		ContractRevision(ctx context.Context, contractID types.FileContractID) (types.V2FileContract, bool, error)
+		UpdateContractRevision(ctx context.Context, contractID types.FileContractID, contract types.V2FileContract) error
 	}
 
 	// Syncer is the minimal interface of Syncer functionality the
@@ -163,8 +170,14 @@ func WithLogger(l *zap.Logger) ContractManagerOpt {
 // renewing contracts as well as any interactions with hosts that require
 // contracts.
 func NewManager(renterKey types.PrivateKey, accountManager AccountManager, chainManager ChainManager, scanner HostManager, store Store, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) (*ContractManager, error) {
-	dialer := newSiamuxDialer(chainManager, wallet, renterKey)
-	cm := newContractManager(renterKey.PublicKey(), accountManager, chainManager, dialer, scanner, store, syncer, wallet, opts...)
+	// auwtch - have to get the logger
+	cm := &ContractManager{log: zap.NewNop()}
+	for _, opt := range opts {
+		opt(cm)
+	}
+
+	dialer := newSiamuxDialer(chainManager, store, NewFormContractSigner(wallet, renterKey), cm.log)
+	cm = newContractManager(renterKey.PublicKey(), accountManager, chainManager, dialer, scanner, store, syncer, wallet, opts...)
 
 	ctx, cancel, err := cm.tg.AddContext(context.Background())
 	if err != nil {
@@ -386,11 +399,6 @@ func (cm *ContractManager) performContractMaintenance(ctx context.Context, log *
 
 	blockHeight := cm.cm.TipState().Index.Height
 
-	// sync our local contract state with the latest revision known to hosts
-	if err := cm.performContractRevisionSyncs(ctx); err != nil {
-		return fmt.Errorf("failed to sync contract state: %w", err)
-	}
-
 	// block bad hosts we have contracts with
 	if err := cm.blockBadHosts(ctx); err != nil {
 		return fmt.Errorf("failed to block bad hosts: %w", err)
@@ -419,81 +427,6 @@ func (cm *ContractManager) performContractMaintenance(ctx context.Context, log *
 	// rebroadcast revisions for all good contracts
 	if err := cm.performBroadcastContractRevisions(ctx, log); err != nil {
 		return fmt.Errorf("failed to broadcast contract revisions: %w", err)
-	}
-
-	return nil
-}
-
-func (cm *ContractManager) performContractRevisionSyncs(ctx context.Context) error {
-	log := cm.log.Named("sync")
-
-	batchSize := 50
-	for offset := 0; ; offset += batchSize {
-		contracts, err := cm.store.Contracts(ctx, offset, batchSize, WithRevisable(true))
-		if err != nil {
-			return fmt.Errorf("failed to fetch active contracts: %w", err)
-		}
-
-		var wg sync.WaitGroup
-		for _, contract := range contracts {
-			wg.Add(1)
-			go func(contract Contract) {
-				defer wg.Done()
-				if err := cm.syncContract(ctx, contract, log); err != nil {
-					log.Error("failed to sync contract", zap.Stringer("contractID", contract.ID), zap.Error(err))
-				}
-			}(contract)
-		}
-		wg.Wait()
-
-		if len(contracts) < batchSize {
-			break
-		}
-	}
-
-	return nil
-}
-
-func (cm *ContractManager) syncContract(ctx context.Context, contract Contract, log *zap.Logger) error {
-	contractLog := log.With(zap.Stringer("contractID", contract.ID), zap.Stringer("hostKey", contract.HostKey))
-
-	// fetch corresponding host
-	host, err := cm.store.Host(ctx, contract.HostKey)
-	if err != nil {
-		return fmt.Errorf("failed to fetch host for contract: %w", err)
-	}
-
-	// short timeout for fetching revision
-	revisionCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-
-	hc, err := cm.dialer.Dial(ctx, host.PublicKey, host.SiamuxAddr())
-	if err != nil {
-		contractLog.Warn("failed to dial host", zap.Error(err))
-		return err
-	}
-	defer hc.Close()
-	resp, err := hc.LatestRevision(revisionCtx, contract.ID)
-	if err != nil {
-		contractLog.Warn("failed to fetch latest revision", zap.Error(err))
-		return nil
-	}
-
-	// check if the contract is up to date already
-	if contract.RevisionNumber >= resp.Contract.RevisionNumber {
-		contractLog.Debug("contract information is up to date")
-		return nil
-	}
-
-	// update state in store
-	if err := cm.store.SyncContract(ctx, contract.ID, ContractSyncParams{
-		Capacity:           resp.Contract.Capacity,
-		RemainingAllowance: resp.Contract.RenterOutput.Value,
-		RevisionNumber:     resp.Contract.RevisionNumber,
-		Size:               resp.Contract.Filesize,
-		UsedCollateral:     resp.Contract.MissedHostValue,
-	}); err != nil {
-		return fmt.Errorf("failed to sync contract state: %w", err)
 	}
 
 	return nil

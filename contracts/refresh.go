@@ -12,23 +12,19 @@ import (
 )
 
 func (c *hostClient) RefreshContract(ctx context.Context, settings proto.HostSettings, params proto.RPCRefreshContractParams) (rhp.RPCRefreshContractResult, error) {
-	rev, err := rhp.RPCLatestRevision(ctx, c.client, params.ContractID)
-	if err != nil {
-		return rhp.RPCRefreshContractResult{}, fmt.Errorf("failed to fetch latest revision: %w", err)
-	} else if rev.Renewed {
-		return rhp.RPCRefreshContractResult{}, fmt.Errorf("contract already renewed")
-	} else if !rev.Revisable {
-		return rhp.RPCRefreshContractResult{}, fmt.Errorf("contract not revisable")
+	var res rhp.RPCRefreshContractResult
+	if err := c.withRevision(ctx, params.ContractID, func(revision types.V2FileContract) (_ types.V2FileContract, err error) {
+		res, err = rhp.RPCRefreshContract(ctx, c.client, c.cm, c.signer, c.cm.TipState(), settings.Prices, revision, proto.RPCRefreshContractParams{
+			Allowance:  revision.RenterOutput.Value,
+			Collateral: revision.MissedHostValue,
+		})
+		if err != nil {
+			return types.V2FileContract{}, err
+		}
+		return res.Contract.Revision, nil
+	}); err != nil {
+		return rhp.RPCRefreshContractResult{}, fmt.Errorf("failed to refresh contract: %w", err)
 	}
-
-	res, err := rhp.RPCRefreshContract(ctx, c.client, c.cm, c.signer, c.cm.TipState(), settings.Prices, rev.Contract, proto.RPCRefreshContractParams{
-		Allowance:  rev.Contract.RenterOutput.Value,
-		Collateral: rev.Contract.MissedHostValue,
-	})
-	if err != nil {
-		return rhp.RPCRefreshContractResult{}, fmt.Errorf("failed to form contract: %w", err)
-	}
-
 	return res, nil
 }
 

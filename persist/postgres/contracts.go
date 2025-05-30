@@ -12,6 +12,22 @@ import (
 	"go.sia.tech/indexd/hosts"
 )
 
+// ContractRevision returns the latest revision.
+func (s *Store) ContractRevision(ctx context.Context, contractID types.FileContractID) (types.V2FileContract, bool, error) {
+	// proof height - 144
+	return types.V2FileContract{}, false, nil
+}
+
+// UpdateContractRevision updates the contract revision in the database.
+func (s *Store) UpdateContractRevision(ctx context.Context, contractID types.FileContractID, revision types.V2FileContract) error {
+	// Capacity:           resp.Contract.Capacity,
+	// RemainingAllowance: resp.Contract.RenterOutput.Value,
+	// RevisionNumber:     resp.Contract.RevisionNumber,
+	// Size:               resp.Contract.Filesize,
+	// UsedCollateral:     resp.Contract.MissedHostValue,
+	return nil
+}
+
 // AddFormedContract adds a freshly formed contract to the database.
 func (s *Store) AddFormedContract(ctx context.Context, hostKey types.PublicKey, contractID types.FileContractID, contract types.V2FileContract, contractPrice, allowance, minerFee types.Currency) error {
 	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {

@@ -56,25 +56,31 @@ type dialer interface {
 }
 
 type hostClient struct {
-	cm      ChainManager
-	client  rhp.TransportClient
 	hostKey types.PublicKey
-	signer  *formContractSigner
+
+	cm    ChainManager
+	store RevisionStore
+	log   *zap.Logger
+
+	client rhp.TransportClient
+	signer rhp.FormContractSigner
 }
 
 type siamuxDialer struct {
 	cm     ChainManager
-	ownKey types.PrivateKey
-	w      rhp.Wallet
+	store  RevisionStore
+	signer rhp.FormContractSigner
+	log    *zap.Logger
 }
 
 // newSiamuxDialer creates a new Dialer that uses the SiaMux protocol to dial a
 // host.
-func newSiamuxDialer(cm ChainManager, w rhp.Wallet, ownKey types.PrivateKey) dialer {
+func newSiamuxDialer(cm ChainManager, store RevisionStore, signer rhp.FormContractSigner, log *zap.Logger) dialer {
 	return &siamuxDialer{
 		cm:     cm,
-		ownKey: ownKey,
-		w:      w,
+		store:  store,
+		signer: signer,
+		log:    log,
 	}
 }
 
@@ -88,13 +94,14 @@ func (d *siamuxDialer) Dial(ctx context.Context, hostKey types.PublicKey, addr s
 		return nil, fmt.Errorf("failed to dial host: %w", err)
 	}
 	return &hostClient{
-		client:  client,
-		cm:      d.cm,
 		hostKey: hostKey,
-		signer: &formContractSigner{
-			renterKey: d.ownKey,
-			w:         d.w,
-		},
+
+		cm:    d.cm,
+		store: d.store,
+		log:   d.log.Named("hostclient").With(zap.Stringer("hostKey", hostKey)),
+
+		client: client,
+		signer: d.signer,
 	}, nil
 }
 
@@ -109,10 +116,6 @@ func (c *hostClient) FormContract(ctx context.Context, settings proto.HostSettin
 	}
 
 	return res, nil
-}
-
-func (c *hostClient) LatestRevision(ctx context.Context, contractID types.FileContractID) (proto.RPCLatestRevisionResponse, error) {
-	return rhp.RPCLatestRevision(ctx, c.client, contractID)
 }
 
 // performContractFormation makes sure that we have at least 'wanted' good

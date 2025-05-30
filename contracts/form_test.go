@@ -2,6 +2,7 @@ package contracts
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"slices"
@@ -66,12 +67,12 @@ type hostClientMock struct {
 	formCalls       []formContractCall
 	refreshCalls    []refreshContractCall
 	renewCalls      []renewContractCall
-	latestRevisions map[types.FileContractID]proto.RPCLatestRevisionResponse
+	latestRevisions map[types.FileContractID]types.V2FileContract
 }
 
 func newHostClientMock() *hostClientMock {
 	return &hostClientMock{
-		latestRevisions: map[types.FileContractID]proto.RPCLatestRevisionResponse{},
+		latestRevisions: make(map[types.FileContractID]types.V2FileContract),
 	}
 }
 
@@ -107,12 +108,12 @@ func (c *hostClientMock) FormContract(ctx context.Context, settings proto.HostSe
 	}, nil
 }
 
-func (c *hostClientMock) LatestRevision(ctx context.Context, contractID types.FileContractID) (proto.RPCLatestRevisionResponse, error) {
-	resp, ok := c.latestRevisions[contractID]
+func (c *hostClientMock) SyncRevision(ctx context.Context, contractID types.FileContractID, contract types.V2FileContract) (types.V2FileContract, bool, error) {
+	rev, ok := c.latestRevisions[contractID]
 	if !ok {
-		return proto.RPCLatestRevisionResponse{}, fmt.Errorf("contract %v not found", contractID)
+		return types.V2FileContract{}, false, errors.New("not found")
 	}
-	return resp, nil
+	return rev, false, nil
 }
 
 type scannerMock struct {
