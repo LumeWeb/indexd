@@ -17,6 +17,7 @@ import (
 	"go.sia.tech/coreutils/rhp/v4/siamux"
 	"go.sia.tech/indexd/contracts"
 	"go.sia.tech/indexd/hosts"
+	"go.sia.tech/indexd/slabs"
 	"go.sia.tech/indexd/subscriber"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
@@ -121,6 +122,40 @@ func TestHost(t *testing.T) {
 		t.Fatal("unexpected", len(h.Addresses))
 	} else if len(h.Networks) != 1 {
 		t.Fatal("unexpected networks", h.Networks)
+	} else if h.LostSectors != 0 {
+		t.Fatal("expected lost sectors to be 0, got", h.LostSectors)
+	}
+
+	// pin a sector and mark it as lost
+	r1 := types.Hash256{1}
+	if err := db.AddAccount(context.Background(), hk); err != nil {
+		t.Fatal(err)
+	} else if _, err := db.PinSlab(context.Background(), proto4.Account(hk), time.Now(), slabs.SlabPinParams{
+		EncryptionKey: [32]byte{},
+		MinShards:     1,
+		Sectors:       []slabs.SectorPinParams{{Root: r1, HostKey: hk}},
+	}); err != nil {
+		t.Fatal(err)
+	} else if err := db.MarkSectorsLost(context.Background(), hk, []types.Hash256{r1}); err != nil {
+		t.Fatal("unexpected", err)
+	}
+
+	// assert lost sectors is properly set on the host
+	if h, err := db.Host(context.Background(), hk); err != nil {
+		t.Fatal(err)
+	} else if h.LostSectors != 1 {
+		t.Fatal("expected one lost sector, got", h.LostSectors)
+	}
+
+	// assert lost sectors is also set when querying hosts
+	if hosts, err := db.Hosts(context.Background(), 0, 1); err != nil {
+		t.Fatal("unexpected", err)
+	} else if len(hosts) != 1 {
+		t.Fatal("expected one host, got", len(hosts))
+	} else if hosts[0].PublicKey != hk {
+		t.Fatal("expected host public key to match", hosts[0].PublicKey)
+	} else if hosts[0].LostSectors != 1 {
+		t.Fatal("expected one lost sector, got", hosts[0].LostSectors)
 	}
 }
 
@@ -1015,5 +1050,389 @@ func newTestHostSettings(pk types.PublicKey) proto4.HostSettings {
 			ValidUntil:    time.Now().Add(24 * time.Hour).Round(time.Microsecond),
 			TipHeight:     1,
 		},
+	}
+}
+
+func TestHostsForPinning(t *testing.T) {
+	// create database
+	log := zaptest.NewLogger(t)
+	db := initPostgres(t, log.Named("postgres"))
+
+	// add two hosts
+	hk1 := types.PublicKey{1}
+	hk2 := types.PublicKey{2}
+	if err := db.UpdateChainState(context.Background(), func(tx subscriber.UpdateTx) error {
+		return errors.Join(
+			tx.AddHostAnnouncement(hk1, chain.V2HostAnnouncement{}, time.Now()),
+			tx.AddHostAnnouncement(hk2, chain.V2HostAnnouncement{}, time.Now()),
+		)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// add account
+	acc := proto4.Account{1}
+	if err := db.AddAccount(context.Background(), types.PublicKey(acc)); err != nil {
+		t.Fatal(err)
+	}
+
+	// pin a slab with sector on both hosts
+	r1 := frand.Entropy256()
+	if _, err := db.PinSlab(context.Background(), acc, time.Now(), slabs.SlabPinParams{
+		EncryptionKey: [32]byte{},
+		MinShards:     1,
+		Sectors: []slabs.SectorPinParams{
+			{
+				Root:    r1,
+				HostKey: hk1,
+			},
+			{
+				Root:    frand.Entropy256(),
+				HostKey: hk2,
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert no hosts are returned, they don't have active contracts
+	hks, err := db.HostsForPinning(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	} else if len(hks) != 0 {
+		t.Fatalf("expected 0 hosts, got %d", len(hks))
+	}
+
+	// add contract for both hosts
+	fcid1 := types.FileContractID{1}
+	if err := db.AddFormedContract(context.Background(), fcid1, hk1, 0, 0, types.ZeroCurrency, types.ZeroCurrency, types.ZeroCurrency, types.ZeroCurrency); err != nil {
+		t.Fatal(err)
+	} else if err := db.AddFormedContract(context.Background(), types.FileContractID{2}, hk2, 0, 0, types.ZeroCurrency, types.ZeroCurrency, types.ZeroCurrency, types.ZeroCurrency); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert both hosts are returned now
+	hks, err = db.HostsForPinning(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	} else if len(hks) != 2 {
+		t.Fatalf("expected 2 hosts, got %d", len(hks))
+	}
+
+	// pin sectors for h1
+	if err := db.PinSectors(context.Background(), types.FileContractID{1}, []types.Hash256{r1}); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert only h2 is returned
+	hks, err = db.HostsForPinning(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	} else if len(hks) != 1 {
+		t.Fatalf("expected one host, got %d", len(hks))
+	} else if hks[0] != hk2 {
+		t.Fatalf("expected host %v, got %v", hk2, hks[0])
+	}
+
+	// block host 2
+	if err := db.BlockHosts(context.Background(), []types.PublicKey{hk2}, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert no hosts are returned
+	hks, err = db.HostsForPinning(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	} else if len(hks) != 0 {
+		t.Fatalf("expected 0 hosts, got %d", len(hks))
+	}
+}
+
+func TestHostsForIntegrityChecks(t *testing.T) {
+	// create database
+	log := zaptest.NewLogger(t)
+	db := initPostgres(t, log.Named("postgres"))
+
+	// add two hosts
+	hk1 := types.PublicKey{1}
+	hk2 := types.PublicKey{2}
+	if err := db.UpdateChainState(context.Background(), func(tx subscriber.UpdateTx) error {
+		return errors.Join(
+			tx.AddHostAnnouncement(hk1, chain.V2HostAnnouncement{}, time.Now()),
+			tx.AddHostAnnouncement(hk2, chain.V2HostAnnouncement{}, time.Now()),
+		)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// add account
+	acc := proto4.Account{1}
+	if err := db.AddAccount(context.Background(), types.PublicKey(acc)); err != nil {
+		t.Fatal(err)
+	}
+
+	// helper to pin sector with a given checkTime
+	pinSector := func(hk types.PublicKey, root types.Hash256, nextCheck time.Time) {
+		t.Helper()
+		_, err := db.PinSlab(context.Background(), acc, nextCheck, slabs.SlabPinParams{
+			EncryptionKey: [32]byte{},
+			MinShards:     1,
+			Sectors: []slabs.SectorPinParams{
+				{
+					Root:    root,
+					HostKey: hk,
+				},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// pin 2 sectors for each host, one with a check time in the past and one in
+	// the future
+	root1 := types.Hash256{1}
+	root2 := types.Hash256{2}
+	root3 := types.Hash256{3}
+	root4 := types.Hash256{4}
+
+	now := time.Now().Round(time.Microsecond).Add(-time.Microsecond)
+	oneHAgo := now.Add(-time.Hour)
+	oneHFromNow := now.Add(time.Hour)
+
+	pinSector(hk1, root1, oneHAgo)
+	pinSector(hk2, root2, oneHAgo)
+	pinSector(hk1, root3, oneHFromNow)
+	pinSector(hk2, root4, oneHFromNow)
+
+	hosts, err := db.HostsForIntegrityChecks(context.Background(), oneHFromNow, 10)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(hosts) != 2 {
+		t.Fatalf("expected 2 hosts, got %d", len(hosts))
+	} else if hosts[0] != hk1 || hosts[1] != hk2 {
+		t.Fatalf("expected hosts %v, got %v", []types.PublicKey{hk1, hk2}, hosts)
+	}
+
+	// apply limit
+	hosts, err = db.HostsForIntegrityChecks(context.Background(), oneHFromNow, 1)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(hosts) != 1 {
+		t.Fatalf("expected 1 host, got %d", len(hosts))
+	} else if hosts[0] != hk1 {
+		t.Fatalf("expected host %v, got %v", hk1, hosts[0])
+	}
+
+	// using a maxLastCheck time in the past should cause no hosts to be returned
+	hosts, err = db.HostsForIntegrityChecks(context.Background(), now, 10)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(hosts) != 0 {
+		t.Fatalf("expected 0 hosts, got %d", len(hosts))
+	}
+
+	// unpinning the sector on host 2 which is up for a check should cause host
+	// 2 to not be returned anymore
+	if err := db.MarkSectorsLost(context.Background(), hk2, []types.Hash256{root2}); err != nil {
+		t.Fatal(err)
+	}
+
+	hosts, err = db.HostsForIntegrityChecks(context.Background(), oneHFromNow, 10)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(hosts) != 1 {
+		t.Fatalf("expected 1 host, got %d", len(hosts))
+	} else if hosts[0] != hk1 {
+		t.Fatalf("expected host %v, got %v", hk1, hosts[0])
+	}
+
+	// block host 1 so that it's also not returned anymore
+	if err := db.BlockHosts(context.Background(), []types.PublicKey{hk1}, ""); err != nil {
+		t.Fatal(err)
+	}
+	hosts, err = db.HostsForIntegrityChecks(context.Background(), oneHFromNow, 10)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(hosts) != 0 {
+		t.Fatalf("expected 0 hosts, got %d", len(hosts))
+	}
+}
+
+// BenchmarkHostsForPinning benchmarks HostsForPinning.
+func BenchmarkHostsForPinning(b *testing.B) {
+	store := initPostgres(b, zap.NewNop())
+
+	// add account
+	account := proto4.Account{1}
+	if err := store.AddAccount(context.Background(), types.PublicKey(account)); err != nil {
+		b.Fatal("failed to add account:", err)
+	}
+
+	const (
+		dbBaseSize = 1 << 40 // 1TiB of sectors
+
+		nHosts            = 1000
+		nContractsPerHost = 100
+		nBlocklistHosts   = 1000
+		nSectorsPerHost   = dbBaseSize / proto4.SectorSize / nHosts
+	)
+
+	// prepare database
+	hostToContractID := make(map[types.PublicKey]types.FileContractID, nHosts)
+	if err := store.transaction(context.Background(), func(ctx context.Context, tx *txn) error {
+		for range nHosts {
+			// add host
+			hk := types.PublicKey(frand.Entropy256())
+			var hostID int64
+			err := tx.QueryRow(ctx, `INSERT INTO hosts (public_key, last_announcement) VALUES ($1, NOW()) RETURNING id;`, sqlPublicKey(hk)).Scan(&hostID)
+			if err != nil {
+				return err
+			}
+
+			// add contracts
+			var fcid types.FileContractID
+			for range nContractsPerHost {
+				frand.Read(fcid[:])
+				size := frand.Uint64n(1e9)
+				if _, err := tx.Exec(ctx, `INSERT INTO contracts (host_id, contract_id, proof_height, expiration_height, contract_price, initial_allowance, miner_fee, total_collateral, remaining_allowance, state, good, size, capacity) VALUES ($1, $2, 0, 0, $3, $4, $5, $6, $7, $8, $9, $10, $11);`,
+					hostID,
+					sqlHash256(fcid[:]),
+					sqlCurrency(types.ZeroCurrency),
+					sqlCurrency(types.ZeroCurrency),
+					sqlCurrency(types.ZeroCurrency),
+					sqlCurrency(types.ZeroCurrency),
+					sqlCurrency(types.NewCurrency64(frand.Uint64n(5))), // random remaining allowance
+					sqlContractState(uint8(frand.Uint64n(5))),          // random contract state (40% active)
+					frand.Uint64n(2) == 0,                              // random good state (50% good)
+					size,                                               // random size
+					size+frand.Uint64n(1e3),                            // random capacity
+				); err != nil {
+					return err
+				}
+			}
+			hostToContractID[hk] = fcid
+		}
+
+		// we LEFT JOIN the blocklist so we populate it with random entries
+		for range nBlocklistHosts {
+			_, err := tx.Exec(ctx, "INSERT INTO hosts_blocklist (public_key, reason) VALUES ($1, 'none') ON CONFLICT (public_key) DO NOTHING", sqlPublicKey(types.GeneratePrivateKey().PublicKey()))
+			if err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}); err != nil {
+		b.Fatal(err)
+	}
+
+	// add sectors
+	for hk, fcid := range hostToContractID {
+		for remainingSectors := nSectorsPerHost; remainingSectors > 0; {
+			batchSize := min(remainingSectors, 10000)
+			remainingSectors -= batchSize
+			var sectors []slabs.SectorPinParams
+			var roots []types.Hash256
+			for range batchSize {
+				root := frand.Entropy256()
+				sectors = append(sectors, slabs.SectorPinParams{
+					Root:    root,
+					HostKey: hk,
+				})
+				roots = append(roots, root)
+			}
+			if _, err := store.PinSlab(context.Background(), account, time.Now().Add(time.Hour), slabs.SlabPinParams{
+				MinShards:     1,
+				EncryptionKey: frand.Entropy256(),
+				Sectors:       sectors,
+			}); err != nil {
+				b.Fatal(err)
+			}
+
+			// pin 10% of the sectors
+			frand.Shuffle(len(roots), func(i, j int) { roots[i], roots[j] = roots[j], roots[i] })
+			if err := store.PinSectors(context.Background(), fcid, roots[:len(roots)/10]); err != nil {
+				b.Fatal(err, fcid)
+			}
+		}
+	}
+
+	for b.Loop() {
+		batch, err := store.HostsForPinning(context.Background())
+		if err != nil {
+			b.Fatal(err)
+		} else if len(batch) != nHosts {
+			b.Fatal("unexpected number of hosts", len(batch))
+		}
+	}
+}
+
+// BenchmarkHostsForIntegrityCheck benchmarks HostsForIntegrityCheck.
+func BenchmarkHostsForIntegrityCheck(b *testing.B) {
+	store := initPostgres(b, zap.NewNop())
+	account := proto4.Account{1}
+
+	if err := store.AddAccount(context.Background(), types.PublicKey(account)); err != nil {
+		b.Fatal("failed to add account:", err)
+	}
+
+	const (
+		nHosts          = 10000
+		dbBaseSize      = 1 << 40 // 1TiB of sectors
+		nSectorsPerHost = dbBaseSize / proto4.SectorSize / nHosts
+	)
+
+	// add hosts
+	for range nHosts {
+		hk := types.PublicKey(frand.Entropy256())
+		ha := chain.NetAddress{Protocol: quic.Protocol, Address: "[::]:4848"}
+		if err := store.UpdateChainState(context.Background(), func(tx subscriber.UpdateTx) error {
+			return tx.AddHostAnnouncement(hk, chain.V2HostAnnouncement{ha}, time.Now())
+		}); err != nil {
+			b.Fatal(err)
+		}
+
+		// add sectors
+		for remainingSectors := nSectorsPerHost; remainingSectors > 0; {
+			batchSize := min(remainingSectors, 10000)
+			remainingSectors -= batchSize
+			var sectors []slabs.SectorPinParams
+			for range batchSize {
+				root := frand.Entropy256()
+				sectors = append(sectors, slabs.SectorPinParams{
+					Root:    root,
+					HostKey: hk,
+				})
+			}
+			if _, err := store.PinSlab(context.Background(), account, time.Now().Add(time.Hour), slabs.SlabPinParams{
+				MinShards:     1,
+				EncryptionKey: frand.Entropy256(),
+				Sectors:       sectors,
+			}); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+
+	// 10% of the sectors have a next check time in the past
+	_, err := store.pool.Exec(context.Background(), `UPDATE sectors SET next_integrity_check = NOW() - INTERVAL '1 hour' WHERE id % 10 = 0`)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	// run benchmark for various batch sizes
+	futureTime := time.Now().Add(time.Hour)
+	for _, batchSize := range []int{50, 100, 200} {
+		b.Run(fmt.Sprint(batchSize), func(b *testing.B) {
+			for b.Loop() {
+				batch, err := store.HostsForIntegrityChecks(context.Background(), futureTime, batchSize)
+				if err != nil {
+					b.Fatal(err)
+				} else if len(batch) == 0 {
+					b.Fatal("expected hosts, got none")
+				}
+			}
+		})
 	}
 }
