@@ -14,6 +14,11 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	pruneIntervalSuccess = 24 * time.Hour
+	pruneIntervalFailure = 3 * time.Hour
+)
+
 // HostKey returns the public key of the host.
 func (c *hostClient) HostKey() types.PublicKey {
 	return c.hostKey
@@ -66,13 +71,8 @@ func (cm *ContractManager) performContractPruning(ctx context.Context, log *zap.
 		return nil
 	}
 
-	const (
-		nThreads         = 50
-		sectorsBatchSize = (1 << 40) / proto.SectorSize
-	)
-
 	var wg sync.WaitGroup
-	sema := make(chan struct{}, nThreads)
+	sema := make(chan struct{}, 50)
 	defer close(sema)
 
 	for _, hostKey := range hosts {
@@ -156,7 +156,7 @@ func (cm *ContractManager) performContractPruningOnHost(ctx context.Context, hos
 			hostLog.Debug("pruned contract", zap.Stringer("contractID", contract), zap.Int("sectors", n), zap.Int("bytes", n*proto.SectorSize))
 		}
 
-		err = cm.store.MarkPruned(ctx, contract)
+		err = cm.store.MarkPruned(ctx, contract, time.Now().Add(pruneIntervalSuccess))
 		if err != nil {
 			hostLog.Debug("failed to mark contract as pruned", zap.Error(err))
 		}

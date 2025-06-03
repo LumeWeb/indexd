@@ -1159,7 +1159,8 @@ func TestMarkPruned(t *testing.T) {
 	}
 
 	// mark as pruned and assert contract was updated correctly
-	if err := store.MarkPruned(context.Background(), fcid); err != nil {
+	oneHourFromNow := time.Now().Add(time.Hour).Round(time.Microsecond)
+	if err := store.MarkPruned(context.Background(), fcid, oneHourFromNow); err != nil {
 		t.Fatal(err)
 	} else if contract, err := store.Contract(context.Background(), fcid); err != nil {
 		t.Fatal(err)

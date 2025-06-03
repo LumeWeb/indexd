@@ -50,7 +50,23 @@ func (s *storeMock) ContractsForPruning(ctx context.Context, hk types.PublicKey,
 	return out, nil
 }
 
-func (s *storeMock) MarkPruned(ctx context.Context, contractID types.FileContractID) error {
+func (s *storeMock) HostsForPruning(ctx context.Context) ([]types.PublicKey, error) {
+	hasContract := make(map[types.PublicKey]struct{})
+	for _, c := range s.contracts {
+		hasContract[c.HostKey] = struct{}{}
+	}
+
+	var hosts []types.PublicKey
+	for hk := range s.hosts {
+		if _, ok := hasContract[hk]; ok {
+			hosts = append(hosts, hk)
+		}
+	}
+
+	return hosts, nil
+}
+
+func (s *storeMock) MarkPruned(ctx context.Context, contractID types.FileContractID, nextPrune time.Time) error {
 	for i, c := range s.contracts {
 		if c.ID == contractID {
 			s.contracts[i].LastPrune = time.Now()

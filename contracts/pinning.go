@@ -51,13 +51,8 @@ func (cm *ContractManager) performSectorPinning(ctx context.Context, log *zap.Lo
 		return nil
 	}
 
-	const (
-		nThreads         = 50
-		sectorsBatchSize = (1 << 40) / proto.SectorSize // 1TB of sectors
-	)
-
 	var wg sync.WaitGroup
-	sema := make(chan struct{}, nThreads)
+	sema := make(chan struct{}, 50)
 	defer close(sema)
 
 	for _, hostKey := range hosts {
@@ -135,17 +130,14 @@ func (cm *ContractManager) performSectorPinningOnHost(ctx context.Context, host 
 		}
 	}()
 
-	const (
-		sectorsBatchSize  = (1 << 40) / proto.SectorSize // 1TB of sectors
-		updateDBBatchSize = 1000
-	)
+	const updateDBBatchSize = 1000
 
 	var exhausted bool
 	for !exhausted && ctx.Err() == nil {
-		roots, err := cm.store.UnpinnedSectors(ctx, host.PublicKey, sectorsBatchSize)
+		roots, err := cm.store.UnpinnedSectors(ctx, host.PublicKey, proto.MaxSectorBatchSize)
 		if err != nil {
 			return fmt.Errorf("failed to fetch unpinned sectors: %w", err)
-		} else if len(roots) < sectorsBatchSize {
+		} else if len(roots) < proto.MaxSectorBatchSize {
 			exhausted = true
 		}
 

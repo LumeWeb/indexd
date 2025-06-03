@@ -370,7 +370,7 @@ func (s *Store) MarkBroadcastAttempt(ctx context.Context, contractID types.FileC
 }
 
 // MarkPruned marks the given contract as pruned in the database.
-func (s *Store) MarkPruned(ctx context.Context, contractID types.FileContractID) error {
+func (s *Store) MarkPruned(ctx context.Context, contractID types.FileContractID, _ time.Time) error {
 	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
 		_, err := tx.Exec(ctx, `UPDATE contracts SET last_prune = NOW() WHERE contract_id = $1`, sqlHash256(contractID))
 		return err

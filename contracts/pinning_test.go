@@ -85,22 +85,6 @@ func (s *storeMock) HostsForPinning(ctx context.Context) ([]types.PublicKey, err
 	return hosts, nil
 }
 
-func (s *storeMock) HostsForPruning(ctx context.Context) ([]types.PublicKey, error) {
-	hasContract := make(map[types.PublicKey]struct{})
-	for _, c := range s.contracts {
-		hasContract[c.HostKey] = struct{}{}
-	}
-
-	var hosts []types.PublicKey
-	for hk := range s.hosts {
-		if _, ok := hasContract[hk]; ok {
-			hosts = append(hosts, hk)
-		}
-	}
-
-	return hosts, nil
-}
-
 func (s *storeMock) PinSectors(ctx context.Context, contractID types.FileContractID, roots []types.Hash256) error {
 	// find host key
 	var hk types.PublicKey
