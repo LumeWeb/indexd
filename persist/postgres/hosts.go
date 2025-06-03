@@ -683,3 +683,9 @@ func (s *Store) HostsForPinning(ctx context.Context) ([]types.PublicKey, error) 
 	}
 	return hosts, nil
 }
+
+// HostsForPruning returns a list of host keys that have contracts that need
+// pruning.
+func (s *Store) HostsForPruning(ctx context.Context) ([]types.PublicKey, error) {
+	panic("not implemented")
+}

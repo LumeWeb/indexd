@@ -55,55 +55,51 @@ func (cm *ContractManager) performContractPruning(ctx context.Context, log *zap.
 	start := time.Now()
 	log = log.Named("contractpruning")
 
-	// prune sectors on usable hosts with active contracts
-	opts := []hosts.HostQueryOpt{
-		hosts.WithUsable(true),
-		hosts.WithBlocked(false),
-		hosts.WithActiveContracts(true),
+	// fetch hosts for pruning, a host is eligble for pruning if it is not
+	// blocked and has active contracts that haven't been pruned in the last 24
+	// hours
+	hosts, err := cm.store.HostsForPruning(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to fetch hosts for pruning: %w", err)
+	} else if len(hosts) == 0 {
+		log.Warn("no hosts for pruning")
+		return nil
 	}
 
 	const (
-		batchSize        = 50
+		nThreads         = 50
 		sectorsBatchSize = (1 << 40) / proto.SectorSize
 	)
 
 	var wg sync.WaitGroup
-	sema := make(chan struct{}, 50)
+	sema := make(chan struct{}, nThreads)
 	defer close(sema)
 
-	for offset := 0; ctx.Err() == nil; offset += batchSize {
-		// fetch hosts
-		batch, err := cm.store.Hosts(ctx, offset, batchSize, opts...)
-		if err != nil {
-			return fmt.Errorf("failed to fetch hosts for pruning: %w", err)
+	for _, hostKey := range hosts {
+		select {
+		case <-ctx.Done():
+			break
+		case sema <- struct{}{}:
 		}
 
-		// prune contracts in parallel
-		for _, h := range batch {
-			select {
-			case <-ctx.Done():
-				break
-			case sema <- struct{}{}:
+		wg.Add(1)
+		go func(ctx context.Context, hostKey types.PublicKey, hostLog *zap.Logger) {
+			defer func() {
+				<-sema
+				wg.Done()
+			}()
+
+			host, err := cm.store.Host(ctx, hostKey)
+			if err != nil {
+				hostLog.Debug("failed to fetch host", zap.Error(err))
+				return
 			}
 
-			wg.Add(1)
-			go func(ctx context.Context, host hosts.Host, hostLog *zap.Logger) {
-				defer func() {
-					<-sema
-					wg.Done()
-				}()
-
-				err = cm.performContractPruningOnHost(ctx, host, hostLog)
-				if err != nil {
-					hostLog.Debug("failed to prune contracts", zap.Error(err))
-				}
-			}(ctx, h, log.With(zap.Stringer("hostKey", h.PublicKey)))
-		}
-
-		// break if hosts are exhausted
-		if len(batch) < batchSize {
-			break
-		}
+			err = cm.performContractPruningOnHost(ctx, host, hostLog)
+			if err != nil {
+				hostLog.Debug("failed to prune contracts", zap.Error(err))
+			}
+		}(ctx, hostKey, log.With(zap.Stringer("hostKey", hostKey)))
 	}
 
 	wg.Wait()
@@ -113,15 +109,18 @@ func (cm *ContractManager) performContractPruning(ctx context.Context, log *zap.
 }
 
 func (cm *ContractManager) performContractPruningOnHost(ctx context.Context, host hosts.Host, hostLog *zap.Logger) error {
+	// check host is good
+	if !host.IsGood() {
+		return fmt.Errorf("host is bad: blocked=%t, usable=%t, networks=%d", host.Blocked, host.Usability.Usable(), len(host.Networks))
+	}
+
 	// refresh prices if necessary
-	ts := host.Settings.Prices.ValidUntil
-	if !host.Usability.Usable() || time.Until(ts) < 30*time.Minute {
+	if time.Until(host.Settings.Prices.ValidUntil) < 30*time.Minute {
 		host, err := cm.scanner.ScanHost(ctx, host.PublicKey)
 		if err != nil {
 			return fmt.Errorf("failed to scan host: %w", err)
 		} else if !host.IsGood() {
-			hostLog.Debug("host is not good for pinning", zap.Bool("blocked", host.Blocked), zap.Bool("usable", host.Usability.Usable()), zap.Bool("networks", len(host.Networks) > 0))
-			return fmt.Errorf("host is not good: %w", err)
+			return fmt.Errorf("host is bad: blocked=%t, usable=%t, networks=%d", host.Blocked, host.Usability.Usable(), len(host.Networks))
 		}
 	}
 

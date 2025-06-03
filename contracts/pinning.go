@@ -57,7 +57,7 @@ func (cm *ContractManager) performSectorPinning(ctx context.Context, log *zap.Lo
 	)
 
 	var wg sync.WaitGroup
-	sema := make(chan struct{}, 50)
+	sema := make(chan struct{}, nThreads)
 	defer close(sema)
 
 	for _, hostKey := range hosts {
@@ -78,9 +78,6 @@ func (cm *ContractManager) performSectorPinning(ctx context.Context, log *zap.Lo
 			if err != nil {
 				hostLog.Debug("failed to fetch host", zap.Error(err))
 				return
-			} else if host.Blocked {
-				hostLog.Debug("host is blocked")
-				return
 			}
 
 			err = cm.performSectorPinningOnHost(ctx, host, hostLog)
@@ -97,15 +94,18 @@ func (cm *ContractManager) performSectorPinning(ctx context.Context, log *zap.Lo
 }
 
 func (cm *ContractManager) performSectorPinningOnHost(ctx context.Context, host hosts.Host, hostLog *zap.Logger) error {
+	// check host is good
+	if !host.IsGood() {
+		return fmt.Errorf("host is bad: blocked=%t, usable=%t, networks=%d", host.Blocked, host.Usability.Usable(), len(host.Networks))
+	}
+
 	// refresh prices if necessary
-	ts := host.Settings.Prices.ValidUntil
-	if !host.Usability.Usable() || time.Until(ts) < 30*time.Minute {
+	if time.Until(host.Settings.Prices.ValidUntil) < 30*time.Minute {
 		host, err := cm.scanner.ScanHost(ctx, host.PublicKey)
 		if err != nil {
 			return fmt.Errorf("failed to scan host: %w", err)
 		} else if !host.IsGood() {
-			hostLog.Debug("host is not good for pinning", zap.Bool("blocked", host.Blocked), zap.Bool("usable", host.Usability.Usable()), zap.Bool("networks", len(host.Networks) > 0))
-			return fmt.Errorf("host is not good: %w", err)
+			return fmt.Errorf("host is bad: blocked=%t, usable=%t, networks=%d", host.Blocked, host.Usability.Usable(), len(host.Networks))
 		}
 	}
 
