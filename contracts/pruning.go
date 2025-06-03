@@ -132,7 +132,7 @@ func (cm *ContractManager) performContractPruningOnHost(ctx context.Context, hos
 	defer client.Close()
 
 	// fetch contract ids
-	contracts, err := cm.store.ContractsForPruning(ctx, host.PublicKey, time.Now().Add(-time.Hour*24))
+	contracts, err := cm.store.ContractsForPruning(ctx, host.PublicKey)
 	if err != nil {
 		return fmt.Errorf("failed to fetch contracts for pruning: %w", err)
 	} else if len(contracts) == 0 {
@@ -150,15 +150,18 @@ func (cm *ContractManager) performContractPruningOnHost(ctx context.Context, hos
 
 		n, err := cm.pruneContract(ctx, client, host.Settings.Prices, contract)
 		if err != nil {
+			if updateErr := cm.store.UpdateNextPrune(ctx, contract, time.Now().Add(pruneIntervalFailure)); updateErr != nil {
+				err = errors.Join(err, fmt.Errorf("failed to update contract: %w", updateErr))
+			}
 			hostLog.Debug("failed to prune contract", zap.Error(err))
 			continue
 		} else if n > 0 {
 			hostLog.Debug("pruned contract", zap.Stringer("contractID", contract), zap.Int("sectors", n), zap.Int("bytes", n*proto.SectorSize))
 		}
 
-		err = cm.store.MarkPruned(ctx, contract, time.Now().Add(pruneIntervalSuccess))
+		err = cm.store.UpdateNextPrune(ctx, contract, time.Now().Add(pruneIntervalSuccess))
 		if err != nil {
-			hostLog.Debug("failed to mark contract as pruned", zap.Error(err))
+			hostLog.Debug("failed to update contract", zap.Error(err))
 		}
 	}
 

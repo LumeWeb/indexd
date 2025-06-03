@@ -77,7 +77,7 @@ type (
 		ContractsForBroadcasting(ctx context.Context, minBroadcast time.Time, limit int) ([]types.FileContractID, error)
 		ContractsForFunding(ctx context.Context, hk types.PublicKey, limit int) ([]types.FileContractID, error)
 		ContractsForPinning(ctx context.Context, hk types.PublicKey, maxContractSize uint64) ([]types.FileContractID, error)
-		ContractsForPruning(ctx context.Context, hk types.PublicKey, maxLastPrune time.Time) ([]types.FileContractID, error)
+		ContractsForPruning(ctx context.Context, hk types.PublicKey) ([]types.FileContractID, error)
 		Host(ctx context.Context, hostKey types.PublicKey) (hosts.Host, error)
 		Hosts(ctx context.Context, offset, limit int, queryOpts ...hosts.HostQueryOpt) ([]hosts.Host, error)
 		HostsForPruning(ctx context.Context) ([]types.PublicKey, error)
@@ -85,7 +85,6 @@ type (
 		MaintenanceSettings(ctx context.Context) (MaintenanceSettings, error)
 		MarkSectorsLost(ctx context.Context, hostKey types.PublicKey, roots []types.Hash256) error
 		MarkBroadcastAttempt(ctx context.Context, contractID types.FileContractID) error
-		MarkPruned(ctx context.Context, contractID types.FileContractID, nextPrune time.Time) error
 		MarkUnrenewableContractsBad(ctx context.Context, maxProofHeight uint64) error
 		PinSectors(ctx context.Context, contractID types.FileContractID, roots []types.Hash256) error
 		RejectPendingContracts(ctx context.Context, maxFormation time.Time) error
@@ -93,6 +92,7 @@ type (
 		PrunableContractRoots(ctx context.Context, contractID types.FileContractID, roots []types.Hash256) ([]types.Hash256, error)
 		PruneExpiredContractElements(ctx context.Context, maxBlocksSinceExpiry uint64) error
 		UnpinnedSectors(ctx context.Context, hostKey types.PublicKey, limit int) ([]types.Hash256, error)
+		UpdateNextPrune(ctx context.Context, contractID types.FileContractID, nextPrune time.Time) error
 	}
 
 	// Syncer is the minimal interface of Syncer functionality the

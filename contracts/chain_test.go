@@ -296,6 +296,7 @@ func (s *storeMock) UpdateHostSettings(hostKey types.PublicKey, settings proto.H
 		return hosts.ErrNotFound
 	}
 	h.Settings = settings
+	h.Usability.AcceptingContracts = settings.AcceptingContracts
 	s.hosts[hostKey] = h
 	return nil
 }

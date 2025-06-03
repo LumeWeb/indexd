@@ -63,6 +63,8 @@ func (d *dialerMock) Dial(ctx context.Context, hostKey types.PublicKey, addr str
 }
 
 type hostClientMock struct {
+	failsRPCs bool
+
 	appendSectorCalls []appendSectorCall
 	formCalls         []formContractCall
 	freeSectorsCalls  []freeSectorsCall
@@ -92,6 +94,10 @@ func (c *hostClientMock) Calls() []formContractCall {
 }
 
 func (c *hostClientMock) FormContract(ctx context.Context, settings proto.HostSettings, params proto.RPCFormContractParams) (rhp.RPCFormContractResult, error) {
+	if c.failsRPCs {
+		return rhp.RPCFormContractResult{}, fmt.Errorf("mocked error")
+	}
+
 	c.formCalls = append(c.formCalls, formContractCall{
 		settings: settings,
 		params:   params,
@@ -116,6 +122,10 @@ func (c *hostClientMock) FormContract(ctx context.Context, settings proto.HostSe
 }
 
 func (c *hostClientMock) LatestRevision(ctx context.Context, contractID types.FileContractID) (proto.RPCLatestRevisionResponse, error) {
+	if c.failsRPCs {
+		return proto.RPCLatestRevisionResponse{}, fmt.Errorf("mocked error")
+	}
+
 	resp, ok := c.latestRevisions[contractID]
 	if !ok {
 		return proto.RPCLatestRevisionResponse{}, fmt.Errorf("contract %v not found", contractID)
