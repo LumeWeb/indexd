@@ -35,6 +35,19 @@ type storeMock struct {
 	rejectCalls int
 	settings    MaintenanceSettings
 	hosts       map[types.PublicKey]hosts.Host
+	sectors     map[types.PublicKey][]sector
+}
+
+type sector struct {
+	root       types.Hash256
+	contractID *types.FileContractID
+}
+
+func newStoreMock() *storeMock {
+	return &storeMock{
+		hosts:   make(map[types.PublicKey]hosts.Host),
+		sectors: make(map[types.PublicKey][]sector),
+	}
 }
 
 func (s *storeMock) AddFormedContract(ctx context.Context, hostKey types.PublicKey, contractID types.FileContractID, revision types.V2FileContract, contractPrice, allowance, minerFee types.Currency) error {
