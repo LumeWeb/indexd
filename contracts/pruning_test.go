@@ -221,9 +221,11 @@ func TestPerformContractPruningOnHost(t *testing.T) {
 	r7 := types.Hash256{7}
 	r8 := types.Hash256{8}
 	r9 := types.Hash256{9}
+	r10 := types.Hash256{10}
 
 	store.sectors[hk1] = []sector{{root: r1, contractID: &fcid1}, {root: r2, contractID: &fcid1}, {root: r4, contractID: &fcid2}, {root: r7, contractID: &fcid2}, {root: r8, contractID: &fcid2}} // r3, r5, r6 dropped
-	store.sectors[hk2] = []sector{{root: r9, contractID: &fcid3}}                                                                                                                                 // none dropped                                                                                                                                                // r5, r6 dropped
+	store.sectors[hk2] = []sector{{root: r9, contractID: &fcid3}}                                                                                                                                 // none dropped
+	store.sectors[hk5] = []sector{{root: r10, contractID: &fcid4}}                                                                                                                                // none dropped
 
 	// prepare dialer
 	h1Mock := newHostClientMock()
@@ -242,6 +244,7 @@ func TestPerformContractPruningOnHost(t *testing.T) {
 	h1Mock.sectorRoots[fcid1] = []types.Hash256{r1, r2, r3}
 	h1Mock.sectorRoots[fcid2] = []types.Hash256{r4, r5, r6, r7, r8}
 	h2Mock.sectorRoots[fcid3] = []types.Hash256{r9}
+	h5Mock.sectorRoots[fcid4] = []types.Hash256{r10}
 
 	// set contract sizes
 	for i, c := range store.contracts {
@@ -252,6 +255,8 @@ func TestPerformContractPruningOnHost(t *testing.T) {
 			store.contracts[i].Size = proto.SectorSize * uint64(len(h1Mock.sectorRoots[fcid2]))
 		case fcid3:
 			store.contracts[i].Size = proto.SectorSize * uint64(len(h2Mock.sectorRoots[fcid3]))
+		case fcid4:
+			store.contracts[i].Size = proto.SectorSize * uint64(len(h5Mock.sectorRoots[fcid4]))
 		}
 	}
 
@@ -356,13 +361,13 @@ func TestPerformContractPruningOnHost(t *testing.T) {
 	failure := time.Now().Add(pruneIntervalFailure)
 	for _, c := range contracts {
 		switch c.ID {
-		case fcid1, fcid2, fcid3, fcid4:
+		case fcid1, fcid2, fcid3:
 			if !(c.NextPrune.After(success.Add(-time.Minute)) && c.NextPrune.Before(success.Add(time.Minute))) {
 				t.Fatal("expected next prune to be scheduled 24h from now", c.ID, success, c.NextPrune)
 			}
 		case fcid4:
 			if !(c.NextPrune.After(failure.Add(-time.Minute)) && c.NextPrune.Before(failure.Add(time.Minute))) {
-				t.Fatal("expected next prune to be scheduled 24h from now", c.ID, failure, c.NextPrune)
+				t.Fatal("expected next prune to be scheduled 3h from now", c.ID, failure, c.NextPrune)
 			}
 		default:
 			t.Fatal("unexpected contract ID", c.ID)
