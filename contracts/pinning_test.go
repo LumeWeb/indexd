@@ -256,7 +256,7 @@ func TestPerformSectorPinningOnHost(t *testing.T) {
 	scanner.settings[hk2] = h2.Settings
 
 	// prepare contract manager
-	cm, err := NewManager(types.PublicKey{}, nil, nil, dialer, scanner, store, nil, nil)
+	cm, err := NewManager(types.PublicKey{}, nil, &chainManagerMock{}, dialer, scanner, store, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
