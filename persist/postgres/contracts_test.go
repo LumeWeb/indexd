@@ -1144,6 +1144,13 @@ func TestUpdateContractRevision(t *testing.T) {
 	} else if revision != update {
 		t.Fatalf("expected revision to be %v, got %v", update, revision)
 	}
+
+	// assert [contracts.ErrNotFound] is returned for non-existing contract
+	if _, _, err := store.ContractRevision(context.Background(), types.FileContractID{}); !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatalf("expected ErrContractNotFound, got %v", err)
+	} else if err := store.UpdateContractRevision(context.Background(), types.FileContractID{}, newTestRevision(types.PublicKey{})); !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatalf("expected ErrContractNotFound, got %v", err)
+	}
 }
 
 func TestMarkBroadcastAttempt(t *testing.T) {

@@ -29,11 +29,11 @@ func (s *Store) ContractRevision(ctx context.Context, contractID types.FileContr
 func (s *Store) UpdateContractRevision(ctx context.Context, contractID types.FileContractID, revision types.V2FileContract) error {
 	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
 		query := `UPDATE contracts SET raw_revision = $1, revision_number = $2, capacity = $3, size = $4, remaining_allowance = $5, used_collateral = $6 WHERE contract_id = $7`
-		_, err := tx.Exec(ctx, query, sqlFileContract(revision), revision.RevisionNumber, revision.Capacity, revision.Filesize, sqlCurrency(revision.RenterOutput.Value), sqlCurrency(revision.MissedHostValue), sqlHash256(contractID))
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("contract %q: %w", contractID, contracts.ErrNotFound)
-		} else if err != nil {
+		res, err := tx.Exec(ctx, query, sqlFileContract(revision), revision.RevisionNumber, revision.Capacity, revision.Filesize, sqlCurrency(revision.RenterOutput.Value), sqlCurrency(revision.MissedHostValue), sqlHash256(contractID))
+		if err != nil {
 			return fmt.Errorf("failed to update contract revision: %w", err)
+		} else if res.RowsAffected() != 1 {
+			return fmt.Errorf("contract %q: %w", contractID, contracts.ErrNotFound)
 		}
 		return nil
 	})
