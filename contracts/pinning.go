@@ -167,7 +167,7 @@ func (cm *ContractManager) performSectorPinningOnHost(ctx context.Context, host 
 // pinSectors pins a set of sectors using the given set of contracts The
 // contracts are tried in order, the contract ID that ends up being used is
 // returned, alongside with a list of missing sectors if any.
-func pinSectors(ctx context.Context, client hosts.HostClient, hostPrices proto.HostPrices, contractIDs []types.FileContractID, sectors []types.Hash256, log *zap.Logger) (usedContractID types.FileContractID, missing []types.Hash256, _ error) {
+func pinSectors(ctx context.Context, client hosts.Client, hostPrices proto.HostPrices, contractIDs []types.FileContractID, sectors []types.Hash256, log *zap.Logger) (usedContractID types.FileContractID, missing []types.Hash256, _ error) {
 	for _, contractID := range contractIDs {
 		contractLog := log.With(zap.Stringer("contractID", contractID))
 

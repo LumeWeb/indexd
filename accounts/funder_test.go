@@ -15,7 +15,7 @@ import (
 
 type dialerMock struct{}
 
-func (d *dialerMock) Dial(ctx context.Context, hostKey types.PublicKey, addr string) (hosts.HostClient, error) {
+func (d *dialerMock) Dial(ctx context.Context, hostKey types.PublicKey, addr string) (hosts.Client, error) {
 	return &hostClientMock{}, nil
 }
 

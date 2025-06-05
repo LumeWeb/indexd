@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"go.sia.tech/core/consensus"
@@ -44,7 +45,7 @@ var (
 type (
 	// Dialer is an interface for dialing a host.
 	Dialer interface {
-		Dial(ctx context.Context, hostKey types.PublicKey, addr string) (HostClient, error)
+		Dial(ctx context.Context, hostKey types.PublicKey, addr string) (Client, error)
 	}
 
 	// ChainManager defines an interface to access the chain state as well as
@@ -54,9 +55,9 @@ type (
 		rhp.TxPool
 	}
 
-	// HostClient defines the dependencies required to form, renew and refresh
-	// contracts.
-	HostClient interface {
+	// Client defines an interface that allows interacting with a host using the
+	// RPC methods defined in the RHP.
+	Client interface {
 		io.Closer
 		AppendSectors(ctx context.Context, hostPrices proto.HostPrices, contractID types.FileContractID, sectors []types.Hash256) (rhp.RPCAppendSectorsResult, error)
 		FormContract(ctx context.Context, settings proto.HostSettings, params proto.RPCFormContractParams) (rhp.RPCFormContractResult, error)
@@ -65,7 +66,8 @@ type (
 		ReplenishAccounts(ctx context.Context, contractID types.FileContractID, accounts []proto.Account, target types.Currency) (rhp.RPCReplenishAccountsResult, int, error)
 	}
 
-	// RevisionStore will soon be removed
+	// RevisionStore defines an interface that allows fetching and updating a
+	// contract's revision.
 	RevisionStore interface {
 		ContractRevision(ctx context.Context, contractID types.FileContractID) (types.V2FileContract, bool, error)
 		UpdateContractRevision(ctx context.Context, contractID types.FileContractID, revision types.V2FileContract) error
@@ -101,9 +103,10 @@ func NewSiamuxDialer(cm ChainManager, store RevisionStore, signer rhp.FormContra
 	}
 }
 
-// Dial creates a production HostClient that forms, refreshes and renews
-// contracts by dialing up hosts using the SiaMux protocol.
-func (d *siamuxDialer) Dial(ctx context.Context, hostKey types.PublicKey, addr string) (HostClient, error) {
+// Dial dials the host and returns a Client that can be used to interact with
+// the host. It uses the SiaMux protocol to establish a connection and returns a
+// host client that exposes the RPC methods defined in the RHP.
+func (d *siamuxDialer) Dial(ctx context.Context, hostKey types.PublicKey, addr string) (Client, error) {
 	ctx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
 
@@ -253,7 +256,7 @@ func (c *hostClient) syncRevision(ctx context.Context, contractID types.FileCont
 	return resp.Contract, resp.Renewed, nil
 }
 
-func (c *hostClient) withRevision(ctx context.Context, contractID types.FileContractID, fn func(revision types.V2FileContract) (types.V2FileContract, error)) error {
+func (c *hostClient) withRevision(ctx context.Context, contractID types.FileContractID, reviseFn func(revision types.V2FileContract) (types.V2FileContract, error)) error {
 	cs := c.cm.TipState()
 	bh := cs.Index.Height
 	maxProofHeight := bh + revisionSubmissionBuffer
@@ -268,9 +271,11 @@ func (c *hostClient) withRevision(ctx context.Context, contractID types.FileCont
 		return fmt.Errorf("%d > %d (%d+%d), %w", rev.ProofHeight, maxProofHeight, bh, revisionSubmissionBuffer, ErrContractNotRevisable)
 	}
 
-	// try and revise the contract
-	update, err := fn(rev)
-	if errors.Is(err, proto.ErrInvalidSignature) {
+	// revise the contract
+	update, err := reviseFn(rev)
+
+	// try and sync the revision if we got an error that indicates the revision is invalid
+	if err != nil && strings.Contains(err.Error(), proto.ErrInvalidSignature.Error()) {
 		rev, renewed, err = c.syncRevision(ctx, contractID, rev)
 		if err != nil {
 			return fmt.Errorf("failed to sync revision: %w", err)
@@ -280,7 +285,8 @@ func (c *hostClient) withRevision(ctx context.Context, contractID types.FileCont
 			return fmt.Errorf("%d > %d (%d+%d), %w", rev.ProofHeight, maxProofHeight, bh, revisionSubmissionBuffer, ErrContractNotRevisable)
 		}
 
-		update, err = fn(rev) // retry
+		// try and revise the contract again
+		update, err = reviseFn(rev)
 	}
 	if err != nil {
 		return err

@@ -12,7 +12,8 @@ import (
 	"go.sia.tech/indexd/hosts"
 )
 
-// ContractRevision returns the latest revision.
+// ContractRevision returns the revision for the contract with given ID as well
+// as a boolean that indicates whether the contract was renewed.
 func (s *Store) ContractRevision(ctx context.Context, contractID types.FileContractID) (revision types.V2FileContract, renewed bool, _ error) {
 	if err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
 		return tx.QueryRow(ctx, `SELECT raw_revision, renewed_to IS NOT NULL FROM contracts WHERE contract_id = $1`, sqlHash256(contractID)).Scan((*sqlFileContract)(&revision), &renewed)
