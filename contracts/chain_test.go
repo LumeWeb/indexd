@@ -437,7 +437,10 @@ func (w *walletMock) ReleaseInputs(txns []types.Transaction, v2txns []types.V2Tr
 func (w *walletMock) SignV2Inputs(txn *types.V2Transaction, toSign []int) {}
 
 func TestApplyRevertDiff(t *testing.T) {
-	contracts := newContractManager(types.PublicKey{}, nil, nil, nil, nil, nil, nil, nil)
+	contracts, err := NewManager(types.PublicKey{}, nil, nil, nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// create a contract
 	contractID := types.FileContractID{1, 2, 3}
@@ -581,7 +584,10 @@ func TestProcessActions(t *testing.T) {
 	cmMock := newChainManagerMock()
 	syncerMock := &syncerMock{}
 	store := &storeMock{}
-	contracts := newContractManager(types.PublicKey{}, amMock, cmMock, nil, nil, store, syncerMock, &walletMock{})
+	contracts, err := NewManager(types.PublicKey{}, amMock, cmMock, nil, nil, store, syncerMock, &walletMock{})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	contract := types.V2FileContractElement{
 		ID: types.FileContractID{1},

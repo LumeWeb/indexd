@@ -155,23 +155,7 @@ func WithLogger(l *zap.Logger) ContractManagerOpt {
 // NewManager creates a new contract manager. It is responsible for forming and
 // renewing contracts as well as any interactions with hosts that require
 // contracts.
-//
-// TODO: we can get rid of the double constructor in a F/U
-func NewManager(renterKey types.PrivateKey, accountManager AccountManager, chainManager ChainManager, dialer hosts.Dialer, scanner HostManager, store Store, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) (*ContractManager, error) {
-	cm := newContractManager(renterKey.PublicKey(), accountManager, chainManager, dialer, scanner, store, syncer, wallet, opts...)
-
-	ctx, cancel, err := cm.tg.AddContext(context.Background())
-	if err != nil {
-		return nil, err
-	}
-	go func() {
-		defer cancel()
-		cm.maintenanceLoop(ctx)
-	}()
-	return cm, nil
-}
-
-func newContractManager(renterKey types.PublicKey, accountManager AccountManager, chainManager ChainManager, dialer hosts.Dialer, scanner HostManager, store Store, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) *ContractManager {
+func NewManager(renterKey types.PublicKey, accountManager AccountManager, chainManager ChainManager, dialer hosts.Dialer, scanner HostManager, store Store, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) (*ContractManager, error) {
 	cm := &ContractManager{
 		am: accountManager,
 		cm: chainManager,
@@ -199,7 +183,16 @@ func newContractManager(renterKey types.PublicKey, accountManager AccountManager
 	for _, opt := range opts {
 		opt(cm)
 	}
-	return cm
+
+	ctx, cancel, err := cm.tg.AddContext(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		defer cancel()
+		cm.maintenanceLoop(ctx)
+	}()
+	return cm, nil
 }
 
 // TriggerAccountFunding triggers the account funding process. This trigger is

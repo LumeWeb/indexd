@@ -256,11 +256,14 @@ func TestPerformSectorPinningOnHost(t *testing.T) {
 	scanner.settings[hk2] = h2.Settings
 
 	// prepare contract manager
-	cm := newContractManager(types.PublicKey{}, nil, nil, dialer, scanner, store, nil, nil)
+	cm, err := NewManager(types.PublicKey{}, nil, nil, dialer, scanner, store, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// pin sectors on h1
 	h1Prices := h1.Settings.Prices
-	err := cm.performSectorPinningOnHost(context.Background(), h1, zap.NewNop())
+	err = cm.performSectorPinningOnHost(context.Background(), h1, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}

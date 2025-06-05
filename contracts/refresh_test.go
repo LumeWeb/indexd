@@ -149,7 +149,10 @@ func TestPerformContractRefreshes(t *testing.T) {
 	dialer := newDialerMock()
 	renterKey := types.PublicKey{1, 2, 3, 4, 5}
 	wallet := &walletMock{}
-	contracts := newContractManager(renterKey, amMock, cmMock, dialer, scanner, store, syncerMock, wallet)
+	contracts, err := NewManager(renterKey, amMock, cmMock, dialer, scanner, store, syncerMock, wallet)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	assertRefresh := func(h hosts.Host, allowance, collateral types.Currency, refreshedFrom types.FileContractID, call refreshContractCall) {
 		t.Helper()

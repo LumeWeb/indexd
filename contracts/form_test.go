@@ -242,7 +242,10 @@ func TestPerformContractFormationWithoutContracts(t *testing.T) {
 	dialer := newDialerMock()
 	renterKey := types.PublicKey{1, 2, 3, 4, 5}
 	wallet := &walletMock{}
-	contracts := newContractManager(renterKey, amMock, cmMock, dialer, scanner, store, syncerMock, wallet)
+	contracts, err := NewManager(renterKey, amMock, cmMock, dialer, scanner, store, syncerMock, wallet)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// disable randomizing hosts to make test deterministic
 	contracts.shuffle = func(int, func(i, j int)) {}
@@ -408,7 +411,10 @@ func TestPerformContractFormationWithContracts(t *testing.T) {
 	dialer := newDialerMock()
 	renterKey := types.PublicKey{1, 2, 3, 4, 5}
 	wallet := &walletMock{}
-	contracts := newContractManager(renterKey, amMock, cmMock, dialer, scanner, store, syncerMock, wallet)
+	contracts, err := NewManager(renterKey, amMock, cmMock, dialer, scanner, store, syncerMock, wallet)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// disable randomizing hosts to make test deterministic
 	contracts.shuffle = func(int, func(i, j int)) {}

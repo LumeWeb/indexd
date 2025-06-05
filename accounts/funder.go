@@ -85,7 +85,7 @@ func (f *Funder) FundAccounts(ctx context.Context, host hosts.Host, contractIDs 
 		contractLog := log.With(zap.Stringer("contractID", contractID))
 
 		// execute replenish RPC
-		res, n, err := client.ReplenishAccounts(ctx, contractID, accountKeys, target)
+		res, n, err := client.ReplenishAccounts(ctx, contractID, accountKeys[funded:], target)
 		if errors.Is(err, hosts.ErrContractInsufficientFunds) {
 			contractLog.Debug("contract has insufficient funds")
 			drained++
@@ -104,8 +104,7 @@ func (f *Funder) FundAccounts(ctx context.Context, host hosts.Host, contractIDs 
 
 		// update funded ix
 		funded += n
-		accountKeys = accountKeys[n:]
-		if len(accountKeys) == 0 {
+		if funded == len(accountKeys) {
 			break
 		}
 	}
