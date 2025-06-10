@@ -72,7 +72,7 @@ func Connect(ctx context.Context, ci ConnectionInfo, log *zap.Logger) (*Store, e
 		pool.Close()
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
-	log.Sugar().Infof("successfully connected to database %q on %s:%d", ci.Database, ci.Host, ci.Port)
+	log.Info("connected", zap.String("database", ci.Database), zap.String("host", ci.Host), zap.Int("port", ci.Port))
 
 	store := &Store{
 		pool: pool,
