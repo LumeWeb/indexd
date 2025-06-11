@@ -19,14 +19,16 @@ const sectorsPerGiB = uint64(1<<30) / proto.SectorSize
 // than on actual usage.
 var minAllowance = types.Siacoins(10)
 
-type formContractSigner struct {
-	renterKey types.PrivateKey
-	w         rhp.Wallet
-}
+type (
+	formContractSigner struct {
+		renterKey types.PrivateKey
+		w         Wallet
+	}
+)
 
 // NewFormContractSigner implements the rhp.FormContractSigner interface by
 // wrapping a wallet.
-func NewFormContractSigner(w rhp.Wallet, renterKey types.PrivateKey) rhp.FormContractSigner {
+func NewFormContractSigner(w Wallet, renterKey types.PrivateKey) rhp.FormContractSigner {
 	return &formContractSigner{
 		renterKey: renterKey,
 		w:         w,
@@ -35,6 +37,10 @@ func NewFormContractSigner(w rhp.Wallet, renterKey types.PrivateKey) rhp.FormCon
 
 func (s *formContractSigner) FundV2Transaction(txn *types.V2Transaction, amount types.Currency) (types.ChainIndex, []int, error) {
 	return s.w.FundV2Transaction(txn, amount, true)
+}
+
+func (s *formContractSigner) RecommendedFee() types.Currency {
+	return s.w.RecommendedFee()
 }
 
 func (s *formContractSigner) ReleaseInputs(txns []types.V2Transaction) {
