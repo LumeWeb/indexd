@@ -2,23 +2,41 @@ package postgres
 
 import (
 	"context"
+	"encoding/hex"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/goleak"
 	"go.uber.org/zap"
+	"lukechampine.com/frand"
 )
 
 func TestMain(m *testing.M) {
 	goleak.VerifyTestMain(m)
 }
 
-func initPostgres(t testing.TB, log *zap.Logger) *Store {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+func TestEnsureDatabase(t *testing.T) {
+	// generate random database name
+	rBytes := frand.Entropy128()
+	ci := connectionInfoFromEnv()
+	ci.Database = hex.EncodeToString(rBytes[:])
 
-	ci := ConnectionInfo{
+	// ensure the database exists
+	if err := ensureDatabase(context.Background(), ci); err != nil {
+		t.Fatalf("failed to ensure database: %v", err)
+	}
+
+	// cleanup - drop the database
+	store := initPostgres(t, zap.NewNop())
+	if _, err := store.pool.Exec(context.Background(), `DROP DATABASE `+pgx.Identifier{ci.Database}.Sanitize()); err != nil {
+		t.Fatalf("failed to drop database: %v", err)
+	}
+}
+
+func connectionInfoFromEnv() ConnectionInfo {
+	return ConnectionInfo{
 		Host:     "localhost",
 		Port:     5432,
 		User:     os.Getenv("POSTGRES_USER"),
@@ -26,7 +44,13 @@ func initPostgres(t testing.TB, log *zap.Logger) *Store {
 		Database: os.Getenv("POSTGRES_DB"),
 		SSLMode:  "disable",
 	}
-	db, err := Connect(ctx, ci, log)
+}
+
+func initPostgres(t testing.TB, log *zap.Logger) *Store {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	db, err := Connect(ctx, connectionInfoFromEnv(), log)
 	if err != nil {
 		t.Fatal(err)
 	}

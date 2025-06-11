@@ -61,10 +61,19 @@ func (s *Store) Close() error {
 // determines the lifecycle of necessary migrations. If the context is cancelled,
 // the running migration will be interupted and an error returned.
 func Connect(ctx context.Context, ci ConnectionInfo, log *zap.Logger) (*Store, error) {
+	if err := ensureDatabase(ctx, ci); err != nil {
+		return nil, fmt.Errorf("failed to ensure database %q exists: %w", ci.Database, err)
+	}
+
 	pool, err := pgxpool.New(ctx, ci.String())
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return nil, fmt.Errorf("failed to create pool: %w", err)
+	} else if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
+	log.Info("connected", zap.String("database", ci.Database), zap.String("host", ci.Host), zap.Int("port", ci.Port))
+
 	store := &Store{
 		pool: pool,
 		log:  log,
@@ -73,4 +82,33 @@ func Connect(ctx context.Context, ci ConnectionInfo, log *zap.Logger) (*Store, e
 		return nil, fmt.Errorf("failed to initialize store: %w", err)
 	}
 	return store, nil
+}
+
+func ensureDatabase(ctx context.Context, ci ConnectionInfo) error {
+	// return early if we're connecting to the default database
+	if ci.Database == "postgres" {
+		return nil
+	}
+	db := ci.Database
+	ci.Database = "postgres"
+
+	// connect to the postgres database
+	pool, err := pgxpool.New(ctx, ci.String())
+	if err != nil {
+		return fmt.Errorf("failed to connect to postgres database: %w", err)
+	}
+	defer pool.Close()
+
+	// check if the database exists
+	var exists bool
+	if err = pool.QueryRow(ctx, "SELECT EXISTS(SELECT FROM pg_database WHERE datname = $1)", db).Scan(&exists); err != nil {
+		return fmt.Errorf("failed to check if database exists: %w", err)
+	} else if exists {
+		return nil
+	}
+
+	// create the database if it does not exist
+	query := "CREATE DATABASE " + pgx.Identifier{db}.Sanitize()
+	_, err = pool.Exec(ctx, query)
+	return err
 }
