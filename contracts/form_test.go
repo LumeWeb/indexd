@@ -165,6 +165,8 @@ func (s *scannerMock) WithScannedHost(ctx context.Context, hk types.PublicKey, f
 	h, err := s.store.Host(ctx, hk)
 	if err != nil {
 		return err
+	} else if !h.IsGood() {
+		return hosts.ErrBadHost
 	}
 	return fn(h)
 }

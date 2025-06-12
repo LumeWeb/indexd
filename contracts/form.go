@@ -220,8 +220,12 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 		hostLog := formationLog.With(zap.Stringer("hostKey", hostKey))
 
 		err := cm.scanner.WithScannedHost(ctx, candidates[i].PublicKey, func(host hosts.Host) error {
-			allowance, collateral := initialContractFunding(host.Settings.Prices, host.Settings.MaxCollateral, period)
+			// make sure host is still good
+			if !isGood(host, hostLog) {
+				return fmt.Errorf("host is not good: %s", host.PublicKey)
+			}
 
+			allowance, collateral := initialContractFunding(host.Settings.Prices, host.Settings.MaxCollateral, period)
 			formationCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			hc, err := cm.dialer.Dial(formationCtx, host.PublicKey, host.SiamuxAddr())
 			if err != nil {
@@ -244,7 +248,7 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 
 			contract := res.Contract
 			minerFee := res.FormationSet.Transactions[len(res.FormationSet.Transactions)-1].MinerFee
-			err = cm.store.AddFormedContract(ctx, hostKey, contract.ID, contract.Revision, host.Settings.Prices.ContractPrice, res.Contract.Revision.RenterOutput.Value, minerFee)
+			err = cm.store.AddFormedContract(ctx, hostKey, contract.ID, contract.Revision, host.Settings.Prices.ContractPrice, allowance, minerFee)
 			if err != nil {
 				formationLog.Error("failed to add formed contract", zap.Error(err))
 				return fmt.Errorf("failed to add formed contract: %w", err)

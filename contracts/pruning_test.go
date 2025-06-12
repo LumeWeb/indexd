@@ -8,7 +8,6 @@ import (
 	"net"
 	"slices"
 	"sort"
-	"strings"
 	"testing"
 	"time"
 
@@ -332,20 +331,26 @@ func TestPerformContractPruningOnHost(t *testing.T) {
 		t.Fatalf("expected no contracts for pruning, got %v", contracts)
 	}
 
+	performPruning := func(hostKey types.PublicKey) error {
+		return cm.scanner.WithScannedHost(context.Background(), hostKey, func(h hosts.Host) error {
+			return cm.performContractPruningOnHost(context.Background(), h, zap.NewNop())
+		})
+	}
+
 	// prune contracts on h3
-	err = cm.performContractPruningOnHost(context.Background(), h3, zap.NewNop())
-	if err == nil || !strings.Contains(err.Error(), "host is bad") {
+	err = performPruning(hk3)
+	if !errors.Is(err, hosts.ErrBadHost) {
 		t.Fatal("unexpected", err)
 	}
 
 	// prune contracts on h4
-	err = cm.performContractPruningOnHost(context.Background(), h4, zap.NewNop())
-	if err == nil || !strings.Contains(err.Error(), "host is bad") {
+	err = performPruning(hk4)
+	if !errors.Is(err, hosts.ErrBadHost) {
 		t.Fatal("unexpected", err)
 	}
 
 	// prune contracts on h5
-	err = cm.performContractPruningOnHost(context.Background(), h5, zap.NewNop())
+	err = performPruning(hk5)
 	if err != nil {
 		t.Fatalf("failed to perform contract pruning: %v", err)
 	}

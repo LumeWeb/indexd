@@ -2,6 +2,7 @@ package contracts
 
 import (
 	"context"
+	"net"
 	"testing"
 
 	proto "go.sia.tech/core/rhp/v4"
@@ -56,6 +57,7 @@ func TestPerformContractRefreshes(t *testing.T) {
 	amMock := &accountsManagerMock{}
 	cmMock := newChainManagerMock()
 	syncerMock := &syncerMock{}
+	badSettings := proto.HostSettings{}
 
 	// helper to create a good host
 	goodHost := func(i int) hosts.Host {
@@ -63,6 +65,7 @@ func TestPerformContractRefreshes(t *testing.T) {
 			PublicKey: types.PublicKey{byte(i)},
 			Settings:  goodSettings,
 			Usability: hosts.GoodUsability,
+			Networks:  []net.IPNet{{}},
 		}
 	}
 
@@ -136,8 +139,7 @@ func TestPerformContractRefreshes(t *testing.T) {
 
 	// second one is bad since it's not accepting contracts with a good contract
 	bad := goodHost(2)
-	bad.Usability.AcceptingContracts = false
-	scanner.settings[bad.PublicKey] = goodSettings
+	scanner.settings[bad.PublicKey] = badSettings
 	formContract(types.FileContractID{8}, bad.PublicKey, true, true, true)
 
 	// populate store

@@ -2,6 +2,7 @@ package contracts
 
 import (
 	"context"
+	"net"
 	"testing"
 
 	proto "go.sia.tech/core/rhp/v4"
@@ -59,6 +60,7 @@ func TestPerformContractRenewals(t *testing.T) {
 			PublicKey: types.PublicKey{byte(i)},
 			Settings:  badSettings, // will be updated by scan to good settings
 			Usability: hosts.GoodUsability,
+			Networks:  []net.IPNet{{}},
 		}
 	}
 
@@ -94,8 +96,7 @@ func TestPerformContractRenewals(t *testing.T) {
 
 	// second one is bad since it's not accepting contracts with a good contract
 	bad := goodHost(2)
-	bad.Usability.AcceptingContracts = false
-	scanner.settings[bad.PublicKey] = goodSettings
+	scanner.settings[bad.PublicKey] = badSettings
 	formContract(types.FileContractID{3}, bad.PublicKey, true) // won't renew
 
 	// populate store
