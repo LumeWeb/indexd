@@ -39,17 +39,12 @@ type formContractCall struct {
 }
 
 type hmMock struct {
-	clients  map[types.PublicKey]*hostClientMock
-	settings map[types.PublicKey]proto.HostSettings
-
-	store *storeMock
+	clients map[types.PublicKey]*hostClientMock
 }
 
-func newHostManagerMock(store *storeMock) *hmMock {
+func newHostManagerMock() *hmMock {
 	return &hmMock{
-		clients:  make(map[types.PublicKey]*hostClientMock),
-		settings: make(map[types.PublicKey]proto.HostSettings),
-		store:    store,
+		clients: make(map[types.PublicKey]*hostClientMock),
 	}
 }
 
@@ -65,18 +60,6 @@ func (h *hmMock) HostClient(hk types.PublicKey) *hostClientMock {
 		h.clients[hk] = newHostClientMock()
 	}
 	return h.clients[hk]
-}
-
-// ScanHost returns the preconfigured settings for the host or no settings to
-// simulate a failing scan. Upon success, the underlying store is updated.
-func (h *hmMock) ScanHost(ctx context.Context, hk types.PublicKey) (hosts.Host, error) {
-	settings, ok := h.settings[hk]
-	if !ok {
-		return hosts.Host{}, hosts.ErrNotFound
-	} else if err := h.store.UpdateHostSettings(hk, settings); err != nil {
-		return hosts.Host{}, err
-	}
-	return h.store.Host(ctx, hk)
 }
 
 type hostClientMock struct {
@@ -138,14 +121,45 @@ func (c *hostClientMock) FormContract(ctx context.Context, settings proto.HostSe
 	}, nil
 }
 
+type scannerMock struct {
+	settings map[types.PublicKey]proto.HostSettings
+
+	store *storeMock
+}
+
+// Scanner is a convenience method to create a scanner from a store mock. The
+// scanner contains all the settings of the hosts from the mocked store and will
+// be updating the store upon scanning.
+func (s *storeMock) Scanner() *scannerMock {
+	scannerMock := &scannerMock{
+		store:    s,
+		settings: map[types.PublicKey]proto.HostSettings{},
+	}
+	for _, host := range s.hosts {
+		scannerMock.settings[host.PublicKey] = host.Settings
+	}
+	return scannerMock
+}
+
+// ScanHost returns the preconfigured settings for the host or no settings to
+// simulate a failing scan. Upon success, the underlying store is updated.
+func (s *scannerMock) ScanHost(ctx context.Context, hk types.PublicKey) (hosts.Host, error) {
+	settings, ok := s.settings[hk]
+	if !ok {
+		return hosts.Host{}, hosts.ErrNotFound
+	} else if err := s.store.UpdateHostSettings(hk, settings); err != nil {
+		return hosts.Host{}, err
+	}
+	return s.store.Host(ctx, hk)
+}
+
 // TestPerformContractFormationWithoutContracts tests the
 // performContractFormation method assuming that we don't have any contracts
 // yet.
 func TestPerformContractFormationWithoutContracts(t *testing.T) {
-	store := &storeMock{}
 	amMock := &accountsManagerMock{}
 	cmMock := newChainManagerMock()
-	hmMock := newHostManagerMock(store)
+	hmMock := newHostManagerMock()
 	blockHeight := cmMock.TipState().Index.Height
 
 	const (
@@ -175,39 +189,42 @@ func TestPerformContractFormationWithoutContracts(t *testing.T) {
 		}
 	}
 
+	store := &storeMock{}
+	scanner := store.Scanner()
+
 	// prepare hosts
 
 	// first one is good
 	good1 := goodHost(1)
-	hmMock.settings[good1.PublicKey] = goodSettings
+	scanner.settings[good1.PublicKey] = goodSettings
 
 	// second one is bad since the network overlaps with the first one
 	bad1 := goodHost(2)
 	bad1.Networks = append(bad1.Networks, good1.Networks[0])
-	hmMock.settings[bad1.PublicKey] = goodSettings
+	scanner.settings[bad1.PublicKey] = goodSettings
 
 	// third one is good even though it overlaps with the second one which
 	// didn't get picked
 	good2 := goodHost(3)
 	good2.Networks = append(good2.Networks, bad1.Networks[0])
-	hmMock.settings[good2.PublicKey] = goodSettings
+	scanner.settings[good2.PublicKey] = goodSettings
 
 	// fourth one is bad due to bad usability
 	bad2 := goodHost(4)
 	bad2.Usability.AcceptingContracts = false
-	hmMock.settings[bad2.PublicKey] = goodSettings
+	scanner.settings[bad2.PublicKey] = goodSettings
 
 	// fifth one is bad due to being out of storage
 	bad3 := goodHost(5)
-	hmMock.settings[bad3.PublicKey] = oosSettings
+	scanner.settings[bad3.PublicKey] = oosSettings
 
 	// 6th one is good again
 	good3 := goodHost(6)
-	hmMock.settings[good3.PublicKey] = goodSettings
+	scanner.settings[good3.PublicKey] = goodSettings
 
 	// 7th one is good again but will be ignored since we only want 3 contracts
 	good4 := goodHost(7)
-	hmMock.settings[good4.PublicKey] = goodSettings
+	scanner.settings[good4.PublicKey] = goodSettings
 
 	// populate store
 	store.hosts = map[types.PublicKey]hosts.Host{
@@ -221,7 +238,7 @@ func TestPerformContractFormationWithoutContracts(t *testing.T) {
 
 	renterKey := types.PublicKey{1, 2, 3, 4, 5}
 	wallet := &walletMock{}
-	contracts, err := newContractManager(renterKey, amMock, cmMock, store, hmMock, hmMock, &syncerMock{}, wallet)
+	contracts, err := newContractManager(renterKey, amMock, cmMock, store, hmMock, scanner, &syncerMock{}, wallet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,10 +314,9 @@ func TestPerformContractFormationWithoutContracts(t *testing.T) {
 // TestPerformContractFormationWithContracts is a unit test for
 // PerformContractFormation which takes into account existing contracts
 func TestPerformContractFormationWithContracts(t *testing.T) {
-	store := &storeMock{}
 	amMock := &accountsManagerMock{}
 	cmMock := newChainManagerMock()
-	hmMock := newHostManagerMock(store)
+	hmMock := newHostManagerMock()
 	wMock := &walletMock{}
 
 	blockHeight := cmMock.TipState().Index.Height
@@ -328,6 +344,9 @@ func TestPerformContractFormationWithContracts(t *testing.T) {
 		}
 	}
 
+	store := &storeMock{}
+	scanner := store.Scanner()
+
 	formContract := func(hostKey types.PublicKey, good bool) {
 		t.Helper()
 
@@ -348,33 +367,33 @@ func TestPerformContractFormationWithContracts(t *testing.T) {
 
 	// first one is good and has a good contract already -> no formation
 	good1 := goodHost(1)
-	hmMock.settings[good1.PublicKey] = goodSettings
+	scanner.settings[good1.PublicKey] = goodSettings
 	formContract(good1.PublicKey, true)
 
 	// second one is bad with a good contract that shouldn't count -> no formation
 	bad1 := goodHost(2)
 	bad1.Networks = append(bad1.Networks, good1.Networks[0])
-	hmMock.settings[bad1.PublicKey] = goodSettings
+	scanner.settings[bad1.PublicKey] = goodSettings
 	formContract(bad1.PublicKey, true)
 
 	// third one is good, but shares the subnet with the first one -> no formation
 	good2 := goodHost(3)
 	good2.Networks = append(good2.Networks, good1.Networks[0])
-	hmMock.settings[good2.PublicKey] = goodSettings
+	scanner.settings[good2.PublicKey] = goodSettings
 
 	// fourth one is good and shares a subnet with bad1 which is ok since bad1
 	// is bad -> forms a contract
 	good3 := goodHost(4)
 	good3.Networks = append(good3.Networks, bad1.Networks[0])
-	hmMock.settings[good3.PublicKey] = goodSettings
+	scanner.settings[good3.PublicKey] = goodSettings
 
 	// fifth one is good -> forms a contract
 	good4 := goodHost(5)
-	hmMock.settings[good4.PublicKey] = goodSettings
+	scanner.settings[good4.PublicKey] = goodSettings
 
 	// sixth one is a good host with a bad contract which won't count -> forms a contract
 	good5 := goodHost(6)
-	hmMock.settings[good5.PublicKey] = goodSettings
+	scanner.settings[good5.PublicKey] = goodSettings
 	formContract(good5.PublicKey, false)
 
 	// populate store
@@ -388,7 +407,7 @@ func TestPerformContractFormationWithContracts(t *testing.T) {
 	}
 
 	renterKey := types.PublicKey{1, 2, 3, 4, 5}
-	contracts, err := newContractManager(renterKey, amMock, cmMock, store, hmMock, hmMock, &syncerMock{}, wMock)
+	contracts, err := newContractManager(renterKey, amMock, cmMock, store, hmMock, scanner, &syncerMock{}, wMock)
 	if err != nil {
 		t.Fatal(err)
 	}

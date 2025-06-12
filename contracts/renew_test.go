@@ -43,10 +43,9 @@ func (c *hostClientMock) RenewContract(ctx context.Context, settings proto.HostS
 }
 
 func TestPerformContractRenewals(t *testing.T) {
-	store := &storeMock{}
 	amMock := &accountsManagerMock{}
 	cmMock := newChainManagerMock()
-	hmMock := newHostManagerMock(store)
+	hmMock := newHostManagerMock()
 	wMock := &walletMock{}
 	badSettings := proto.HostSettings{}
 
@@ -63,6 +62,9 @@ func TestPerformContractRenewals(t *testing.T) {
 			Usability: hosts.GoodUsability,
 		}
 	}
+
+	store := &storeMock{}
+	scanner := store.Scanner()
 
 	blockHeight := cmMock.state.Index.Height
 	formContract := func(contractID types.FileContractID, hostKey types.PublicKey, good bool) {
@@ -87,14 +89,14 @@ func TestPerformContractRenewals(t *testing.T) {
 
 	// first one is good with a good contract and a bad one
 	good := goodHost(1)
-	hmMock.settings[good.PublicKey] = goodSettings
+	scanner.settings[good.PublicKey] = goodSettings
 	formContract(types.FileContractID{1}, good.PublicKey, true)  // will renew
 	formContract(types.FileContractID{2}, good.PublicKey, false) // won't renew
 
 	// second one is bad since it's not accepting contracts with a good contract
 	bad := goodHost(2)
 	bad.Usability.AcceptingContracts = false
-	hmMock.settings[bad.PublicKey] = goodSettings
+	scanner.settings[bad.PublicKey] = goodSettings
 	formContract(types.FileContractID{3}, bad.PublicKey, true) // won't renew
 
 	// populate store
@@ -104,7 +106,7 @@ func TestPerformContractRenewals(t *testing.T) {
 	}
 
 	renterKey := types.PublicKey{1, 2, 3, 4, 5}
-	contracts, err := newContractManager(renterKey, amMock, cmMock, store, hmMock, hmMock, &syncerMock{}, wMock)
+	contracts, err := newContractManager(renterKey, amMock, cmMock, store, hmMock, scanner, &syncerMock{}, wMock)
 	if err != nil {
 		t.Fatal(err)
 	}

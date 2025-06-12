@@ -53,10 +53,9 @@ func (c *hostClientMock) RefreshContract(ctx context.Context, settings proto.Hos
 }
 
 func TestPerformContractRefreshes(t *testing.T) {
-	store := &storeMock{}
 	amMock := &accountsManagerMock{}
 	cmMock := newChainManagerMock()
-	hmMock := newHostManagerMock(store)
+	hmMock := newHostManagerMock()
 	wMock := &walletMock{}
 
 	// helper to create a good host
@@ -67,6 +66,9 @@ func TestPerformContractRefreshes(t *testing.T) {
 			Usability: hosts.GoodUsability,
 		}
 	}
+
+	store := &storeMock{}
+	scanner := store.Scanner()
 
 	var (
 		initialAllowance = types.Siacoins(100)
@@ -116,7 +118,7 @@ func TestPerformContractRefreshes(t *testing.T) {
 
 	// first one is good with 3 contracts
 	good := goodHost(1)
-	hmMock.settings[good.PublicKey] = goodSettings
+	scanner.settings[good.PublicKey] = goodSettings
 	formContract(types.FileContractID{1}, good.PublicKey, true, false, false) // is good
 	formContract(types.FileContractID{2}, good.PublicKey, true, true, false)  // out-of-funds
 	formContract(types.FileContractID{3}, good.PublicKey, true, false, true)  // out-of-collateral
@@ -136,7 +138,7 @@ func TestPerformContractRefreshes(t *testing.T) {
 	// second one is bad since it's not accepting contracts with a good contract
 	bad := goodHost(2)
 	bad.Usability.AcceptingContracts = false
-	hmMock.settings[bad.PublicKey] = goodSettings
+	scanner.settings[bad.PublicKey] = goodSettings
 	formContract(types.FileContractID{8}, bad.PublicKey, true, true, true)
 
 	// populate store
@@ -146,7 +148,7 @@ func TestPerformContractRefreshes(t *testing.T) {
 	}
 
 	renterKey := types.PublicKey{1, 2, 3, 4, 5}
-	contracts, err := newContractManager(renterKey, amMock, cmMock, store, hmMock, hmMock, &syncerMock{}, wMock)
+	contracts, err := newContractManager(renterKey, amMock, cmMock, store, hmMock, scanner, &syncerMock{}, wMock)
 	if err != nil {
 		t.Fatal(err)
 	}
