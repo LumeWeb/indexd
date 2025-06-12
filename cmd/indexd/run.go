@@ -28,6 +28,7 @@ import (
 	"go.sia.tech/indexd/hosts"
 	"go.sia.tech/indexd/persist/postgres"
 	"go.sia.tech/indexd/pins"
+	"go.sia.tech/indexd/rhp"
 	"go.sia.tech/indexd/subscriber"
 	"go.sia.tech/jape"
 	"go.uber.org/zap"
@@ -102,7 +103,7 @@ func runRootCmd(ctx context.Context, cfg config.Config, walletKey types.PrivateK
 	defer wm.Close()
 
 	signer := contracts.NewFormContractSigner(wm, walletKey)
-	dialer := hosts.NewSiamuxDialer(cm, store, signer, log)
+	dialer := rhp.NewSiamuxDialer(cm, store, signer, log)
 
 	hm, err := hosts.NewManager(dialer, s, store, hosts.WithLogger(log.Named("hosts")))
 	if err != nil {

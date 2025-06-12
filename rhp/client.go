@@ -1,4 +1,4 @@
-package hosts
+package rhp
 
 import (
 	"context"
@@ -81,10 +81,10 @@ type HostClient struct {
 	log   *zap.Logger
 }
 
-// NewClient creates a new HostClient that can be used to interact with a host
-// using the RHP methods. The client is expected to be closed when no longer
-// needed.
-func NewClient(hk types.PublicKey, cm ChainManager, client rhp.TransportClient, signer rhp.FormContractSigner, store RevisionStore, log *zap.Logger) *HostClient {
+// NewHostClient creates a new HostClient that can be used to interact with a
+// host using the RHP methods. The client is expected to be closed when no
+// longer needed.
+func NewHostClient(hk types.PublicKey, cm ChainManager, client rhp.TransportClient, signer rhp.FormContractSigner, store RevisionStore, log *zap.Logger) *HostClient {
 	return &HostClient{
 		hostKey: hk,
 

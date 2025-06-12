@@ -19,6 +19,7 @@ import (
 	"go.sia.tech/indexd/explorer"
 	"go.sia.tech/indexd/hosts"
 	"go.sia.tech/indexd/persist/postgres"
+	"go.sia.tech/indexd/rhp"
 	"go.sia.tech/indexd/subscriber"
 	"go.sia.tech/jape"
 	"go.uber.org/zap"
@@ -47,7 +48,7 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger) *Indexer {
 
 	syncer := NewSyncer(t, c.genesis.ID(), c.cm)
 	signer := contracts.NewFormContractSigner(wm, walletKey)
-	dialer := hosts.NewSiamuxDialer(c.cm, store, signer, log)
+	dialer := rhp.NewSiamuxDialer(c.cm, store, signer, log)
 
 	hm, err := hosts.NewManager(dialer, syncer, store, hosts.WithLogger(log.Named("hosts")), hosts.WithScanFrequency(500*time.Millisecond), hosts.WithScanInterval(time.Second))
 	if err != nil {

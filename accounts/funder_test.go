@@ -8,8 +8,9 @@ import (
 	"go.sia.tech/core/consensus"
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
-	"go.sia.tech/coreutils/rhp/v4"
+	rhp4 "go.sia.tech/coreutils/rhp/v4"
 	"go.sia.tech/indexd/hosts"
+	"go.sia.tech/indexd/rhp"
 	"go.uber.org/zap"
 )
 
@@ -27,21 +28,21 @@ type hostClientMock struct{}
 
 func (*hostClientMock) Close() error { return nil }
 
-func (*hostClientMock) ReplenishAccounts(ctx context.Context, contractID types.FileContractID, accounts []proto.Account, target types.Currency) (rhp.RPCReplenishAccountsResult, int, error) {
+func (*hostClientMock) ReplenishAccounts(ctx context.Context, contractID types.FileContractID, accounts []proto.Account, target types.Currency) (rhp4.RPCReplenishAccountsResult, int, error) {
 	// use contract ID to cover all possible branches
 	switch contractID {
 	case types.FileContractID{1}:
-		return rhp.RPCReplenishAccountsResult{}, 0, hosts.ErrContractInsufficientFunds
+		return rhp4.RPCReplenishAccountsResult{}, 0, rhp.ErrContractInsufficientFunds
 	case types.FileContractID{2}:
-		return rhp.RPCReplenishAccountsResult{}, 0, hosts.ErrContractNotRevisable
+		return rhp4.RPCReplenishAccountsResult{}, 0, rhp.ErrContractNotRevisable
 	case types.FileContractID{3}:
-		return rhp.RPCReplenishAccountsResult{}, 0, errors.New("failed to replenish accounts")
+		return rhp4.RPCReplenishAccountsResult{}, 0, errors.New("failed to replenish accounts")
 	case types.FileContractID{4}:
-		return rhp.RPCReplenishAccountsResult{Revision: types.V2FileContract{RenterOutput: types.SiacoinOutput{Value: target.Sub(types.NewCurrency64(1))}}}, 1, nil
+		return rhp4.RPCReplenishAccountsResult{Revision: types.V2FileContract{RenterOutput: types.SiacoinOutput{Value: target.Sub(types.NewCurrency64(1))}}}, 1, nil
 	case types.FileContractID{5}, types.FileContractID{6}:
-		return rhp.RPCReplenishAccountsResult{Revision: types.V2FileContract{RenterOutput: types.SiacoinOutput{Value: target}}}, 1, nil
+		return rhp4.RPCReplenishAccountsResult{Revision: types.V2FileContract{RenterOutput: types.SiacoinOutput{Value: target}}}, 1, nil
 	case types.FileContractID{7}:
-		return rhp.RPCReplenishAccountsResult{Revision: types.V2FileContract{RenterOutput: types.SiacoinOutput{Value: target}}}, len(accounts) - 1, nil
+		return rhp4.RPCReplenishAccountsResult{Revision: types.V2FileContract{RenterOutput: types.SiacoinOutput{Value: target}}}, len(accounts) - 1, nil
 	default:
 		panic("unexpected contract ID in mock")
 	}

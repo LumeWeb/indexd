@@ -11,19 +11,17 @@ import (
 	proto4 "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/chain"
-	"go.sia.tech/coreutils/rhp/v4"
 	"go.sia.tech/coreutils/rhp/v4/quic"
 	"go.sia.tech/coreutils/rhp/v4/siamux"
 	"go.sia.tech/coreutils/syncer"
 	"go.sia.tech/coreutils/threadgroup"
+	"go.sia.tech/indexd/rhp"
 	"go.uber.org/zap"
 	"lukechampine.com/frand"
 )
 
 const (
 	announcementMaxAddressesPerProtocol = 2
-
-	dialTimeout = 10 * time.Second
 
 	ipv4FilterRange = 24
 	ipv6FilterRange = 32
@@ -50,7 +48,7 @@ type (
 		scanFrequency      time.Duration
 		scanInterval       time.Duration
 
-		dialer        Dialer
+		dialer        rhp.Dialer
 		onlineChecker OnlineChecker
 		resolver      Resolver
 		scanner       Scanner
@@ -110,41 +108,8 @@ func (h *Host) SiamuxAddr() string {
 	return ""
 }
 
-type siamuxDialer struct {
-	cm     ChainManager
-	store  RevisionStore
-	signer rhp.FormContractSigner
-	log    *zap.Logger
-}
-
-// NewSiamuxDialer creates a new Dialer that uses the SiaMux protocol to dial a
-// host.
-func NewSiamuxDialer(cm ChainManager, store RevisionStore, signer rhp.FormContractSigner, log *zap.Logger) Dialer {
-	return &siamuxDialer{
-		cm:     cm,
-		store:  store,
-		signer: signer,
-		log:    log,
-	}
-}
-
-// Dial dials the host and returns a Client that can be used to interact with
-// the host. It uses the SiaMux protocol to establish a connection and returns a
-// host client that exposes the RPC methods defined in the RHP.
-func (d *siamuxDialer) Dial(ctx context.Context, hk types.PublicKey, addr string) (*HostClient, error) {
-	ctx, cancel := context.WithTimeout(ctx, dialTimeout)
-	defer cancel()
-
-	client, err := siamux.Dial(ctx, addr, hk)
-	if err != nil {
-		return nil, fmt.Errorf("failed to dial host: %w", err)
-	}
-
-	return NewClient(hk, d.cm, client, d.signer, d.store, d.log.With(zap.Stringer("hostKey", hk))), nil
-}
-
 // NewManager creates a new host manager.
-func NewManager(dialer Dialer, syncer Syncer, store Store, opts ...Option) (*HostManager, error) {
+func NewManager(dialer rhp.Dialer, syncer Syncer, store Store, opts ...Option) (*HostManager, error) {
 	m := &HostManager{
 		announcementMaxAge: time.Hour * 24 * 365,
 		scanFrequency:      time.Hour,

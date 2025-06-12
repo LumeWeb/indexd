@@ -14,6 +14,7 @@ import (
 	"go.sia.tech/coreutils/rhp/v4/quic"
 	"go.sia.tech/coreutils/rhp/v4/siamux"
 	"go.sia.tech/coreutils/syncer"
+	"go.sia.tech/indexd/rhp"
 	"go.uber.org/zap"
 )
 
@@ -25,7 +26,7 @@ var cancelledCtx = func() context.Context {
 
 type mockDialer struct{}
 
-func (d *mockDialer) Dial(ctx context.Context, hostKey types.PublicKey, addr string) (*HostClient, error) {
+func (d *mockDialer) Dial(ctx context.Context, hostKey types.PublicKey, addr string) (*rhp.HostClient, error) {
 	return nil, nil
 }
 

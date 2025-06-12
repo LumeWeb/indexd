@@ -9,8 +9,9 @@ import (
 	"go.sia.tech/core/consensus"
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
-	"go.sia.tech/coreutils/rhp/v4"
+	rhp4 "go.sia.tech/coreutils/rhp/v4"
 	"go.sia.tech/indexd/hosts"
+	"go.sia.tech/indexd/rhp"
 	"go.uber.org/zap"
 )
 
@@ -28,7 +29,7 @@ type (
 	// HostClient defines an interface for replenishing accounts on a host.
 	HostClient interface {
 		io.Closer
-		ReplenishAccounts(ctx context.Context, contractID types.FileContractID, accounts []proto.Account, target types.Currency) (rhp.RPCReplenishAccountsResult, int, error)
+		ReplenishAccounts(ctx context.Context, contractID types.FileContractID, accounts []proto.Account, target types.Currency) (rhp4.RPCReplenishAccountsResult, int, error)
 	}
 
 	// Funder dials a host and replenish a set of ephemeral accounts.
@@ -86,11 +87,11 @@ func (f *Funder) FundAccounts(ctx context.Context, host hosts.Host, contractIDs 
 
 		// execute replenish RPC
 		res, n, err := client.ReplenishAccounts(ctx, contractID, accountKeys[funded:], target)
-		if errors.Is(err, hosts.ErrContractInsufficientFunds) {
+		if errors.Is(err, rhp.ErrContractInsufficientFunds) {
 			contractLog.Debug("contract has insufficient funds")
 			drained++
 			continue
-		} else if errors.Is(err, hosts.ErrContractNotRevisable) {
+		} else if errors.Is(err, rhp.ErrContractNotRevisable) {
 			contractLog.Debug("contract is not revisable") // sanity check
 			drained++
 			continue
