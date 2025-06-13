@@ -42,11 +42,6 @@ type (
 		TipState() consensus.State
 		rhp.TxPool
 	}
-
-	// Dialer is an interface for dialing a host.
-	Dialer interface {
-		DialHost(ctx context.Context, hostKey types.PublicKey, addr string) (*HostClient, error)
-	}
 )
 
 // HostClient is a client that can be used to interact with a host using the RHP

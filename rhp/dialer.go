@@ -13,16 +13,16 @@ import (
 
 const dialTimeout = 10 * time.Second
 
-type siamuxDialer struct {
+// SiamuxDialer can be used to dial a host using the SiaMux protocol.
+type SiamuxDialer struct {
 	cm     ChainManager
 	signer rhp.FormContractSigner
 	log    *zap.Logger
 }
 
-// NewSiamuxDialer creates a new Dialer that uses the SiaMux protocol to dial a
-// host.
-func NewSiamuxDialer(cm ChainManager, signer rhp.FormContractSigner, log *zap.Logger) Dialer {
-	return &siamuxDialer{
+// NewSiamuxDialer creates a new SiamuxDialer.
+func NewSiamuxDialer(cm ChainManager, signer rhp.FormContractSigner, log *zap.Logger) *SiamuxDialer {
+	return &SiamuxDialer{
 		cm:     cm,
 		signer: signer,
 		log:    log,
@@ -32,7 +32,7 @@ func NewSiamuxDialer(cm ChainManager, signer rhp.FormContractSigner, log *zap.Lo
 // DialHost dials the host and returns a Client that can be used to interact
 // with the host. It uses the SiaMux protocol to establish a connection and
 // returns a host client that exposes the RPC methods defined in the RHP.
-func (d *siamuxDialer) DialHost(ctx context.Context, hk types.PublicKey, addr string) (*HostClient, error) {
+func (d *SiamuxDialer) DialHost(ctx context.Context, hk types.PublicKey, addr string) (*HostClient, error) {
 	ctx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
 

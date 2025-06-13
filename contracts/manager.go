@@ -170,13 +170,13 @@ type (
 	}
 )
 
-type wrapper struct {
-	d rhp.Dialer
+type dialer struct {
+	d *rhp.SiamuxDialer
 }
 
 // DialHost dials the host and returns a HostClient.
-func (w *wrapper) DialHost(ctx context.Context, hostKey types.PublicKey, addr string) (HostClient, error) {
-	client, err := w.d.DialHost(ctx, hostKey, addr)
+func (d *dialer) DialHost(ctx context.Context, hostKey types.PublicKey, addr string) (HostClient, error) {
+	client, err := d.d.DialHost(ctx, hostKey, addr)
 	if err != nil {
 		return nil, err
 	}
@@ -193,8 +193,8 @@ func WithLogger(l *zap.Logger) ContractManagerOpt {
 // NewManager creates a new contract manager. It is responsible for forming and
 // renewing contracts as well as any interactions with hosts that require
 // contracts.
-func NewManager(renterKey types.PrivateKey, accountManager AccountManager, chainManager ChainManager, store Store, dialer rhp.Dialer, scanner Scanner, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) (*ContractManager, error) {
-	cm := newContractManager(renterKey.PublicKey(), accountManager, chainManager, store, &wrapper{d: dialer}, scanner, syncer, wallet, opts...)
+func NewManager(renterKey types.PrivateKey, accountManager AccountManager, chainManager ChainManager, store Store, d *rhp.SiamuxDialer, scanner Scanner, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) (*ContractManager, error) {
+	cm := newContractManager(renterKey.PublicKey(), accountManager, chainManager, store, &dialer{d: d}, scanner, syncer, wallet, opts...)
 
 	ctx, cancel, err := cm.tg.AddContext(context.Background())
 	if err != nil {

@@ -35,12 +35,12 @@ type (
 	}
 )
 
-type wrapper struct {
-	d rhp.Dialer
+type dialer struct {
+	d *rhp.SiamuxDialer
 }
 
-func (w *wrapper) DialHost(ctx context.Context, hostKey types.PublicKey, addr string) (HostClient, error) {
-	client, err := w.d.DialHost(ctx, hostKey, addr)
+func (d *dialer) DialHost(ctx context.Context, hostKey types.PublicKey, addr string) (HostClient, error) {
+	client, err := d.d.DialHost(ctx, hostKey, addr)
 	if err != nil {
 		return nil, err
 	}
@@ -48,8 +48,8 @@ func (w *wrapper) DialHost(ctx context.Context, hostKey types.PublicKey, addr st
 }
 
 // NewFunder creates a new Funder.
-func NewFunder(dialer rhp.Dialer) *Funder {
-	return &Funder{dialer: &wrapper{d: dialer}}
+func NewFunder(d *rhp.SiamuxDialer) *Funder {
+	return &Funder{dialer: &dialer{d: d}}
 }
 
 // FundAccounts tops up the provided accounts to the target balance using the
