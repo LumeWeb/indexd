@@ -55,6 +55,7 @@ type (
 	// sectors to and from hosts.
 	HostClient interface {
 		ReadSector(ctx context.Context, prices proto.HostPrices, token proto.AccountToken, w io.Writer, root types.Hash256, offset, length uint64) (rhp.RPCReadSectorResult, error)
+		Settings(context.Context, types.PublicKey, string) (proto.HostSettings, error)
 		WriteSector(ctx context.Context, prices proto.HostPrices, token proto.AccountToken, data io.Reader, length uint64) (rhp.RPCWriteSectorResult, error)
 	}
 
@@ -137,7 +138,6 @@ func newSlabManager(am AccountManager, client HostClient, hm HostManager, store 
 		failedIntegrityCheckInterval: 6 * time.Hour,
 		maxFailedIntegrityChecks:     5,
 
-		serviceAccount:    proto.Account(serviceAccount.PublicKey()),
 		serviceAccountKey: serviceAccount,
 
 		am:     am,
@@ -159,7 +159,7 @@ func newSlabManager(am AccountManager, client HostClient, hm HostManager, store 
 	}
 
 	// let AccountManager know about the service account
-	am.RegisterServiceAccount(m.serviceAccount)
+	am.RegisterServiceAccount(proto.Account(m.serviceAccountKey.PublicKey()))
 	return m, nil
 }
 
