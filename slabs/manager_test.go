@@ -15,7 +15,7 @@ type mockStore struct {
 	lostSectors     map[types.PublicKey]map[types.Hash256]struct{}
 	failedChecks    map[types.PublicKey]map[types.Hash256]int
 	sectorsForCheck []types.Hash256
-	serviceAccounts map[proto.Account]types.Currency
+	serviceAccounts map[proto.Account]map[types.PublicKey]types.Currency
 }
 
 func newMockStore() *mockStore {
@@ -23,7 +23,7 @@ func newMockStore() *mockStore {
 		accounts:        make(map[proto.Account]struct{}),
 		failedChecks:    make(map[types.PublicKey]map[types.Hash256]int),
 		lostSectors:     make(map[types.PublicKey]map[types.Hash256]struct{}),
-		serviceAccounts: make(map[proto.Account]types.Currency),
+		serviceAccounts: make(map[proto.Account]map[types.PublicKey]types.Currency),
 	}
 }
 
@@ -116,23 +116,34 @@ func (m *mockAccountManager) ResetAccountBalance(ctx context.Context, hostKey ty
 }
 
 func (m *mockAccountManager) ServiceAccountBalance(ctx context.Context, hostKey types.PublicKey, account proto.Account) (types.Currency, error) {
-	if balance, ok := m.store.serviceAccounts[account]; ok {
-		return balance, nil
+	if hostAccounts, ok := m.store.serviceAccounts[account]; ok {
+		if balance, ok := hostAccounts[hostKey]; ok {
+			return balance, nil
+		}
+		return types.ZeroCurrency, nil
 	}
 	return types.ZeroCurrency, nil
 }
 
 func (m *mockAccountManager) UpdateServiceAccountBalance(ctx context.Context, hostKey types.PublicKey, account proto.Account, balance types.Currency) error {
-	m.store.serviceAccounts[account] = balance
+	hostAccounts, ok := m.store.serviceAccounts[account]
+	if !ok {
+		hostAccounts = make(map[types.PublicKey]types.Currency)
+		m.store.serviceAccounts[account] = hostAccounts
+	}
+	hostAccounts[hostKey] = balance
 	return nil
 }
 
 func (m *mockAccountManager) DebitServiceAccount(ctx context.Context, hostKey types.PublicKey, account proto.Account, amount types.Currency) error {
-	balance := m.store.serviceAccounts[account]
-	if balance.Cmp(amount) < 0 {
-		m.store.serviceAccounts[account] = types.ZeroCurrency
-	} else {
-		m.store.serviceAccounts[account] = balance.Sub(amount)
+	if hostAccounts, ok := m.store.serviceAccounts[account]; ok {
+		if balance, ok := hostAccounts[hostKey]; ok {
+			if balance.Cmp(amount) < 0 {
+				hostAccounts[hostKey] = types.ZeroCurrency
+			} else {
+				hostAccounts[hostKey] = balance.Sub(amount)
+			}
+		}
 	}
 	return nil
 }
