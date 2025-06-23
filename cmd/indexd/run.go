@@ -133,7 +133,10 @@ func runRootCmd(ctx context.Context, cfg config.Config, walletKey types.PrivateK
 
 	apiOpts := []api.ServerOption{
 		api.WithLogger(log.Named("api")),
-		api.WithDebug(cfg.Debug),
+	}
+
+	if cfg.Debug {
+		apiOpts = append(apiOpts, api.WithDebug())
 	}
 
 	var e *explorer.Explorer
