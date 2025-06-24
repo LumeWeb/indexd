@@ -294,7 +294,7 @@ func TestDownloadSlab(t *testing.T) {
 
 	// assert that passing no hosts results in not enough shards being downloaded
 	t.Run("no enough hosts", func(t *testing.T) {
-		_, err := sm.downloadSlab(context.Background(), slab, nil, zap.NewNop())
+		_, err := sm.downloadShards(context.Background(), slab, nil, zap.NewNop())
 		if !errors.Is(err, errNotEnoughShards) {
 			t.Fatal(err)
 		}
@@ -303,7 +303,7 @@ func TestDownloadSlab(t *testing.T) {
 	// assert that if all hosts are passed, we fetch exactly minShards sectors
 	// and that we fetch the cheapest ones first
 	t.Run("success", func(t *testing.T) {
-		sectors, err := sm.downloadSlab(context.Background(), slab, allHosts, zap.NewNop())
+		sectors, err := sm.downloadShards(context.Background(), slab, allHosts, zap.NewNop())
 		if err != nil {
 			t.Fatal(err)
 		} else if !reflect.DeepEqual(sectors, [][]byte{sector1[:], nil, sector3[:]}) {
@@ -316,7 +316,7 @@ func TestDownloadSlab(t *testing.T) {
 		defer resetTimeouts()
 		sm.shardTimeout = 100 * time.Millisecond
 		dialer.clients[hk3].delay = time.Second
-		sectors, err := sm.downloadSlab(context.Background(), slab, allHosts, zap.NewNop())
+		sectors, err := sm.downloadShards(context.Background(), slab, allHosts, zap.NewNop())
 		if err != nil {
 			t.Fatal(err)
 		} else if !reflect.DeepEqual(sectors, [][]byte{sector1[:], sector2[:], nil}) {
@@ -327,7 +327,7 @@ func TestDownloadSlab(t *testing.T) {
 	// assert that a host losing a sector will mark the sector as lost
 	t.Run("success with lost sector", func(t *testing.T) {
 		dialer.clients[hk1].sectors = make(map[types.Hash256][proto.SectorSize]byte)
-		sectors, err := sm.downloadSlab(context.Background(), slab, allHosts, zap.NewNop())
+		sectors, err := sm.downloadShards(context.Background(), slab, allHosts, zap.NewNop())
 		if err != nil {
 			t.Fatal(err)
 		} else if !reflect.DeepEqual(sectors, [][]byte{nil, sector2[:], sector3[:]}) {
