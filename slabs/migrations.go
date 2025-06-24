@@ -128,10 +128,12 @@ top:
 		go func(ctx context.Context, sector Sector, i int) {
 			success := false
 			defer func() {
+				// release semaphore on failure only to avoid spinning up a new
+				// goroutine for a successful download
 				if !success {
 					<-sema
 				}
-			}() // release semaphore on failure
+			}()
 			defer wg.Done()
 
 			// make sure we have the information we need
