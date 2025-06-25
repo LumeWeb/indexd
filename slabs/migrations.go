@@ -80,7 +80,7 @@ LOOP:
 	return toMigrate, remainingContracts
 }
 
-// downloadShards downloads at least the minimum number of shards reuqired to
+// downloadShards downloads at least the minimum number of shards required to
 // recover the slab.
 func (m *SlabManager) downloadShards(ctx context.Context, slab Slab, availableHosts []hosts.Host, logger *zap.Logger) ([][]byte, error) {
 	ctx, cancelDownload := context.WithCancel(ctx)
