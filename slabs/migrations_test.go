@@ -7,6 +7,7 @@ import (
 	"math"
 	"net"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -294,6 +295,17 @@ func TestDownloadSlab(t *testing.T) {
 
 	// assert that passing no hosts results in not enough shards being downloaded
 	t.Run("no enough hosts", func(t *testing.T) {
+		_, err := sm.downloadShards(context.Background(), slab, nil, zap.NewNop())
+		if !errors.Is(err, errNotEnoughShards) {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("no enough hosts", func(t *testing.T) {
+		unavailableSlab := slab
+		unavailableSlab.Sectors = slices.Clone(unavailableSlab.Sectors)
+		unavailableSlab.Sectors[0].HostKey = nil
+		unavailableSlab.Sectors[1].HostKey = nil
 		_, err := sm.downloadShards(context.Background(), slab, nil, zap.NewNop())
 		if !errors.Is(err, errNotEnoughShards) {
 			t.Fatal(err)

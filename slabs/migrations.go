@@ -91,6 +91,17 @@ func (m *SlabManager) downloadShards(ctx context.Context, slab Slab, availableHo
 	shards := make([][]byte, len(slab.Sectors))
 	sema := make(chan struct{}, slab.MinShards)
 
+	// check we even have enough sectors to download
+	var available uint
+	for _, sector := range slab.Sectors {
+		if sector.HostKey != nil {
+			available++
+		}
+	}
+	if available < slab.MinShards {
+		return nil, fmt.Errorf("%w: only %d sectors available, minimum required: %d", errNotEnoughShards, available, slab.MinShards)
+	}
+
 	// when we download for migrations, we don't care about the price if it
 	// means preventing data loss and we also don't care too much about
 	// performance. So we start with the cheapest hosts.

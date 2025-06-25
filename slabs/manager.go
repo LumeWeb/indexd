@@ -164,7 +164,7 @@ func newSlabManager(am AccountManager, hm HostManager, store Store, dialer Diale
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := store.AddAccount(ctx, types.PublicKey(m.migrationAccount)); err != nil && !errors.Is(err, accounts.ErrExists) {
-		return nil, fmt.Errorf("failed to add service account: %w", err)
+		return nil, fmt.Errorf("failed to add migration account: %w", err)
 	} else if err := store.AddAccount(ctx, types.PublicKey(m.serviceAccount)); err != nil && !errors.Is(err, accounts.ErrExists) {
 		return nil, fmt.Errorf("failed to add service account: %w", err)
 	}
