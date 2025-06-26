@@ -64,7 +64,7 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger) *Indexer {
 	walletKey := types.GeneratePrivateKey()
 	wm := NewWallet(t, c, walletKey)
 
-	hm, err := hosts.NewManager(s, store, hosts.WithLogger(log.Named("hosts")), hosts.WithScanFrequency(500*time.Millisecond), hosts.WithScanInterval(time.Second))
+	hm, err := hosts.NewManager(s, store, hosts.WithLogger(log.Named("hosts")), hosts.WithScanFrequency(100*time.Millisecond), hosts.WithScanInterval(time.Second))
 	if err != nil {
 		t.Fatalf("failed to create host manager: %v", err)
 	}
@@ -72,7 +72,7 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger) *Indexer {
 	funder := accounts.NewFunder(c.cm, wm)
 	am := accounts.NewManager(store, funder, accounts.WithLogger(log.Named("accounts")))
 
-	contracts, err := contracts.NewManager(walletKey, am, c.cm, hm, store, s, wm, contracts.WithLogger(log.Named("contracts")), contracts.WithMaintenanceFrequency(500*time.Millisecond))
+	contracts, err := contracts.NewManager(walletKey, am, c.cm, hm, store, s, wm, contracts.WithLogger(log.Named("contracts")), contracts.WithMaintenanceFrequency(250*time.Millisecond))
 	if err != nil {
 		t.Fatalf("failed to create contract manager: %v", err)
 	}

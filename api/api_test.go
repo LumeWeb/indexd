@@ -122,16 +122,16 @@ func TestContractsAPI(t *testing.T) {
 	if err := h.Announce(); err != nil {
 		t.Fatal(err)
 	}
+	c.MineBlocks(t, types.Address{}, 1)
 	time.Sleep(time.Second)
 
-	// mine a block and assert it got scanned
-	c.MineBlocks(t, types.Address{}, 1)
+	// assert it got scanned
 	if _, err := indexer.Host(context.Background(), h.PublicKey()); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second)
 
 	// assert a contract was formed
+	time.Sleep(time.Second)
 	var contract contracts.Contract
 	if contracts, err := indexer.Contracts(context.Background()); err != nil {
 		t.Fatal(err)
