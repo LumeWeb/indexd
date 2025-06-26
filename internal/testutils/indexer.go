@@ -32,13 +32,6 @@ var (
 		RenewWindow:     72,
 		WantedContracts: 6,
 	}
-
-	testUsabilitySettings = hosts.UsabilitySettings{
-		MinCollateral:   types.Siacoins(100).Div64(oneTB).Div64(blocksPerMonth),  // 100 SC per TB per month
-		MaxEgressPrice:  types.Siacoins(3000).Div64(oneTB),                       // 3000 SC per 1 TB
-		MaxIngressPrice: types.Siacoins(3000).Div64(oneTB),                       // 3000 SC per 1 TB
-		MaxStoragePrice: types.Siacoins(3000).Div64(oneTB).Div64(blocksPerMonth), // 3000 SC per TB per month
-	}
 )
 
 // Indexer is a test utility combining an indexer, an http client for the
@@ -138,10 +131,8 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger) *Indexer {
 		}
 	})
 
-	// update settings
+	// update maintenance settings
 	if err := store.UpdateMaintenanceSettings(context.Background(), testMaintenanceSettings); err != nil {
-		t.Fatal(err)
-	} else if err := store.UpdateUsabilitySettings(context.Background(), testUsabilitySettings); err != nil {
 		t.Fatal(err)
 	}
 
