@@ -130,7 +130,6 @@ func (c *hostClientMock) FreeSectors(ctx context.Context, hostPrices proto.HostP
 
 func TestPerformContractPruningOnHost(t *testing.T) {
 	store := newStoreMock()
-	dialerMock := newDialerMock()
 
 	// h1 is good
 	hk1 := types.PublicKey{1}
@@ -228,17 +227,18 @@ func TestPerformContractPruningOnHost(t *testing.T) {
 	store.sectors[hk2] = []sector{{root: r9, contractID: &fcid3}}                                                                                                                                 // none dropped
 	store.sectors[hk5] = []sector{{root: r10, contractID: &fcid4}}                                                                                                                                // none dropped
 
-	// prepare clients
+	// prepare dialer
 	h1Mock := newHostClientMock()
 	h2Mock := newHostClientMock()
 	h4Mock := newHostClientMock()
 	h5Mock := newHostClientMock()
 	h5Mock.failsRPCs = true
 
-	dialerMock.clients[hk1] = h1Mock
-	dialerMock.clients[hk2] = h2Mock
-	dialerMock.clients[hk4] = h4Mock
-	dialerMock.clients[hk5] = h5Mock
+	dialer := newDialerMock()
+	dialer.clients[hk1] = h1Mock
+	dialer.clients[hk2] = h2Mock
+	dialer.clients[hk4] = h4Mock
+	dialer.clients[hk5] = h5Mock
 
 	// prepare roots
 	h1Mock.sectorRoots[fcid1] = []types.Hash256{r1, r2, r3}
@@ -269,13 +269,10 @@ func TestPerformContractPruningOnHost(t *testing.T) {
 	scanner.settings[hk5] = h5.Settings
 
 	// prepare contract manager
-	cm, err := newContractManager(types.PublicKey{}, nil, &chainManagerMock{}, store, dialerMock, scanner, nil, nil)
-	if err != nil {
-		t.Fatalf("failed to create contract manager: %v", err)
-	}
+	cm := newContractManager(types.PublicKey{}, nil, nil, store, dialer, scanner, nil, nil)
 
 	// prune contracts on h1
-	err = cm.performContractPruningOnHost(context.Background(), h1, zap.NewNop())
+	err := cm.performContractPruningOnHost(context.Background(), h1, zap.NewNop())
 	if err != nil {
 		t.Fatalf("failed to perform contract pruning: %v", err)
 	}

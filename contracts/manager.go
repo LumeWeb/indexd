@@ -10,11 +10,11 @@ import (
 	"go.sia.tech/core/consensus"
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
-	rhp4 "go.sia.tech/coreutils/rhp/v4"
+	"go.sia.tech/coreutils/rhp/v4"
 	"go.sia.tech/coreutils/syncer"
 	"go.sia.tech/coreutils/threadgroup"
+	"go.sia.tech/indexd/client"
 	"go.sia.tech/indexd/hosts"
-	"go.sia.tech/indexd/rhp"
 	"go.uber.org/zap"
 	"lukechampine.com/frand"
 )
@@ -46,26 +46,28 @@ type (
 		V2TransactionSet(basis types.ChainIndex, txn types.V2Transaction) (types.ChainIndex, []types.V2Transaction, error)
 	}
 
-	// Dialer defines an interface to dial a host and get a client.
-	Dialer interface {
-		DialHost(ctx context.Context, hostKey types.PublicKey, addr string) (HostClient, error)
-	}
-
-	// Scanner defines an interface to scan a host.
-	Scanner interface {
-		ScanHost(ctx context.Context, hk types.PublicKey) (hosts.Host, error)
-	}
-
 	// HostClient defines the dependencies required to form, renew and refresh
 	// contracts.
 	HostClient interface {
 		io.Closer
-		AppendSectors(ctx context.Context, hostPrices proto.HostPrices, contractID types.FileContractID, sectors []types.Hash256) (rhp4.RPCAppendSectorsResult, error)
-		FormContract(ctx context.Context, settings proto.HostSettings, params proto.RPCFormContractParams) (rhp4.RPCFormContractResult, error)
-		FreeSectors(ctx context.Context, hostPrices proto.HostPrices, contractID types.FileContractID, indices []uint64) (rhp4.RPCFreeSectorsResult, error)
-		RefreshContract(ctx context.Context, settings proto.HostSettings, params proto.RPCRefreshContractParams) (rhp4.RPCRefreshContractResult, error)
-		RenewContract(ctx context.Context, settings proto.HostSettings, contractID types.FileContractID, proofHeight uint64) (rhp4.RPCRenewContractResult, error)
-		SectorRoots(ctx context.Context, hostPrices proto.HostPrices, contractID types.FileContractID, offset, length uint64) (rhp4.RPCSectorRootsResult, error)
+		AppendSectors(ctx context.Context, hostPrices proto.HostPrices, contractID types.FileContractID, sectors []types.Hash256) (rhp.RPCAppendSectorsResult, error)
+		FormContract(ctx context.Context, settings proto.HostSettings, params proto.RPCFormContractParams) (rhp.RPCFormContractResult, error)
+		FreeSectors(ctx context.Context, hostPrices proto.HostPrices, contractID types.FileContractID, indices []uint64) (rhp.RPCFreeSectorsResult, error)
+		RefreshContract(ctx context.Context, settings proto.HostSettings, params proto.RPCRefreshContractParams) (rhp.RPCRefreshContractResult, error)
+		RenewContract(ctx context.Context, settings proto.HostSettings, contractID types.FileContractID, proofHeight uint64) (rhp.RPCRenewContractResult, error)
+		SectorRoots(ctx context.Context, hostPrices proto.HostPrices, contractID types.FileContractID, offset, length uint64) (rhp.RPCSectorRootsResult, error)
+	}
+
+	// Dialer defines an interface for dialing the host and returning a host client. This client can be used to
+	// interact with the host using the RHP methods. The client is expected to be closed when no longer needed.
+	Dialer interface {
+		DialHost(ctx context.Context, hostKey types.PublicKey, addr string) (HostClient, error)
+	}
+
+	// Scanner defines the minimal interface of Scanner functionality
+	// the ContractManager requires.
+	Scanner interface {
+		ScanHost(ctx context.Context, hk types.PublicKey) (hosts.Host, error)
 	}
 
 	// Store is the minimal interface of Store functionality the ContractManager
@@ -171,8 +173,15 @@ type (
 	}
 )
 
+// WithLogger creates the contract manager with a custom logger
+func WithLogger(l *zap.Logger) ContractManagerOpt {
+	return func(cm *ContractManager) {
+		cm.log = l
+	}
+}
+
 type wrapper struct {
-	d rhp.Dialer
+	d *client.SiamuxDialer
 }
 
 // DialHost dials the host and returns a HostClient.
@@ -184,21 +193,24 @@ func (w *wrapper) DialHost(ctx context.Context, hostKey types.PublicKey, addr st
 	return client, nil
 }
 
-// WithLogger creates the contract manager with a custom logger
-func WithLogger(l *zap.Logger) ContractManagerOpt {
-	return func(cm *ContractManager) {
-		cm.log = l
-	}
-}
-
 // NewManager creates a new contract manager. It is responsible for forming and
 // renewing contracts as well as any interactions with hosts that require
 // contracts.
-func NewManager(renterKey types.PublicKey, accountManager AccountManager, chainManager ChainManager, store Store, dialer rhp.Dialer, scanner Scanner, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) (*ContractManager, error) {
-	return newContractManager(renterKey, accountManager, chainManager, store, &wrapper{d: dialer}, scanner, syncer, wallet, opts...)
+func NewManager(renterKey types.PrivateKey, accountManager AccountManager, chainManager ChainManager, store Store, dialer *client.SiamuxDialer, scanner Scanner, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) (*ContractManager, error) {
+	cm := newContractManager(renterKey.PublicKey(), accountManager, chainManager, store, &wrapper{d: dialer}, scanner, syncer, wallet, opts...)
+
+	ctx, cancel, err := cm.tg.AddContext(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		defer cancel()
+		cm.maintenanceLoop(ctx)
+	}()
+	return cm, nil
 }
 
-func newContractManager(renterKey types.PublicKey, accountManager AccountManager, chainManager ChainManager, store Store, dialer Dialer, scanner Scanner, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) (*ContractManager, error) {
+func newContractManager(renterKey types.PublicKey, accountManager AccountManager, chainManager ChainManager, store Store, dialer Dialer, scanner Scanner, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) *ContractManager {
 	cm := &ContractManager{
 		am: accountManager,
 		cm: chainManager,
@@ -228,16 +240,7 @@ func newContractManager(renterKey types.PublicKey, accountManager AccountManager
 	for _, opt := range opts {
 		opt(cm)
 	}
-
-	ctx, cancel, err := cm.tg.AddContext(context.Background())
-	if err != nil {
-		return nil, err
-	}
-	go func() {
-		defer cancel()
-		cm.maintenanceLoop(ctx)
-	}()
-	return cm, nil
+	return cm
 }
 
 // TriggerAccountFunding triggers the account funding process. This trigger is

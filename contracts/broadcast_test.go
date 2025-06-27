@@ -15,16 +15,12 @@ import (
 
 func TestBroadcastContractRevisions(t *testing.T) {
 	cmMock := newChainManagerMock()
+	dialer := newDialerMock()
 	syncerMock := &syncerMock{}
 	walletMock := &walletMock{}
 	store := &storeMock{}
 
-	contracts, err := NewManager(types.PublicKey{}, nil, cmMock, store, nil, nil, syncerMock, walletMock)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// override the default revision broadcast interval
+	contracts := newContractManager(types.PublicKey{}, nil, cmMock, store, dialer, nil, syncerMock, walletMock)
 	contracts.revisionBroadcastInterval = time.Minute
 
 	// add host

@@ -6,30 +6,27 @@ import (
 	"fmt"
 	"io"
 
-	"go.sia.tech/core/consensus"
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
-	rhp4 "go.sia.tech/coreutils/rhp/v4"
+	"go.sia.tech/coreutils/rhp/v4"
+	"go.sia.tech/indexd/client"
 	"go.sia.tech/indexd/hosts"
-	"go.sia.tech/indexd/rhp"
 	"go.uber.org/zap"
 )
 
 type (
-	// ChainManager defines an interface to get the current chain state.
-	ChainManager interface {
-		TipState() consensus.State
-	}
-
-	// Dialer defines an interface to dial a host and get a client.
-	Dialer interface {
-		DialHost(ctx context.Context, hostKey types.PublicKey, addr string) (HostClient, error)
-	}
-
-	// HostClient defines an interface for replenishing accounts on a host.
+	// HostClient defines the interface for the funder to interact with the
+	// host.
 	HostClient interface {
 		io.Closer
-		ReplenishAccounts(ctx context.Context, contractID types.FileContractID, accounts []proto.Account, target types.Currency) (rhp4.RPCReplenishAccountsResult, int, error)
+		LatestRevision(context.Context, types.FileContractID) (proto.RPCLatestRevisionResponse, error)
+		ReplenishAccounts(context.Context, types.FileContractID, []proto.Account, types.Currency) (rhp.RPCReplenishAccountsResult, int, error)
+	}
+
+	// Dialer defines an interface for dialing the host and returning a host client. This client can be used to
+	// interact with the host using the RHP methods. The client is expected to be closed when no longer needed.
+	Dialer interface {
+		DialHost(ctx context.Context, hostKey types.PublicKey, addr string) (HostClient, error)
 	}
 
 	// Funder dials a host and replenish a set of ephemeral accounts.
@@ -39,7 +36,7 @@ type (
 )
 
 type wrapper struct {
-	d rhp.Dialer
+	d *client.SiamuxDialer
 }
 
 // DialHost dials the host and returns a HostClient.
@@ -52,10 +49,8 @@ func (w *wrapper) DialHost(ctx context.Context, hostKey types.PublicKey, addr st
 }
 
 // NewFunder creates a new Funder.
-func NewFunder(d rhp.Dialer) *Funder {
-	return &Funder{
-		dialer: &wrapper{d: d},
-	}
+func NewFunder(dialer *client.SiamuxDialer) *Funder {
+	return &Funder{dialer: &wrapper{d: dialer}}
 }
 
 // FundAccounts tops up the provided accounts to the target balance using the
@@ -76,11 +71,11 @@ func (f *Funder) FundAccounts(ctx context.Context, host hosts.Host, contractIDs 
 	}
 
 	// dial the host
-	client, err := f.dialer.DialHost(ctx, host.PublicKey, host.SiamuxAddr())
+	hc, err := f.dialer.DialHost(ctx, host.PublicKey, host.SiamuxAddr())
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to dial host %s: %w", host.PublicKey, err)
 	}
-	defer client.Close()
+	defer hc.Close()
 
 	// prepare account keys
 	accountKeys := make([]proto.Account, len(accounts))
@@ -93,12 +88,13 @@ func (f *Funder) FundAccounts(ctx context.Context, host hosts.Host, contractIDs 
 		contractLog := log.With(zap.Stringer("contractID", contractID))
 
 		// execute replenish RPC
-		res, n, err := client.ReplenishAccounts(ctx, contractID, accountKeys[funded:], target)
-		if errors.Is(err, rhp.ErrContractInsufficientFunds) {
+		maxEnd := min(len(accountKeys), funded+proto.MaxAccountBatchSize)
+		res, n, err := hc.ReplenishAccounts(ctx, contractID, accountKeys[funded:maxEnd], target)
+		if errors.Is(err, client.ErrContractInsufficientFunds) {
 			contractLog.Debug("contract has insufficient funds")
 			drained++
 			continue
-		} else if errors.Is(err, rhp.ErrContractNotRevisable) {
+		} else if errors.Is(err, client.ErrContractNotRevisable) {
 			contractLog.Debug("contract is not revisable") // sanity check
 			drained++
 			continue

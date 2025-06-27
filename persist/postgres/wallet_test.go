@@ -4,11 +4,135 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/wallet"
 	"go.uber.org/zap/zaptest"
+	"lukechampine.com/frand"
 )
+
+func TestWalletLockUnlock(t *testing.T) {
+	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
+
+	expectedLocked := make(map[types.SiacoinOutputID]bool)
+	lockedIDs := make([]types.SiacoinOutputID, 10)
+	for i := range lockedIDs {
+		lockedIDs[i] = frand.Entropy256()
+		expectedLocked[lockedIDs[i]] = true
+	}
+	if err := store.LockUTXOs(lockedIDs, time.Now().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := store.LockedUTXOs(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	} else if len(ids) != len(lockedIDs) {
+		t.Fatalf("expected %d locked outputs, got %d", len(lockedIDs), len(ids))
+	}
+	for _, id := range ids {
+		if _, ok := expectedLocked[id]; !ok {
+			t.Fatalf("unexpected locked output %s", id)
+		}
+	}
+
+	if err := store.ReleaseUTXOs(lockedIDs); err != nil {
+		t.Fatal(err)
+	}
+
+	ids, err = store.LockedUTXOs(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	} else if len(ids) != 0 {
+		t.Fatalf("expected 0 locked outputs, got %d", len(ids))
+	}
+
+	// lock the ids, but set the unlock time to the past
+	if err := store.LockUTXOs(lockedIDs, time.Now().Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	ids, err = store.LockedUTXOs(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	} else if len(ids) != 0 {
+		t.Fatalf("expected 0 locked outputs, got %d", len(ids))
+	}
+
+	// assert the outputs were cleaned up
+	var count int
+	err = store.pool.QueryRow(context.Background(), `SELECT COUNT(*) FROM wallet_locked_utxos`).Scan(&count)
+	if err != nil {
+		t.Fatal(err)
+	} else if count != 0 {
+		t.Fatalf("expected 0 locked outputs, got %d", count)
+	}
+}
+
+func BenchmarkWalletLockUnlock(b *testing.B) {
+	store := initPostgres(b, zaptest.NewLogger(b).Named("postgres"))
+
+	const batchSize = 1000
+
+	randomUTXOs := func() []types.SiacoinOutputID {
+		utxos := make([]types.SiacoinOutputID, batchSize)
+		for i := range utxos {
+			utxos[i] = frand.Entropy256()
+		}
+		return utxos
+	}
+
+	insertUTXOs := func() (utxos []types.SiacoinOutputID) {
+		b.Helper()
+		batch := &pgx.Batch{}
+		for _, utxo := range randomUTXOs() {
+			unlock := time.Now().Add(time.Duration(frand.Uint64n(3600)) * time.Second)
+			batch.Queue(`INSERT INTO wallet_locked_utxos (output_id, unlock_at) VALUES ($1, $2)`, sqlHash256(utxo), unlock)
+			utxos = append(utxos, utxo)
+		}
+		if err := store.pool.SendBatch(context.Background(), batch).Close(); err != nil {
+			b.Fatal(err)
+		}
+		return
+	}
+
+	b.Run("LockedUTXOs", func(b *testing.B) {
+		for b.Loop() {
+			if locked, err := store.LockedUTXOs(time.Now().Add(time.Duration(frand.Uint64n(3600)) * time.Second)); err != nil {
+				b.Fatal(err)
+			} else if len(locked) < batchSize {
+				b.StopTimer()
+				insertUTXOs()
+				b.StartTimer()
+			}
+		}
+	})
+
+	b.Run("LockUTXOs", func(b *testing.B) {
+		for b.Loop() {
+			b.StopTimer()
+			utxos := randomUTXOs()
+			unlock := time.Now().Add(time.Duration(frand.Uint64n(3600)) * time.Second)
+			b.StartTimer()
+
+			if err := store.LockUTXOs(utxos, unlock); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("ReleaseUTXOs", func(b *testing.B) {
+		for b.Loop() {
+			b.StopTimer()
+			outputIDs := insertUTXOs()
+			b.StartTimer()
+
+			if err := store.ReleaseUTXOs(outputIDs); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
 
 func TestSingleAddressWalletStoreTip(t *testing.T) {
 	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
