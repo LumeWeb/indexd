@@ -154,6 +154,7 @@ func (s *Subscriber) Sync(ctx context.Context) error {
 		return fmt.Errorf("failed to get last scanned index: %w", err)
 	}
 
+	var resetAttempts int
 	lastUpdate := time.Now()
 	s.log.Debug("syncing", zap.Uint64("height", index.Height), zap.Stringer("id", index.ID))
 	for index != s.cm.Tip() {
@@ -165,7 +166,11 @@ func (s *Subscriber) Sync(ctx context.Context) error {
 
 		rus, aus, err := s.cm.UpdatesSince(index, s.updateBatchSize)
 		if err != nil {
-			s.log.Warn("failed to fetch updates, resetting chain state", zap.Uint64("height", index.Height), zap.Stringer("id", index.ID), zap.Error(err))
+			resetAttempts++
+			if resetAttempts > 3 {
+				return fmt.Errorf("failed to sync chain state after multiple attempts: %w", err)
+			}
+			s.log.Warn("failed to fetch updates, resetting chain state", zap.Uint64("height", index.Height), zap.Stringer("id", index.ID), zap.Int("attempt", resetAttempts), zap.Error(err))
 			if err := s.store.ResetChainState(ctx); err != nil {
 				return fmt.Errorf("failed to reset consensus state: %w", err)
 			} else if index, err = s.store.LastScannedIndex(ctx); err != nil {
