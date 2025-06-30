@@ -6,6 +6,7 @@ import (
 
 	"errors"
 	"fmt"
+	"net/http/pprof"
 	"runtime"
 	"time"
 	"unicode/utf8"
@@ -53,6 +54,12 @@ type (
 	// to ensure the account is funded as soon as possible.
 	ContractManager interface {
 		TriggerAccountFunding()
+		TriggerMaintenance()
+	}
+
+	// HostManager defines an interface that allows triggering a host scan.
+	HostManager interface {
+		TriggerHostScanning()
 	}
 
 	// Explorer retrieves data about the Sia network from an external source.
@@ -101,8 +108,10 @@ type (
 
 type (
 	adminAPI struct {
+		debug     bool
 		chain     ChainManager
 		contracts ContractManager
+		hosts     HostManager
 		explorer  Explorer
 		store     Store
 		syncer    Syncer
@@ -118,10 +127,11 @@ func (a *adminAPI) applyOption(opt Option) { opt.applyToAdmin(a) }
 // API exposes endpoints to manage accounts, hosts, settings and the wallet.
 // This is different from the application API, which users, or rather their
 // applications, can use to pin slabs.
-func NewAdminAPI(chain ChainManager, contracts ContractManager, syncer Syncer, wallet Wallet, store Store, opts ...Option) http.Handler {
+func NewAdminAPI(chain ChainManager, contracts ContractManager, hosts HostManager, syncer Syncer, wallet Wallet, store Store, opts ...Option) http.Handler {
 	a := &adminAPI{
 		chain:     chain,
 		contracts: contracts,
+		hosts:     hosts,
 		store:     store,
 		syncer:    syncer,
 		wallet:    wallet,
@@ -131,7 +141,7 @@ func NewAdminAPI(chain ChainManager, contracts ContractManager, syncer Syncer, w
 		a.applyOption(opt)
 	}
 
-	return jape.Mux(map[string]jape.Handler{
+	routes := map[string]jape.Handler{
 		"GET /state": a.handleGETState,
 
 		// accounts endpoints
@@ -165,7 +175,15 @@ func NewAdminAPI(chain ChainManager, contracts ContractManager, syncer Syncer, w
 		"GET /wallet/events":  a.handleGETWalletEvents,
 		"GET /wallet/pending": a.handleGETWalletPending,
 		"POST /wallet/send":   a.handlePOSTWalletSend,
-	})
+	}
+
+	// debug endpoints
+	if a.debug {
+		routes["GET /debug/pprof/:handler"] = a.handleGETPProf
+		routes["POST /debug/trigger/:action"] = a.handlePOSTTrigger
+	}
+
+	return jape.Mux(routes)
 }
 
 func (a *adminAPI) checkServerError(jc jape.Context, context string, err error) bool {
@@ -174,6 +192,47 @@ func (a *adminAPI) checkServerError(jc jape.Context, context string, err error) 
 		a.log.Warn(context, zap.Error(err))
 	}
 	return err == nil
+}
+
+func (a *adminAPI) handleGETPProf(jc jape.Context) {
+	var handler string
+	if err := jc.DecodeParam("handler", &handler); err != nil {
+		return
+	}
+
+	switch handler {
+	case "cmdline":
+		pprof.Cmdline(jc.ResponseWriter, jc.Request)
+	case "profile":
+		pprof.Profile(jc.ResponseWriter, jc.Request)
+	case "symbol":
+		pprof.Symbol(jc.ResponseWriter, jc.Request)
+	case "trace":
+		pprof.Trace(jc.ResponseWriter, jc.Request)
+	default:
+		pprof.Index(jc.ResponseWriter, jc.Request)
+	}
+}
+
+func (a *adminAPI) handlePOSTTrigger(jc jape.Context) {
+	var action string
+	if jc.DecodeParam("action", &action) != nil {
+		return
+	}
+
+	switch action {
+	case "funding":
+		a.contracts.TriggerAccountFunding()
+	case "maintenance":
+		a.contracts.TriggerMaintenance()
+	case "scanning":
+		a.hosts.TriggerHostScanning()
+	default:
+		jc.Error(fmt.Errorf("unknown action: %q, available actions are 'funding', 'maintenance' or 'scanning'", action), http.StatusBadRequest)
+		return
+	}
+
+	jc.Encode(nil)
 }
 
 func (a *adminAPI) handleGETAccounts(jc jape.Context) {

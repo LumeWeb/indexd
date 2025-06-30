@@ -15,6 +15,7 @@ import (
 	"go.sia.tech/coreutils/wallet"
 	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/api"
+	"go.sia.tech/indexd/client"
 	"go.sia.tech/indexd/contracts"
 	"go.sia.tech/indexd/explorer"
 	"go.sia.tech/indexd/hosts"
@@ -63,10 +64,11 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger) *Indexer {
 		t.Fatalf("failed to create host manager: %v", err)
 	}
 
-	funder := accounts.NewFunder(c.cm, wm)
-	am := accounts.NewManager(store, funder, accounts.WithLogger(log.Named("accounts")))
+	signer := contracts.NewFormContractSigner(wm, walletKey)
+	dialer := client.NewSiamuxDialer(c.cm, signer, log)
+	am := accounts.NewManager(store, accounts.NewFunder(dialer), accounts.WithLogger(log.Named("accounts")))
 
-	contracts, err := contracts.NewManager(walletKey, am, c.cm, nil, store, s, wm, contracts.WithLogger(log.Named("contracts")))
+	contracts, err := contracts.NewManager(walletKey, am, c.cm, store, dialer, nil, s, wm, contracts.WithLogger(log.Named("contracts")))
 	if err != nil {
 		t.Fatalf("failed to create contract manager: %v", err)
 	}
@@ -92,7 +94,7 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger) *Indexer {
 
 	password := hex.EncodeToString(frand.Bytes(16))
 	adminAPI := http.Server{
-		Handler: jape.BasicAuth(password)(api.NewAdminAPI(c.cm, contracts, s, wm, store, apiOpts...)),
+		Handler: jape.BasicAuth(password)(api.NewAdminAPI(c.cm, contracts, hm, s, wm, store, apiOpts...)),
 	}
 
 	adminListener, err := net.Listen("tcp4", "127.0.0.1:0")

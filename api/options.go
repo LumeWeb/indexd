@@ -22,7 +22,11 @@ type (
 
 	loggerOption   struct{ log *zap.Logger }
 	explorerOption struct{ e Explorer }
+	debugOption    struct{ debug bool }
 )
+
+func (d debugOption) applyToAdmin(api *adminAPI)             { api.debug = d.debug }
+func (d debugOption) applyToApplication(api *applicationAPI) {}
 
 func (o loggerOption) applyToAdmin(api *adminAPI)             { api.log = o.log }
 func (o loggerOption) applyToApplication(api *applicationAPI) { api.log = o.log }
@@ -38,6 +42,12 @@ func WithExplorer(e Explorer) Option {
 // WithLogger sets the logger for the server.
 func WithLogger(log *zap.Logger) Option {
 	return loggerOption{log: log}
+}
+
+// WithDebug sets the debug mode for the API server. In debug mode, the server
+// exposes additional debug endpoints that allow triggering certain actions.
+func WithDebug() Option {
+	return debugOption{debug: true}
 }
 
 // URLQueryParameterOption is an option to configure the query string
