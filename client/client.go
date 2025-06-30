@@ -105,17 +105,17 @@ func (c *HostClient) AppendSectors(ctx context.Context, hostPrices proto.HostPri
 
 	// append sectors
 	var res rhp.RPCAppendSectorsResult
-	if err := c.withRevision(ctx, contractID, func(revision types.V2FileContract) (_ types.V2FileContract, err error) {
+	if err := c.withRevision(ctx, contractID, func(revision types.V2FileContract) (types.V2FileContract, error) {
 		if revision.Filesize > maxContractSize {
 			return types.V2FileContract{}, fmt.Errorf("contract is too large, %d > %d", revision.Filesize, maxContractSize)
 		}
-		res, err = rhp.RPCAppendSectors(ctx, c.client, c.signer, c.cm.TipState(), hostPrices, rhp.ContractRevision{ID: contractID, Revision: revision}, sectors)
+		res, err := rhp.RPCAppendSectors(ctx, c.client, c.signer, c.cm.TipState(), hostPrices, rhp.ContractRevision{ID: contractID, Revision: revision}, sectors)
 		if err != nil {
 			return types.V2FileContract{}, fmt.Errorf("failed to append sectors: %w", err)
 		}
 		return res.Revision, nil
 	}); err != nil {
-		return rhp.RPCAppendSectorsResult{}, fmt.Errorf("failed to fetch append sectors: %w", err)
+		return rhp.RPCAppendSectorsResult{}, fmt.Errorf("failed to append sectors: %w", err)
 	}
 
 	return res, nil
@@ -139,8 +139,8 @@ func (c *HostClient) FormContract(ctx context.Context, settings proto.HostSettin
 // SectorRoots returns the sector roots for a contract.
 func (c *HostClient) SectorRoots(ctx context.Context, hostPrices proto.HostPrices, contractID types.FileContractID, offset, length uint64) (rhp.RPCSectorRootsResult, error) {
 	var res rhp.RPCSectorRootsResult
-	if err := c.withRevision(ctx, contractID, func(revision types.V2FileContract) (_ types.V2FileContract, err error) {
-		res, err = rhp.RPCSectorRoots(ctx, c.client, c.cm.TipState(), hostPrices, c.signer, rhp.ContractRevision{ID: contractID, Revision: revision}, offset, length)
+	if err := c.withRevision(ctx, contractID, func(revision types.V2FileContract) (types.V2FileContract, error) {
+		res, err := rhp.RPCSectorRoots(ctx, c.client, c.cm.TipState(), hostPrices, c.signer, rhp.ContractRevision{ID: contractID, Revision: revision}, offset, length)
 		if err != nil {
 			return types.V2FileContract{}, fmt.Errorf("failed to fetch sector roots: %w", err)
 		}
@@ -154,8 +154,8 @@ func (c *HostClient) SectorRoots(ctx context.Context, hostPrices proto.HostPrice
 // FreeSectors frees the specified sectors in the contract.
 func (c *HostClient) FreeSectors(ctx context.Context, hostPrices proto.HostPrices, contractID types.FileContractID, indices []uint64) (rhp.RPCFreeSectorsResult, error) {
 	var res rhp.RPCFreeSectorsResult
-	if err := c.withRevision(ctx, contractID, func(revision types.V2FileContract) (_ types.V2FileContract, err error) {
-		res, err = rhp.RPCFreeSectors(ctx, c.client, c.signer, c.cm.TipState(), hostPrices, rhp.ContractRevision{ID: contractID, Revision: revision}, indices)
+	if err := c.withRevision(ctx, contractID, func(revision types.V2FileContract) (types.V2FileContract, error) {
+		res, err := rhp.RPCFreeSectors(ctx, c.client, c.signer, c.cm.TipState(), hostPrices, rhp.ContractRevision{ID: contractID, Revision: revision}, indices)
 		if err != nil {
 			return types.V2FileContract{}, fmt.Errorf("failed to free sectors: %w", err)
 		}
@@ -187,13 +187,13 @@ func (c *HostClient) RefreshContract(ctx context.Context, settings proto.HostSet
 // RenewContract renews the contract with the host.
 func (c *HostClient) RenewContract(ctx context.Context, settings proto.HostSettings, contractID types.FileContractID, proofHeight uint64) (rhp.RPCRenewContractResult, error) {
 	var res rhp.RPCRenewContractResult
-	if err := c.withRevision(ctx, contractID, func(revision types.V2FileContract) (_ types.V2FileContract, err error) {
+	if err := c.withRevision(ctx, contractID, func(revision types.V2FileContract) (types.V2FileContract, error) {
 		// NOTE: when renewing a contract we keep the same allowance and collateral.
 		// This has the following advantages:
 		// 1. Contracts drain over time if they contain more funds than needed
 		// 2. Renewals are very "cheap" since no party needs to lock away
 		//    additional funds. Only the fees need to be paid.
-		res, err = rhp.RPCRenewContract(ctx, c.client, c.cm, c.signer, c.cm.TipState(), settings.Prices, revision, proto.RPCRenewContractParams{
+		res, err := rhp.RPCRenewContract(ctx, c.client, c.cm, c.signer, c.cm.TipState(), settings.Prices, revision, proto.RPCRenewContractParams{
 			ContractID:  contractID,
 			Allowance:   revision.RenterOutput.Value,
 			Collateral:  revision.MissedHostValue,
@@ -211,7 +211,7 @@ func (c *HostClient) RenewContract(ctx context.Context, settings proto.HostSetti
 
 // ReplenishAccounts replenishes the accounts in the contract to the target value.
 func (c *HostClient) ReplenishAccounts(ctx context.Context, contractID types.FileContractID, accounts []proto.Account, target types.Currency) (res rhp.RPCReplenishAccountsResult, funded int, _ error) {
-	if err := c.withRevision(ctx, contractID, func(revision types.V2FileContract) (_ types.V2FileContract, err error) {
+	if err := c.withRevision(ctx, contractID, func(revision types.V2FileContract) (types.V2FileContract, error) {
 		if revision.RenterOutput.Value.Cmp(target) < 0 {
 			return types.V2FileContract{}, ErrContractInsufficientFunds
 		}
@@ -227,7 +227,7 @@ func (c *HostClient) ReplenishAccounts(ctx context.Context, contractID types.Fil
 			Target:   target,
 			Contract: rhp.ContractRevision{ID: contractID, Revision: revision},
 		}
-		res, err = rhp.RPCReplenishAccounts(ctx, c.client, params, c.cm.TipState(), c.signer)
+		res, err := rhp.RPCReplenishAccounts(ctx, c.client, params, c.cm.TipState(), c.signer)
 		if err != nil {
 			return types.V2FileContract{}, err
 		}
@@ -279,8 +279,6 @@ func (c *HostClient) withRevision(ctx context.Context, contractID types.FileCont
 		return ErrContractRenewed
 	} else if rev.ProofHeight > maxProofHeight {
 		return fmt.Errorf("%d > %d (%d+%d), %w", rev.ProofHeight, maxProofHeight, bh, revisionSubmissionBuffer, ErrContractNotRevisable)
-	} else if rev.RenterOutput.Value.IsZero() {
-		return ErrContractOutOfFunds
 	}
 
 	// revise the contract

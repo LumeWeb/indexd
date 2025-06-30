@@ -59,7 +59,6 @@ func TestWithRevision(t *testing.T) {
 
 	db.renewed[types.FileContractID{1}] = true                                                              // renewed
 	db.revisions[types.FileContractID{2}] = types.V2FileContract{ProofHeight: revisionSubmissionBuffer + 1} // not revisable
-	db.revisions[types.FileContractID{3}] = types.V2FileContract{RenterOutput: types.SiacoinOutput{}}       // out of funds
 
 	noopFn := func(revision types.V2FileContract) (types.V2FileContract, error) { return types.V2FileContract{}, nil }
 	invalidSigFn := func(revision types.V2FileContract) (types.V2FileContract, error) {
@@ -76,12 +75,6 @@ func TestWithRevision(t *testing.T) {
 	err = c.withRevision(context.Background(), types.FileContractID{2}, noopFn)
 	if !errors.Is(err, ErrContractNotRevisable) {
 		t.Fatalf("expected ErrContractNotRevisable, got: %v", err)
-	}
-
-	// assert ErrContractOutOfFunds is returned for a contract with insufficient funds
-	err = c.withRevision(context.Background(), types.FileContractID{3}, noopFn)
-	if !errors.Is(err, ErrContractOutOfFunds) {
-		t.Fatalf("expected ErrContractOutOfFunds, got: %v", err)
 	}
 
 	// assert withRevision errors out if the revision can't be found
