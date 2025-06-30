@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/klauspost/reedsolomon"
 	"go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/contracts"
@@ -100,12 +101,24 @@ func (m *SlabManager) migrateSlab(ctx context.Context, slab Slab, hosts []hosts.
 		return fmt.Errorf("failed to download slab %s: %w", slab.ID, err)
 	}
 
-	toMigrate := shards[:0]
+	rs, err := reedsolomon.New(int(slab.MinShards), len(slab.Sectors)-int(slab.MinShards))
+	if err != nil {
+		return fmt.Errorf("failed to create reedsolomon encoder: %w", err)
+	}
+	toReconstruct := make([]bool, len(slab.Sectors))
 	for _, i := range indices {
-		toMigrate = append(toMigrate, shards[i])
+		toReconstruct[i] = true
+	}
+	if err := rs.ReconstructSome(shards, toReconstruct); err != nil {
+		return fmt.Errorf("failed to reconstruct shards for slab %s: %w", slab.ID, err)
+	}
+	for i := range shards {
+		if !toReconstruct[i] {
+			shards[i] = nil
+		}
 	}
 
-	migratedShards, err := uploadShards(ctx, m.client, toMigrate, hosts)
+	migratedShards, err := m.uploadShards(ctx, m.client, shards, hosts)
 	if err != nil {
 		return fmt.Errorf("failed to upload migrated shards for slab %s: %w", slab.ID, err)
 	} else if len(migratedShards) == 0 {
@@ -119,7 +132,7 @@ func (m *SlabManager) migrateSlab(ctx context.Context, slab Slab, hosts []hosts.
 		}
 	}
 
-	logger.Debug("successfully migrated slab", zap.Int("toMigrate", len(toMigrate)), zap.Int("migrated", len(migratedShards)))
+	logger.Debug("successfully migrated slab", zap.Int("toMigrate", len(indices)), zap.Int("migrated", len(migratedShards)))
 	return nil
 }
 
