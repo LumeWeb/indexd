@@ -65,10 +65,10 @@ type (
 		DialHost(ctx context.Context, hostKey types.PublicKey, addr string) (HostClient, error)
 	}
 
-	// Scanner defines the minimal interface of Scanner functionality
+	// HostManager defines the minimal interface of HostManager functionality
 	// the ContractManager requires.
-	Scanner interface {
-		ScanHost(ctx context.Context, hk types.PublicKey) (hosts.Host, error)
+	HostManager interface {
+		WithScannedHost(ctx context.Context, hk types.PublicKey, fn func(h hosts.Host) error) error
 	}
 
 	// Store is the minimal interface of Store functionality the ContractManager
@@ -153,7 +153,7 @@ type (
 		store Store
 
 		dialer    Dialer
-		scanner   Scanner
+		hm        HostManager
 		renterKey types.PublicKey
 
 		triggerFundingChan     chan struct{}
@@ -194,8 +194,8 @@ func (w *wrapper) DialHost(ctx context.Context, hostKey types.PublicKey, addr st
 // NewManager creates a new contract manager. It is responsible for forming and
 // renewing contracts as well as any interactions with hosts that require
 // contracts.
-func NewManager(renterKey types.PrivateKey, accountManager AccountManager, chainManager ChainManager, store Store, dialer *client.SiamuxDialer, scanner Scanner, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) (*ContractManager, error) {
-	cm := newContractManager(renterKey.PublicKey(), accountManager, chainManager, store, &wrapper{d: dialer}, scanner, syncer, wallet, opts...)
+func NewManager(renterKey types.PrivateKey, accountManager AccountManager, chainManager ChainManager, store Store, dialer *client.SiamuxDialer, hm HostManager, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) (*ContractManager, error) {
+	cm := newContractManager(renterKey.PublicKey(), accountManager, chainManager, store, &wrapper{d: dialer}, hm, syncer, wallet, opts...)
 
 	ctx, cancel, err := cm.tg.AddContext(context.Background())
 	if err != nil {
@@ -208,7 +208,7 @@ func NewManager(renterKey types.PrivateKey, accountManager AccountManager, chain
 	return cm, nil
 }
 
-func newContractManager(renterKey types.PublicKey, accountManager AccountManager, chainManager ChainManager, store Store, dialer Dialer, scanner Scanner, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) *ContractManager {
+func newContractManager(renterKey types.PublicKey, accountManager AccountManager, chainManager ChainManager, store Store, dialer Dialer, hm HostManager, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) *ContractManager {
 	cm := &ContractManager{
 		am: accountManager,
 		cm: chainManager,
@@ -218,8 +218,8 @@ func newContractManager(renterKey types.PublicKey, accountManager AccountManager
 		dialer:    dialer,
 		renterKey: renterKey,
 
-		scanner: scanner,
-		store:   store,
+		hm:    hm,
+		store: store,
 
 		triggerFundingChan:     make(chan struct{}, 1),
 		triggerMaintenanceChan: make(chan struct{}, 1),
