@@ -8,46 +8,40 @@ import (
 )
 
 type (
-	// API is the interface that all API types must implement.
-	// It is used to apply options to the API.
-	API interface {
-		applyOption(Option)
-	}
+	// AppOption is a function that applies an option to the application API.
+	AppOption func(*applicationAPI)
 
-	// Option is an interface for options that can be applied to the API.
-	Option interface {
-		applyToAdmin(*adminAPI)
-		applyToApplication(*applicationAPI)
-	}
-
-	loggerOption   struct{ log *zap.Logger }
-	explorerOption struct{ e Explorer }
-	debugOption    struct{ debug bool }
+	// AdminOption is a function that applies an option to the admin API.
+	AdminOption func(*adminAPI)
 )
 
-func (d debugOption) applyToAdmin(api *adminAPI)             { api.debug = d.debug }
-func (d debugOption) applyToApplication(api *applicationAPI) {}
-
-func (o loggerOption) applyToAdmin(api *adminAPI)             { api.log = o.log }
-func (o loggerOption) applyToApplication(api *applicationAPI) { api.log = o.log }
-
-func (e explorerOption) applyToAdmin(api *adminAPI)             { api.explorer = e.e }
-func (e explorerOption) applyToApplication(api *applicationAPI) {}
-
-// WithExplorer sets the explorer for the API.
-func WithExplorer(e Explorer) Option {
-	return explorerOption{e: e}
+// WithExplorer sets the explorer for the admin API.
+func WithExplorer(e Explorer) AdminOption {
+	return func(api *adminAPI) {
+		api.explorer = e
+	}
 }
 
-// WithLogger sets the logger for the server.
-func WithLogger(log *zap.Logger) Option {
-	return loggerOption{log: log}
+// WithAdminLogger sets the logger for admin API.
+func WithAdminLogger(log *zap.Logger) AdminOption {
+	return func(api *adminAPI) {
+		api.log = log
+	}
 }
 
-// WithDebug sets the debug mode for the API server. In debug mode, the server
+// WithDebug sets the debug mode for admin API. In debug mode, the server
 // exposes additional debug endpoints that allow triggering certain actions.
-func WithDebug() Option {
-	return debugOption{debug: true}
+func WithDebug() AdminOption {
+	return func(api *adminAPI) {
+		api.debug = true
+	}
+}
+
+// WithAppLogger sets the logger for application API.
+func WithAppLogger(log *zap.Logger) AppOption {
+	return func(api *applicationAPI) {
+		api.log = log
+	}
 }
 
 // URLQueryParameterOption is an option to configure the query string

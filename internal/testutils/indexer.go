@@ -87,14 +87,14 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger) *Indexer {
 	}
 	c.addSyncFn(syncFn)
 
-	apiOpts := []api.Option{
-		api.WithLogger(log.Named("api.admin")),
+	adminAPIOpts := []api.AdminOption{
+		api.WithAdminLogger(log.Named("api.admin")),
 		api.WithExplorer(explorer.New("https://api.siascan.com")),
 	}
 
 	password := hex.EncodeToString(frand.Bytes(16))
 	adminAPI := http.Server{
-		Handler: jape.BasicAuth(password)(api.NewAdminAPI(c.cm, contracts, hm, s, wm, store, apiOpts...)),
+		Handler: jape.BasicAuth(password)(api.NewAdminAPI(c.cm, contracts, hm, s, wm, store, adminAPIOpts...)),
 	}
 
 	adminListener, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -108,12 +108,12 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger) *Indexer {
 		}
 	}()
 
-	apiOpts = []api.Option{
-		api.WithLogger(log.Named("api.application")),
+	appAPIOpts := []api.AppOption{
+		api.WithAppLogger(log.Named("api.application")),
 	}
 
 	applicationAPI := http.Server{
-		Handler: api.NewApplicationAPI(DefaultHostname, store, apiOpts...),
+		Handler: api.NewApplicationAPI(DefaultHostname, store, appAPIOpts...),
 	}
 
 	applicationListener, err := net.Listen("tcp4", "127.0.0.1:0")

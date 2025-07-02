@@ -120,14 +120,12 @@ type (
 	}
 )
 
-func (a *adminAPI) applyOption(opt Option) { opt.applyToAdmin(a) }
-
 // NewAdminAPI initializes the admin API, which is protected via http basic
 // authentication and should never be exposed on the public internet. The admin
 // API exposes endpoints to manage accounts, hosts, settings and the wallet.
 // This is different from the application API, which users, or rather their
 // applications, can use to pin slabs.
-func NewAdminAPI(chain ChainManager, contracts ContractManager, hosts HostManager, syncer Syncer, wallet Wallet, store Store, opts ...Option) http.Handler {
+func NewAdminAPI(chain ChainManager, contracts ContractManager, hosts HostManager, syncer Syncer, wallet Wallet, store Store, opts ...AdminOption) http.Handler {
 	a := &adminAPI{
 		chain:     chain,
 		contracts: contracts,
@@ -138,7 +136,7 @@ func NewAdminAPI(chain ChainManager, contracts ContractManager, hosts HostManage
 		log:       zap.NewNop(),
 	}
 	for _, opt := range opts {
-		a.applyOption(opt)
+		opt(a)
 	}
 
 	routes := map[string]jape.Handler{

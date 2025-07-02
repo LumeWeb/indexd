@@ -14,21 +14,19 @@ type (
 	}
 )
 
-func (a *applicationAPI) applyOption(opt Option) { opt.applyToApplication(a) }
-
 // NewApplicationAPI creates a new instance of the application API. This API is
 // used by users, or rather their applications, to pin slabs to the indexer.
 // Authentication happens through presigned URLs that are signed with a private
 // key that corresponds to a previously registered public key.
-func NewApplicationAPI(hostname string, store AccountStore, opts ...Option) http.Handler {
+func NewApplicationAPI(hostname string, store AccountStore, opts ...AppOption) http.Handler {
 	a := &applicationAPI{
 		log: zap.NewNop(),
 	}
 	for _, opt := range opts {
-		a.applyOption(opt)
+		opt(a)
 	}
 
-	return wrapSignedAPI(hostname, store, map[string]authedHandler{
+	handlers := map[string]authedHandler{
 		"GET /foo": func(jc jape.Context, pk types.PublicKey) {
 			if ok, err := store.HasAccount(jc.Request.Context(), pk); err != nil {
 				jc.ResponseWriter.WriteHeader(http.StatusInternalServerError)
@@ -39,5 +37,17 @@ func NewApplicationAPI(hostname string, store AccountStore, opts ...Option) http
 			}
 			jc.ResponseWriter.WriteHeader(http.StatusOK)
 		},
-	})
+	}
+
+	wrapped := make(map[string]jape.Handler)
+	for path, handler := range handlers {
+		wrapped[path] = func(jc jape.Context) {
+			pk, ok := checkSignedURLAuth(jc, hostname, store)
+			if !ok {
+				return
+			}
+			handler(jc, pk)
+		}
+	}
+	return jape.Mux(wrapped)
 }

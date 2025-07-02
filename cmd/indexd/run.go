@@ -131,18 +131,18 @@ func runRootCmd(ctx context.Context, cfg config.Config, walletKey types.PrivateK
 	}
 	defer adminAPIListener.Close()
 
-	apiOpts := []api.Option{
-		api.WithLogger(log.Named("api.admin")),
+	adminAPIOpts := []api.AdminOption{
+		api.WithAdminLogger(log.Named("api.admin")),
 	}
 
 	if cfg.Debug {
-		apiOpts = append(apiOpts, api.WithDebug())
+		adminAPIOpts = append(adminAPIOpts, api.WithDebug())
 	}
 
 	var e *explorer.Explorer
 	if cfg.Explorer.Enabled {
 		e = explorer.New(cfg.Explorer.URL)
-		apiOpts = append(apiOpts, api.WithExplorer(e))
+		adminAPIOpts = append(adminAPIOpts, api.WithExplorer(e))
 	}
 
 	pm, err := pins.NewManager(e, hm, store, pins.WithLogger(log.Named("pins")))
@@ -153,7 +153,7 @@ func runRootCmd(ctx context.Context, cfg config.Config, walletKey types.PrivateK
 
 	adminAPI := http.Server{
 		Handler: webRouter{
-			api: jape.BasicAuth(cfg.AdminAPI.Password)(api.NewAdminAPI(cm, contracts, hm, s, wm, store, apiOpts...)),
+			api: jape.BasicAuth(cfg.AdminAPI.Password)(api.NewAdminAPI(cm, contracts, hm, s, wm, store, adminAPIOpts...)),
 		},
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
@@ -173,12 +173,12 @@ func runRootCmd(ctx context.Context, cfg config.Config, walletKey types.PrivateK
 	}
 	defer appAPIListener.Close()
 
-	apiOpts = []api.Option{
-		api.WithLogger(log.Named("api.application")),
+	appAPIOpts := []api.AppOption{
+		api.WithAppLogger(log.Named("api.application")),
 	}
 
 	appAPI := http.Server{
-		Handler:      api.NewApplicationAPI(cfg.ApplicationAPI.Hostname, store, apiOpts...),
+		Handler:      api.NewApplicationAPI(cfg.ApplicationAPI.Hostname, store, appAPIOpts...),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 	}
