@@ -21,6 +21,8 @@ import (
 	"lukechampine.com/frand"
 )
 
+var errNotEnoughShards = errors.New("not enough shards")
+
 type (
 	// Shard represents a sector present on a host.
 	Shard struct {
@@ -96,7 +98,7 @@ func (m *SlabManager) migrateSlab(ctx context.Context, slab Slab, hosts []hosts.
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 
-	shards, err := m.downloadSlab(ctx, slab, hosts, logger)
+	shards, err := m.downloadShards(ctx, slab, hosts, logger)
 	if err != nil {
 		return fmt.Errorf("failed to download slab %s: %w", slab.ID, err)
 	}
@@ -118,7 +120,7 @@ func (m *SlabManager) migrateSlab(ctx context.Context, slab Slab, hosts []hosts.
 		}
 	}
 
-	migratedShards, err := m.uploadShards(ctx, m.client, shards, hosts)
+	migratedShards, err := m.uploadShards(ctx, shards, hosts)
 	if err != nil {
 		return fmt.Errorf("failed to upload migrated shards for slab %s: %w", slab.ID, err)
 	} else if len(migratedShards) == 0 {
@@ -204,7 +206,9 @@ LOOP:
 	return toMigrate, remainingHosts
 }
 
-func (m *SlabManager) downloadSlab(ctx context.Context, slab Slab, availableHosts []hosts.Host, logger *zap.Logger) ([][]byte, error) {
+// downloadShards downloads at least the minimum number of shards required to
+// recover the slab.
+func (m *SlabManager) downloadShards(ctx context.Context, slab Slab, availableHosts []hosts.Host, logger *zap.Logger) ([][]byte, error) {
 	ctx, cancelDownload := context.WithCancel(ctx)
 	defer cancelDownload()
 
@@ -213,14 +217,25 @@ func (m *SlabManager) downloadSlab(ctx context.Context, slab Slab, availableHost
 	shards := make([][]byte, len(slab.Sectors))
 	sema := make(chan struct{}, slab.MinShards)
 
+	// check we even have enough sectors to download
+	var available uint
+	for _, sector := range slab.Sectors {
+		if sector.HostKey != nil {
+			available++
+		}
+	}
+	if available < slab.MinShards {
+		return nil, fmt.Errorf("%w: only %d sectors available, minimum required: %d", errNotEnoughShards, available, slab.MinShards)
+	}
+
 	// when we download for migrations, we don't care about the price if it
 	// means preventing data loss and we also don't care too much about
 	// performance. So we start with the cheapest hosts.
 	// NOTE: the prices might not be valid, but it's a good enough
 	// estimate
-	priceMap := make(map[types.PublicKey]types.Currency)
+	hosts := make(map[types.PublicKey]hosts.Host)
 	for _, host := range availableHosts {
-		priceMap[host.PublicKey] = host.Settings.Prices.EgressPrice
+		hosts[host.PublicKey] = host
 	}
 	order := make([]int, len(slab.Sectors))
 	for i := range order {
@@ -231,16 +246,17 @@ func (m *SlabManager) downloadSlab(ctx context.Context, slab Slab, availableHost
 		if sectorI.HostKey == nil || sectorJ.HostKey == nil {
 			return sectorI.HostKey != nil && sectorJ.HostKey == nil // prefer sectors that we can actually fetch
 		}
-		_, hasPriceI := priceMap[*sectorI.HostKey]
-		_, hasPriceJ := priceMap[*sectorJ.HostKey]
+		hostI, hasPriceI := hosts[*sectorI.HostKey]
+		hostJ, hasPriceJ := hosts[*sectorJ.HostKey]
 		if !hasPriceI || !hasPriceJ {
 			return hasPriceI && !hasPriceJ // prefer sectors with a price estimate
 		}
-		return priceMap[*sectorI.HostKey].Cmp(priceMap[*sectorJ.HostKey]) < 0 // prefer cheaper hosts
+		pricesI, pricesJ := hostI.Settings.Prices, hostJ.Settings.Prices
+		return pricesI.EgressPrice.Cmp(pricesJ.EgressPrice) < 0 // prefer cheaper hosts
 	})
 
 top:
-	for i := range order {
+	for _, i := range order {
 		select {
 		case <-ctx.Done():
 			break top
@@ -249,37 +265,61 @@ top:
 		}
 		wg.Add(1)
 		go func(ctx context.Context, sector Sector, i int) {
-			defer func() { <-sema }() // release semaphore
+			success := false
+			defer func() {
+				// release semaphore on failure only to avoid spinning up a new
+				// goroutine for a successful download
+				if !success {
+					<-sema
+				}
+			}()
 			defer wg.Done()
 
+			// make sure we have the information we need
 			if sector.HostKey == nil {
 				return // can't fetch sector without a host
 			}
 			hostKey := *sector.HostKey
 			sectorLogger := logger.Named(sector.Root.String()).With(zap.Stringer("hostKey", hostKey))
+			host, ok := hosts[hostKey]
+			if !ok {
+				return // can't fetch sector without knowing host
+			}
 
-			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			// dial the host
+			ctx, cancel := context.WithTimeout(ctx, m.shardTimeout)
 			defer cancel()
-
-			buf := new(bytes.Buffer)
+			client, err := m.dialer.DialHost(ctx, hostKey, host.SiamuxAddr())
+			if err != nil {
+				sectorLogger.Debug("failed to dial host", zap.Error(err))
+				return
+			}
 
 			// fetch the prices
-			settings, err := m.client.Settings(ctx, hostKey, "address")
+			settings, err := client.Settings(ctx, hostKey)
 			if err != nil {
 				sectorLogger.Debug("failed to fetch host settings")
 				return
 			}
-			token := m.serviceAccount.Token(m.serviceAccountKey, hostKey)
 
-			result, err := m.client.ReadSector(ctx, settings.Prices, token, buf, sector.Root, 0, rhp.SectorSize)
+			// fetch the sector
+			buf := new(bytes.Buffer)
+			token := m.migrationAccount.Token(m.migrationAccountKey, hostKey)
+			result, err := client.ReadSector(ctx, settings.Prices, token, buf, sector.Root, 0, rhp.SectorSize)
 			if err != nil && strings.Contains(err.Error(), rhp.ErrSectorNotFound.Error()) {
-				// TODO: mark sector lost
+				if err := m.store.MarkSectorsLost(ctx, hostKey, []types.Hash256{sector.Root}); err != nil {
+					sectorLogger.Error("failed to mark sector as lost", zap.Error(err))
+				} else {
+					sectorLogger.Debug("marked sector as lost")
+				}
+				return
 			} else if err != nil {
 				sectorLogger.Debug("failed to read sector")
 				return
 			}
 
-			if err := m.am.DebitServiceAccount(ctx, hostKey, m.serviceAccount, result.Usage.RenterCost()); err != nil {
+			// withdraw the cost upon success
+			if err := m.am.DebitServiceAccount(ctx, hostKey, m.migrationAccount, result.Usage.RenterCost()); err != nil {
 				sectorLogger.Error("failed to debit service account for sector read", zap.Error(err))
 				return
 			}
@@ -292,16 +332,18 @@ top:
 				// got enough pieces to recover
 				cancelDownload()
 			}
+
+			success = true
 		}(ctx, slab.Sectors[i], i)
 	}
 
 	wg.Wait()
 	if n := successful.Load(); n < uint32(slab.MinShards) {
-		return nil, fmt.Errorf("retrieved %d shards, minimum required: %d", n, slab.MinShards)
+		return nil, fmt.Errorf("%w: retrieved %d shards, minimum required: %d", errNotEnoughShards, n, slab.MinShards)
 	}
 	return shards, nil
 }
 
-func (m *SlabManager) uploadShards(ctx context.Context, client HostClient, shards [][]byte, hosts []hosts.Host) ([]Shard, error) {
+func (m *SlabManager) uploadShards(ctx context.Context, shards [][]byte, hosts []hosts.Host) ([]Shard, error) {
 	return nil, errors.New("not implemented")
 }

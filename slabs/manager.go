@@ -31,11 +31,15 @@ type (
 		failedIntegrityCheckInterval time.Duration
 		maxFailedIntegrityChecks     uint
 
-		serviceAccount    proto.Account
-		serviceAccountKey types.PrivateKey
+		migrationAccount    proto.Account
+		migrationAccountKey types.PrivateKey
+		serviceAccount      proto.Account
+		serviceAccountKey   types.PrivateKey
 
-		client HostClient
+		shardTimeout time.Duration
+
 		am     AccountManager
+		dialer Dialer
 		hm     HostManager
 		store  Store
 		tg     *threadgroup.ThreadGroup
@@ -51,18 +55,23 @@ type (
 		DebitServiceAccount(ctx context.Context, hostKey types.PublicKey, account proto.Account, amount types.Currency) error
 	}
 
+	// A Dialer is an interface for writing and reading sectors to/from hosts.
+	Dialer interface {
+		DialHost(ctx context.Context, hostKey types.PublicKey, addr string) (HostClient, error)
+	}
+
 	// HostClient defines the dependencies required to upload and download
 	// sectors to and from hosts.
 	HostClient interface {
 		ReadSector(ctx context.Context, prices proto.HostPrices, token proto.AccountToken, w io.Writer, root types.Hash256, offset, length uint64) (rhp.RPCReadSectorResult, error)
-		Settings(context.Context, types.PublicKey, string) (proto.HostSettings, error)
+		Settings(context.Context, types.PublicKey) (proto.HostSettings, error)
 		WriteSector(ctx context.Context, prices proto.HostPrices, token proto.AccountToken, data io.Reader, length uint64) (rhp.RPCWriteSectorResult, error)
 	}
 
 	// HostManager defines the minimal interface of HostManager functionality
 	// the SlabManager requires.
 	HostManager interface {
-		ScanHost(ctx context.Context, hk types.PublicKey) (hosts.Host, error)
+		WithScannedHost(ctx context.Context, hk types.PublicKey, fn func(h hosts.Host) error) error
 	}
 
 	// Store defines an interface to store and update slab related information
@@ -95,8 +104,8 @@ func WithLogger(l *zap.Logger) Option {
 }
 
 // NewManager creates a new slab manager.
-func NewManager(am AccountManager, client HostClient, hm HostManager, store Store, serviceAccount types.PrivateKey, opts ...Option) (*SlabManager, error) {
-	m, err := newSlabManager(am, client, hm, store, serviceAccount, opts...)
+func NewManager(am AccountManager, hm HostManager, store Store, dialer Dialer, migrationAccount, serviceAccount types.PrivateKey, opts ...Option) (*SlabManager, error) {
+	m, err := newSlabManager(am, hm, store, dialer, migrationAccount, serviceAccount, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -132,16 +141,22 @@ func NewManager(am AccountManager, client HostClient, hm HostManager, store Stor
 	return m, nil
 }
 
-func newSlabManager(am AccountManager, client HostClient, hm HostManager, store Store, serviceAccount types.PrivateKey, opts ...Option) (*SlabManager, error) {
+func newSlabManager(am AccountManager, hm HostManager, store Store, dialer Dialer, migrationAccount, serviceAccount types.PrivateKey, opts ...Option) (*SlabManager, error) {
 	m := &SlabManager{
 		integrityCheckInterval:       7 * 24 * time.Hour,
 		failedIntegrityCheckInterval: 6 * time.Hour,
 		maxFailedIntegrityChecks:     5,
 
+		migrationAccount:    proto.Account(migrationAccount.PublicKey()),
+		migrationAccountKey: migrationAccount,
+
+		serviceAccount:    proto.Account(serviceAccount.PublicKey()),
 		serviceAccountKey: serviceAccount,
 
+		shardTimeout: 30 * time.Second,
+
 		am:     am,
-		client: client,
+		dialer: dialer,
 		hm:     hm,
 		store:  store,
 		tg:     threadgroup.New(),
@@ -151,15 +166,18 @@ func newSlabManager(am AccountManager, client HostClient, hm HostManager, store 
 		opt(m)
 	}
 
-	// add account to store
+	// add accounts to store
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := store.AddAccount(ctx, types.PublicKey(m.serviceAccount)); err != nil && !errors.Is(err, accounts.ErrExists) {
+	if err := store.AddAccount(ctx, types.PublicKey(m.migrationAccount)); err != nil && !errors.Is(err, accounts.ErrExists) {
+		return nil, fmt.Errorf("failed to add migration account: %w", err)
+	} else if err := store.AddAccount(ctx, types.PublicKey(m.serviceAccount)); err != nil && !errors.Is(err, accounts.ErrExists) {
 		return nil, fmt.Errorf("failed to add service account: %w", err)
 	}
 
-	// let AccountManager know about the service account
-	am.RegisterServiceAccount(proto.Account(m.serviceAccountKey.PublicKey()))
+	// let AccountManager know about the service accounts
+	am.RegisterServiceAccount(m.migrationAccount)
+	am.RegisterServiceAccount(m.serviceAccount)
 	return m, nil
 }
 
@@ -199,31 +217,23 @@ func (m *SlabManager) performIntegrityChecks(ctx context.Context) error {
 					wg.Done()
 				}()
 
-				// fetch good price table
-				host, err := m.hm.ScanHost(ctx, hostKey)
+				err = m.hm.WithScannedHost(ctx, host, func(host hosts.Host) error {
+					// create verifier
+					verifier, err := newSectorVerifier(ctx, host.SiamuxAddr(), host.PublicKey, host.Settings.Prices)
+					if err != nil {
+						// NOTE: If we can't dial the host we don't mark sectors as lost.
+						// Instead we leave it up to the scan code to determine whether the host
+						// is offline.
+						return err
+					}
+					defer verifier.Close()
+
+					m.performIntegrityChecksForHost(ctx, verifier, logger)
+					return nil
+				})
 				if err != nil {
-					logger.With(zap.Stringer("hostKey", hostKey)).Error("failed to scan host", zap.Error(err))
-					return
+					logger.With(zap.Stringer("hostKey", hostKey)).Error("failed to perform integrity checks for host", zap.Error(err))
 				}
-
-				// ignore hosts that are not usable
-				if !host.IsGood() {
-					logger.With(zap.Stringer("hostKey", hostKey)).Debug("skipping host since it's not usable")
-					return
-				}
-
-				// create verifier
-				verifier, err := newSectorVerifier(ctx, host.SiamuxAddr(), host.PublicKey, host.Settings.Prices)
-				if err != nil {
-					// NOTE: If we can't dial the host we don't mark sectors as lost.
-					// Instead we leave it up to the scan code to determine whether the host
-					// is offline.
-					logger.With(zap.Stringer("hostKey", host.PublicKey)).Warn("failed to create sector verifier", zap.Error(err))
-					return
-				}
-				defer verifier.Close()
-
-				m.performIntegrityChecksForHost(ctx, verifier, logger)
 			}(host)
 		}
 		wg.Wait()
