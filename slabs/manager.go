@@ -89,7 +89,7 @@ type (
 		Slabs(ctx context.Context, accountID proto.Account, slabIDs []SlabID) ([]Slab, error)
 	}
 
-	// AlertsManager defines an interface to register and dismiss alerts.
+	// AlertsManager defines an interface to register alerts.
 	AlertsManager interface {
 		RegisterAlert(alert alerts.Alert) error
 	}
