@@ -7,28 +7,40 @@ import (
 	"go.uber.org/zap"
 )
 
-// ServerOption is a functional option to configure an API server.
-type ServerOption func(*api)
+type (
+	// AppOption is a function that applies an option to the application API.
+	AppOption func(*applicationAPI)
 
-// WithDebug sets the debug mode for the API server. In debug mode, the server
+	// AdminOption is a function that applies an option to the admin API.
+	AdminOption func(*adminAPI)
+)
+
+// WithExplorer sets the explorer for the admin API.
+func WithExplorer(e Explorer) AdminOption {
+	return func(api *adminAPI) {
+		api.explorer = e
+	}
+}
+
+// WithAdminLogger sets the logger for admin API.
+func WithAdminLogger(log *zap.Logger) AdminOption {
+	return func(api *adminAPI) {
+		api.log = log
+	}
+}
+
+// WithDebug sets the debug mode for admin API. In debug mode, the server
 // exposes additional debug endpoints that allow triggering certain actions.
-func WithDebug() ServerOption {
-	return func(a *api) {
-		a.debug = true
+func WithDebug() AdminOption {
+	return func(api *adminAPI) {
+		api.debug = true
 	}
 }
 
-// WithExplorer sets the explorer for the API server.
-func WithExplorer(e Explorer) ServerOption {
-	return func(a *api) {
-		a.explorer = e
-	}
-}
-
-// WithLogger sets the logger for the API server.
-func WithLogger(log *zap.Logger) ServerOption {
-	return func(a *api) {
-		a.log = log
+// WithAppLogger sets the logger for application API.
+func WithAppLogger(log *zap.Logger) AppOption {
+	return func(api *applicationAPI) {
+		api.log = log
 	}
 }
 

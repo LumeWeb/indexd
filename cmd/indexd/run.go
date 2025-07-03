@@ -125,24 +125,24 @@ func runRootCmd(ctx context.Context, cfg config.Config, walletKey types.PrivateK
 	}
 	defer subscriber.Close()
 
-	httpListener, err := startLocalhostListener(cfg.AdminAPI.Address, log.Named("listener"))
+	adminAPIListener, err := startLocalhostListener(cfg.AdminAPI.Address, log.Named("api.admin.listener"))
 	if err != nil {
-		return fmt.Errorf("failed to listen on http address: %w", err)
+		return fmt.Errorf("failed to start admin API listener: %w", err)
 	}
-	defer httpListener.Close()
+	defer adminAPIListener.Close()
 
-	apiOpts := []api.ServerOption{
-		api.WithLogger(log.Named("api")),
+	adminAPIOpts := []api.AdminOption{
+		api.WithAdminLogger(log.Named("api.admin")),
 	}
 
 	if cfg.Debug {
-		apiOpts = append(apiOpts, api.WithDebug())
+		adminAPIOpts = append(adminAPIOpts, api.WithDebug())
 	}
 
 	var e *explorer.Explorer
 	if cfg.Explorer.Enabled {
 		e = explorer.New(cfg.Explorer.URL)
-		apiOpts = append(apiOpts, api.WithExplorer(e))
+		adminAPIOpts = append(adminAPIOpts, api.WithExplorer(e))
 	}
 
 	pm, err := pins.NewManager(e, hm, store, pins.WithLogger(log.Named("pins")))
@@ -151,23 +151,47 @@ func runRootCmd(ctx context.Context, cfg config.Config, walletKey types.PrivateK
 	}
 	defer pm.Close()
 
-	web := http.Server{
+	adminAPI := http.Server{
 		Handler: webRouter{
-			api: jape.BasicAuth(cfg.AdminAPI.Password)(api.NewServer(cm, contracts, hm, s, wm, store, apiOpts...)),
+			api: jape.BasicAuth(cfg.AdminAPI.Password)(api.NewAdminAPI(cm, contracts, hm, s, wm, store, adminAPIOpts...)),
 		},
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 	}
-	defer web.Close()
+	defer adminAPI.Close()
 
 	go func() {
-		log.Debug("starting http server", zap.String("adminAddress", cfg.AdminAPI.Address), zap.String("applicationAddress", cfg.ApplicationAPI.Address))
-		if err := web.Serve(httpListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Error("http server failed", zap.Error(err))
+		log.Debug("starting admin API", zap.String("adminAddress", cfg.AdminAPI.Address))
+		if err := adminAPI.Serve(adminAPIListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("failed to serve admin API", zap.Error(err))
 		}
 	}()
 
-	log.Info("node started", zap.String("http", httpListener.Addr().String()), zap.String("p2p", string(s.Addr())))
+	appAPIListener, err := startLocalhostListener(cfg.ApplicationAPI.Address, log.Named("api.application.listener"))
+	if err != nil {
+		return fmt.Errorf("failed to start application API listener: %w", err)
+	}
+	defer appAPIListener.Close()
+
+	appAPIOpts := []api.AppOption{
+		api.WithAppLogger(log.Named("api.application")),
+	}
+
+	appAPI := http.Server{
+		Handler:      api.NewApplicationAPI(cfg.ApplicationAPI.Hostname, store, appAPIOpts...),
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+	}
+	defer appAPI.Close()
+
+	go func() {
+		log.Debug("starting application API", zap.String("applicationAddress", cfg.ApplicationAPI.Address))
+		if err := appAPI.Serve(appAPIListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("failed to serve application API", zap.Error(err))
+		}
+	}()
+
+	log.Info("node started", zap.Stringer("admin", adminAPIListener.Addr()), zap.Stringer("application", appAPIListener.Addr()), zap.String("p2p", string(s.Addr())))
 	<-ctx.Done()
 	log.Info("shutdown signal received...attempting graceful shutdown...")
 
@@ -181,7 +205,10 @@ func runRootCmd(ctx context.Context, cfg config.Config, walletKey types.PrivateK
 	// behavior as if SIGKILL was sent.
 	shutdownCtx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	if err := web.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := appAPI.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Error("graceful shutdown failed", zap.Error(err))
+	}
+	if err := adminAPI.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("graceful shutdown failed", zap.Error(err))
 	}
 	select {
