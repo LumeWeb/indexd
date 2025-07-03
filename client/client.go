@@ -187,13 +187,13 @@ func (c *HostClient) RefreshContract(ctx context.Context, settings proto.HostSet
 // RenewContract renews the contract with the host.
 func (c *HostClient) RenewContract(ctx context.Context, settings proto.HostSettings, contractID types.FileContractID, proofHeight uint64) (rhp.RPCRenewContractResult, error) {
 	var res rhp.RPCRenewContractResult
-	if err := c.withRevision(ctx, contractID, func(revision types.V2FileContract) (types.V2FileContract, error) {
+	if err := c.withRevision(ctx, contractID, func(revision types.V2FileContract) (_ types.V2FileContract, err error) {
 		// NOTE: when renewing a contract we keep the same allowance and collateral.
 		// This has the following advantages:
 		// 1. Contracts drain over time if they contain more funds than needed
 		// 2. Renewals are very "cheap" since no party needs to lock away
 		//    additional funds. Only the fees need to be paid.
-		res, err := rhp.RPCRenewContract(ctx, c.client, c.cm, c.signer, c.cm.TipState(), settings.Prices, revision, proto.RPCRenewContractParams{
+		res, err = rhp.RPCRenewContract(ctx, c.client, c.cm, c.signer, c.cm.TipState(), settings.Prices, revision, proto.RPCRenewContractParams{
 			ContractID:  contractID,
 			Allowance:   revision.RenterOutput.Value,
 			Collateral:  revision.MissedHostValue,
@@ -202,7 +202,7 @@ func (c *HostClient) RenewContract(ctx context.Context, settings proto.HostSetti
 		if err != nil {
 			return types.V2FileContract{}, err
 		}
-		return res.Contract.Revision, nil
+		return revision, nil // return the original revision
 	}); err != nil {
 		return rhp.RPCRenewContractResult{}, fmt.Errorf("failed to renew contract: %w", err)
 	}
@@ -272,44 +272,43 @@ func (c *HostClient) withRevision(ctx context.Context, contractID types.FileCont
 	maxProofHeight := bh + revisionSubmissionBuffer
 
 	// fetch revision from database
-	rev, renewed, err := c.store.ContractRevision(ctx, contractID)
+	local, renewed, err := c.store.ContractRevision(ctx, contractID)
 	if err != nil {
 		return fmt.Errorf("failed to fetch contract revision: %w", err)
 	} else if renewed {
 		return ErrContractRenewed
-	} else if rev.ProofHeight > maxProofHeight {
-		return fmt.Errorf("%d > %d (%d+%d), %w", rev.ProofHeight, maxProofHeight, bh, revisionSubmissionBuffer, ErrContractNotRevisable)
+	} else if local.ProofHeight > maxProofHeight {
+		return fmt.Errorf("%d > %d (%d+%d), %w", local.ProofHeight, maxProofHeight, bh, revisionSubmissionBuffer, ErrContractNotRevisable)
 	}
 
 	// revise the contract
-	update, err := reviseFn(rev)
+	revised, err := reviseFn(local)
 
 	// try and sync the revision if we got an error that indicates the revision is invalid
 	if err != nil && strings.Contains(err.Error(), proto.ErrInvalidSignature.Error()) {
-		c.log.Debug("syncing contract revision due to invalid signature", zap.Uint64("revisionNumber", rev.RevisionNumber), zap.Stringer("contractID", contractID), zap.Error(err))
-		rev, renewed, err = c.syncRevision(ctx, contractID, rev)
+		c.log.Debug("syncing contract revision due to invalid signature", zap.Uint64("revisionNumber", local.RevisionNumber), zap.Stringer("contractID", contractID), zap.Error(err))
+		local, renewed, err = c.syncRevision(ctx, contractID, local)
 		if err != nil {
 			return fmt.Errorf("failed to sync revision: %w", err)
 		} else if renewed {
 			return ErrContractRenewed
-		} else if rev.ProofHeight > maxProofHeight {
-			return fmt.Errorf("%d > %d (%d+%d), %w", rev.ProofHeight, maxProofHeight, bh, revisionSubmissionBuffer, ErrContractNotRevisable)
+		} else if local.ProofHeight > maxProofHeight {
+			return fmt.Errorf("%d > %d (%d+%d), %w", local.ProofHeight, maxProofHeight, bh, revisionSubmissionBuffer, ErrContractNotRevisable)
 		}
-		c.log.Debug("synced contract revision", zap.Uint64("revisionNumber", rev.RevisionNumber), zap.Stringer("contractID", contractID))
+		c.log.Debug("synced contract revision", zap.Uint64("revisionNumber", local.RevisionNumber), zap.Stringer("contractID", contractID))
 
 		// try and revise the contract again
-		update, err = reviseFn(rev)
+		revised, err = reviseFn(local)
 	}
 	if err != nil {
 		return err
-	} else if update.RevisionNumber <= rev.RevisionNumber {
-		return fmt.Errorf("new revision number %d is not greater than current revision number %d", update.RevisionNumber, rev.RevisionNumber)
 	}
 
 	// update revision in the database
-	err = c.store.UpdateContractRevision(ctx, contractID, update)
-	if err != nil {
-		c.log.Error("failed to update contract revision", zap.Error(err))
+	if revised.RevisionNumber > local.RevisionNumber {
+		if err := c.store.UpdateContractRevision(ctx, contractID, revised); err != nil {
+			c.log.Error("failed to update contract revision", zap.Error(err))
+		}
 	}
 
 	return nil
