@@ -59,6 +59,7 @@ func TestWithRevision(t *testing.T) {
 
 	db.renewed[types.FileContractID{1}] = true                                                              // renewed
 	db.revisions[types.FileContractID{2}] = types.V2FileContract{ProofHeight: revisionSubmissionBuffer + 1} // not revisable
+	db.revisions[types.FileContractID{3}] = types.V2FileContract{ProofHeight: 1, RevisionNumber: 1}
 
 	noopFn := func(revision types.V2FileContract) (types.V2FileContract, error) { return types.V2FileContract{}, nil }
 	invalidSigFn := func(revision types.V2FileContract) (types.V2FileContract, error) {
@@ -98,6 +99,16 @@ func TestWithRevision(t *testing.T) {
 	})
 	if err != nil || db.revisions[types.FileContractID{4}].RevisionNumber != update {
 		t.Fatalf("expected no error and revision to be updated, got: %v, revision: %v", err, db.revisions[types.FileContractID{4}])
+	}
+
+	// assert withRevision only updates the store if the revised revision number is greater than the local revision number
+	err = c.withRevision(context.Background(), types.FileContractID{3}, func(types.V2FileContract) (types.V2FileContract, error) {
+		revision := db.revisions[types.FileContractID{3}]
+		revision.ProofHeight++
+		return revision, nil
+	})
+	if err != nil || db.revisions[types.FileContractID{3}].ProofHeight != 1 {
+		t.Fatalf("expected no error and revision to not be updated, got: %v, revision: %v", err, db.revisions[types.FileContractID{3}])
 	}
 
 	// assert withRevision does not return an error if the update fails to persist
