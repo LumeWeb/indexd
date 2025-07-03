@@ -1,4 +1,4 @@
-package api
+package app
 
 import (
 	"net/http"
@@ -9,16 +9,26 @@ import (
 )
 
 type (
+	// Option is a function that applies an option to the application API.
+	Option func(*applicationAPI)
+
 	applicationAPI struct {
 		log *zap.Logger
 	}
 )
 
-// NewApplicationAPI creates a new instance of the application API. This API is
-// used by users, or rather their applications, to pin slabs to the indexer.
+// WithLogger sets the logger for application API.
+func WithLogger(log *zap.Logger) Option {
+	return func(api *applicationAPI) {
+		api.log = log
+	}
+}
+
+// NewAPI creates a new instance of the application API. This API is used by
+// users, or rather their applications, to pin slabs to the indexer.
 // Authentication happens through presigned URLs that are signed with a private
 // key that corresponds to a previously registered public key.
-func NewApplicationAPI(hostname string, store AccountStore, opts ...AppOption) http.Handler {
+func NewAPI(hostname string, store AccountStore, opts ...Option) http.Handler {
 	a := &applicationAPI{
 		log: zap.NewNop(),
 	}

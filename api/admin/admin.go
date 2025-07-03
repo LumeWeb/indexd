@@ -1,4 +1,4 @@
-package api
+package admin
 
 import (
 	"context"
@@ -120,12 +120,12 @@ type (
 	}
 )
 
-// NewAdminAPI initializes the admin API, which is protected via http basic
+// NewAPI initializes the admin API, which is protected via http basic
 // authentication and should never be exposed on the public internet. The admin
 // API exposes endpoints to manage accounts, hosts, settings and the wallet.
 // This is different from the application API, which users, or rather their
 // applications, can use to pin slabs.
-func NewAdminAPI(chain ChainManager, contracts ContractManager, hosts HostManager, syncer Syncer, wallet Wallet, store Store, opts ...AdminOption) http.Handler {
+func NewAPI(chain ChainManager, contracts ContractManager, hosts HostManager, syncer Syncer, wallet Wallet, store Store, opts ...Option) http.Handler {
 	a := &adminAPI{
 		chain:     chain,
 		contracts: contracts,
