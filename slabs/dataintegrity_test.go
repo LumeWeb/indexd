@@ -3,6 +3,8 @@ package slabs
 import (
 	"context"
 	"errors"
+	"log"
+	"math"
 	"reflect"
 	"testing"
 
@@ -281,5 +283,77 @@ func TestPerformIntegrityChecksForHost(t *testing.T) {
 		t.Fatalf("expected lost sector %v, got %v", rootLost, store.lostSectors)
 	} else if _, exists := store.lostSectors[host.PublicKey][rootBad]; !exists {
 		t.Fatalf("expected lost sector %v, got %v", rootBad, store.lostSectors)
+	}
+}
+
+func TestIntegrityChecksAlert(t *testing.T) {
+	store := newMockStore()
+	am := newMockAccountManager(store)
+	hm := newMockHostManager()
+	account := types.GeneratePrivateKey()
+	alerter := alerts.NewManager()
+	sm, err := newSlabManager(am, hm, store, nil, alerter, account, account)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	host := hosts.Host{
+		PublicKey: types.PublicKey{1},
+		Settings: proto.HostSettings{
+			Prices: proto.HostPrices{
+				EgressPrice: types.Siacoins(1).Div64(proto.SectorSize), // 1SC per sector
+			},
+		},
+	}
+
+	// make host scannable
+	hm.hosts[host.PublicKey] = host
+
+	// prepare roots for each outcome, a successful check, a lost sector and a
+	// failed check
+	rootGood := types.Hash256{1}
+	rootLost := types.Hash256{2}
+	rootBad := types.Hash256{3}
+	store.sectorsForCheck = []types.Hash256{rootGood, rootLost, rootBad}
+
+	alerts, err := alerter.Alerts(0, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(alerts) != 0 {
+		t.Fatalf("expected 0 alerts, got %d", len(alerts))
+	}
+
+	// make host available to mock HostsForIntegrityChecks
+	store.hosts[host.PublicKey] = struct{}{}
+	// mark host as having a lost sector so alert is generated
+	store.lostSectors[host.PublicKey] = make(map[types.Hash256]struct{})
+	store.lostSectors[host.PublicKey][rootLost] = struct{}{}
+	// perform integrity check to generate alert
+	sm.performIntegrityChecks(context.Background())
+
+	alerts, err = alerter.Alerts(0, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(alerts) != 1 {
+		t.Fatalf("expected 1 alert, got %d", len(alerts))
+	}
+
+	got := alerts[0]
+	expected := newLostSectorsAlert(host.PublicKey)
+	if expected.ID != got.ID {
+		log.Fatalf("expected id %v, got %v", expected.ID, got.ID)
+	} else if expected.Severity != got.Severity {
+		log.Fatalf("expected severity %v, got %v", expected.Severity, got.Severity)
+	} else if expected.Message != got.Message {
+		log.Fatalf("expected message %v, got %v", expected.Message, got.Message)
+	} else if len(expected.Data) != len(got.Data) {
+		log.Fatalf("expected len(data) %d, got %d", len(expected.Data), len(got.Data))
+	}
+	for key, value := range expected.Data {
+		if v := got.Data[key]; v != value {
+			t.Fatalf("expected %v, got %v", value, v)
+		}
 	}
 }

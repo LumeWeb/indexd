@@ -91,19 +91,6 @@ func (v *sectorVerifier) VerifySector(ctx context.Context, root types.Hash256) (
 	return rhp.RPCVerifySector(ctx, v.tc, v.prices, v.serviceAccount.Token(v.serviceAccountKey, v.hostKey), root)
 }
 
-func newLostSectorsAlert(hk types.PublicKey) alerts.Alert {
-	return alerts.Alert{
-		ID:       alerts.IDForHost(alertLostSectorsID, hk),
-		Severity: alerts.SeverityWarning,
-		Message:  "Host has lost sectors",
-		Data: map[string]interface{}{
-			"hostKey": hk.String(),
-			"hint":    "The host has reported that it can't serve at least one sector. Consider blocking this host through the blocklist feature.",
-		},
-		Timestamp: time.Now(),
-	}
-}
-
 func (m *SlabManager) performIntegrityChecksForHost(ctx context.Context, verifier SectorVerifier, logger *zap.Logger) {
 	hostKey := verifier.HostKey()
 	hostLogger := logger.With(zap.Stringer("hostKey", hostKey))

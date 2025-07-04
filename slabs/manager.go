@@ -191,6 +191,19 @@ func (m *SlabManager) Close() error {
 	return nil
 }
 
+func newLostSectorsAlert(hk types.PublicKey) alerts.Alert {
+	return alerts.Alert{
+		ID:       alerts.IDForHost(alertLostSectorsID, hk),
+		Severity: alerts.SeverityWarning,
+		Message:  "Host has lost sectors",
+		Data: map[string]interface{}{
+			"hostKey": hk.String(),
+			"hint":    "The host has reported that it can't serve at least one sector. Consider blocking this host through the blocklist feature.",
+		},
+		Timestamp: time.Now(),
+	}
+}
+
 func (m *SlabManager) performIntegrityChecks(ctx context.Context) error {
 	start := time.Now()
 	logger := m.log.Named("integrity")
