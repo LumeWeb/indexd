@@ -1607,6 +1607,63 @@ func BenchmarkHostsForIntegrityCheck(b *testing.B) {
 	}
 }
 
+// BenchmarkHostsWithLostSectors benchmarks HostsWithLostSectors.
+func BenchmarkHostsWithLostSectors(b *testing.B) {
+	store := initPostgres(b, zap.NewNop())
+	account := proto4.Account{1}
+
+	if err := store.AddAccount(context.Background(), types.PublicKey(account)); err != nil {
+		b.Fatal("failed to add account:", err)
+	}
+
+	const (
+		nHosts          = 10000
+		dbBaseSize      = 1 << 40 // 1TiB of sectors
+		nSectorsPerHost = dbBaseSize / proto4.SectorSize / nHosts
+	)
+
+	// add hosts
+	for range nHosts {
+		hk := store.addTestHost(b)
+
+		// add sectors
+		for remainingSectors := nSectorsPerHost; remainingSectors > 0; {
+			batchSize := min(remainingSectors, 10000)
+			remainingSectors -= batchSize
+			var sectors []slabs.SectorPinParams
+			for range batchSize {
+				root := frand.Entropy256()
+				sectors = append(sectors, slabs.SectorPinParams{
+					Root:    root,
+					HostKey: hk,
+				})
+			}
+			if _, err := store.PinSlab(context.Background(), account, time.Now().Add(time.Hour), slabs.SlabPinParams{
+				MinShards:     1,
+				EncryptionKey: frand.Entropy256(),
+				Sectors:       sectors,
+			}); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+
+	// 10% of hosts have lost sectors
+	_, err := store.pool.Exec(context.Background(), `UPDATE hosts SET lost_sectors = floor(random() * 100) + 1 WHERE id % 10 = 0`)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	for b.Loop() {
+		batch, err := store.HostsWithLostSectors(context.Background())
+		if err != nil {
+			b.Fatal(err)
+		} else if len(batch) == 0 {
+			b.Fatal("expected hosts, got none")
+		}
+	}
+}
+
 func (s *Store) addTestHost(t testing.TB, hks ...types.PublicKey) types.PublicKey {
 	t.Helper()
 
