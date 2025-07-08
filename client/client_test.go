@@ -193,4 +193,14 @@ func TestWithRevision(t *testing.T) {
 	if !errors.Is(err, ErrContractNotRevisable) {
 		t.Fatalf("expected ErrContractNotRevisable, got: %v", err)
 	}
+
+	// assert withRevision doesn't persist the revision if the revise function renewed the contract
+	err = c.withRevision(context.Background(), types.FileContractID{11}, func(contract rhp.ContractRevision) (rhp.ContractRevision, error) {
+		return contract, nil
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	} else if _, exists := db.revisions[types.FileContractID{12}]; exists {
+		t.Fatalf("expected no revision to be persisted, but found one")
+	}
 }
