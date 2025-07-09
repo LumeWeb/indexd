@@ -37,6 +37,7 @@ type (
 		serviceAccountKey   types.PrivateKey
 
 		shardTimeout time.Duration
+		slabTimeout  time.Duration
 
 		am     AccountManager
 		dialer Dialer
@@ -154,6 +155,7 @@ func newSlabManager(am AccountManager, hm HostManager, store Store, dialer Diale
 		serviceAccountKey: serviceAccount,
 
 		shardTimeout: 30 * time.Second,
+		slabTimeout:  time.Minute,
 
 		am:     am,
 		dialer: dialer,
@@ -249,22 +251,33 @@ func (m *SlabManager) performSlabMigrations(ctx context.Context) error {
 	logger.Debug("starting slab migrations", zap.Time("start", start))
 
 	const slabsPerBatch = 10
-
-	for {
-		// fetch a batch of unhealthy slabs
-		var toMigrate []Slab
-		for {
+	nextBatch := func(ctx context.Context) (batch []Slab, _ error) {
+		for len(batch) < slabsPerBatch {
 			slab, err := m.store.UnhealthySlab(ctx, start)
 			if errors.Is(err, ErrSlabNotFound) {
-				break // no more slabs to repair
+				return batch, nil
+			} else if errors.Is(err, context.Canceled) {
+				return nil, nil
 			} else if err != nil {
-				return fmt.Errorf("failed to fetch unhealthy slab: %w", err)
+				return nil, err
 			}
-			toMigrate = append(toMigrate, slab)
+			batch = append(batch, slab)
 		}
-		if len(toMigrate) == 0 {
-			break // nothing to do
-		} else if err := m.migrateSlabs(ctx, toMigrate, logger); err != nil {
+		return
+	}
+
+	for {
+		batch, err := nextBatch(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to fetch unhealthy slabs: %w", err)
+		} else if len(batch) == 0 {
+			break
+		}
+
+		err = m.migrateSlabs(ctx, batch, logger)
+		if errors.Is(err, context.Canceled) {
+			break
+		} else if err != nil {
 			return fmt.Errorf("failed to migrate slabs: %w", err)
 		}
 	}

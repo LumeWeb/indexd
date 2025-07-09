@@ -3,6 +3,7 @@ package slabs
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -12,6 +13,16 @@ import (
 	"go.sia.tech/indexd/hosts"
 	"go.uber.org/zap"
 	"lukechampine.com/frand"
+)
+
+var errNotEnoughHosts = errors.New("not enough hosts")
+
+type (
+	// Shard represents a sector present on a host.
+	Shard struct {
+		Root    types.Hash256
+		HostKey types.PublicKey
+	}
 )
 
 type uploadCandidates struct {
@@ -28,31 +39,37 @@ func newUploadCandidates(hosts []hosts.Host) uploadCandidates {
 	}
 }
 
-func (uh *uploadCandidates) next() (hosts.Host, bool) {
-	if len(uh.hosts) == 0 {
-		return hosts.Host{}, false
+func (uc *uploadCandidates) next() (hosts.Host, bool) {
+outer:
+	for len(uc.hosts) > 0 {
+		host := uc.hosts[0]
+		uc.hosts = uc.hosts[1:]
+		for _, cidr := range host.Networks {
+			if _, ok := uc.cidrs[cidr.String()]; ok {
+				continue outer // already used this CIDR
+			}
+		}
+		return host, true
 	}
-	host := uh.hosts[0]
-	uh.hosts = uh.hosts[1:]
-	return host, true
+	return hosts.Host{}, false
 }
 
-func (uh *uploadCandidates) used(h hosts.Host) {
+func (uc *uploadCandidates) used(h hosts.Host) {
 	for _, cidr := range h.Networks {
-		_, ok := uh.cidrs[cidr.String()]
+		_, ok := uc.cidrs[cidr.String()]
 		if ok {
 			panic("CIDR already used: " + cidr.String()) // developer error
 		}
-		uh.cidrs[cidr.String()] = struct{}{}
+		uc.cidrs[cidr.String()] = struct{}{}
 	}
 }
 
 // uploadShards uploads the shards to the given hosts. If not all shards were
 // migrated, an error is returned but any finished shards will still be returned
 // and should be tracked in the database. The given shards must not be nil and
-// the candidates can not have overlapping CIDRs.
-func (m *SlabManager) uploadShards(ctx context.Context, shards [][]byte, allHosts []hosts.Host, logger *zap.Logger) ([]Shard, error) {
-	candidates := newUploadCandidates(allHosts)
+// the given hosts must all be good.
+func (m *SlabManager) uploadShards(ctx context.Context, shards [][]byte, goodHosts []hosts.Host, logger *zap.Logger) ([]Shard, error) {
+	candidates := newUploadCandidates(goodHosts)
 	uploaded := make([]Shard, 0, len(shards))
 
 	var uploadErr error
@@ -75,7 +92,7 @@ func (m *SlabManager) uploadShards(ctx context.Context, shards [][]byte, allHost
 
 		usage, root, err := m.uploadShard(ctx, host, bytes.NewReader(shard))
 		if err != nil {
-			logger.Debug("failed to upload shard to host", zap.Stringer("hostKey", host.PublicKey), zap.Error(err))
+			logger.Debug("failed to upload shard", zap.Stringer("hostKey", host.PublicKey), zap.Error(err))
 			goto nextCandidate
 		}
 
