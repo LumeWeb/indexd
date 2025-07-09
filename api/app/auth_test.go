@@ -1,4 +1,4 @@
-package api
+package app
 
 import (
 	"context"
@@ -27,13 +27,11 @@ func TestAuth(t *testing.T) {
 	sk := types.GeneratePrivateKey()
 	s := &mockStore{tokens: map[types.PublicKey]struct{}{sk.PublicKey(): {}}}
 
-	server := httptest.NewServer(wrapSignedAPI(hostname, s, map[string]authedHandler{
-		"GET /foo": func(jc jape.Context, pk types.PublicKey) {
-			if pk != sk.PublicKey() {
-				jc.ResponseWriter.WriteHeader(http.StatusInternalServerError)
-				return
+	server := httptest.NewServer(jape.Mux(map[string]jape.Handler{
+		"GET /foo": func(jc jape.Context) {
+			if _, ok := checkSignedURLAuth(jc, hostname, s); ok {
+				jc.ResponseWriter.WriteHeader(http.StatusOK)
 			}
-			jc.ResponseWriter.WriteHeader(http.StatusOK)
 		},
 	}))
 	defer server.Close()

@@ -177,6 +177,17 @@ type mockDialer struct {
 	clients map[types.PublicKey]*mockHostClient
 }
 
+func newMockDialer(hosts []hosts.Host) *mockDialer {
+	clients := make(map[types.PublicKey]*mockHostClient, len(hosts))
+	for _, host := range hosts {
+		clients[host.PublicKey] = &mockHostClient{
+			sectors:  make(map[types.Hash256][proto.SectorSize]byte),
+			settings: host.Settings,
+		}
+	}
+	return &mockDialer{clients: clients}
+}
+
 func (d *mockDialer) DialHost(ctx context.Context, hostKey types.PublicKey, addr string) (HostClient, error) {
 	if client, ok := d.clients[hostKey]; ok {
 		return client, nil
@@ -210,8 +221,24 @@ func (c *mockHostClient) ReadSector(ctx context.Context, prices proto.HostPrices
 	}, nil
 }
 
-func (c *mockHostClient) WriteSector(ctx context.Context, prices proto.HostPrices, token proto.AccountToken, r io.Reader, length uint64) (rhp.RPCWriteSectorResult, error) {
-	return rhp.RPCWriteSectorResult{}, errors.New("not implemented")
+func (c *mockHostClient) WriteSector(ctx context.Context, prices proto.HostPrices, token proto.AccountToken, data io.Reader, length uint64) (rhp.RPCWriteSectorResult, error) {
+	select {
+	case <-time.After(c.delay):
+	case <-ctx.Done():
+		return rhp.RPCWriteSectorResult{}, ctx.Err()
+	}
+
+	var sector [proto.SectorSize]byte
+	_, err := io.ReadFull(data, sector[:])
+	if err != nil {
+		return rhp.RPCWriteSectorResult{}, err
+	}
+	root := proto.SectorRoot(&sector)
+	c.sectors[root] = sector
+	return rhp.RPCWriteSectorResult{
+		Root:  root,
+		Usage: c.settings.Prices.RPCWriteSectorCost(proto.SectorSize),
+	}, nil
 }
 
 func (c *mockHostClient) Settings(context.Context, types.PublicKey) (proto.HostSettings, error) {
