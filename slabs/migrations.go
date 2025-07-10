@@ -88,9 +88,8 @@ func (m *SlabManager) migrateSlab(ctx context.Context, slab Slab, allHosts []hos
 		return fmt.Errorf("failed to download slab %s: %w", slab.ID, err)
 	}
 
-	// TODO: using ReconstructSome panics if the number of required indices is
-	// below the minimum number of shards. That is probably not the case but
-	// it's triggered by TestMigrateSlab
+	// TODO: using ReconstructSome segfaults with some combinations of
+	// downloaded shards and required indices, see TestRSReconstructSome
 	//
 	// required := make([]bool, len(slab.Sectors))
 	// for _, i := range indices {

@@ -328,13 +328,26 @@ func TestRSReconstructSome(t *testing.T) {
 	}
 
 	for _, required := range [][]bool{
+		{false, false, false, false},
+		// {false, false, false, true}, // segfaults
+		{false, false, true, false},
+		// {false, false, true, true}, // segfaults
+		{false, true, false, false},
 		{false, true, false, true},
-		// {false, false, false, true},
+		{false, true, true, false},
+		{false, true, true, true},
+		{true, false, false, false},
+		// {true, false, false, true}, // segfaults
+		{true, false, true, false},
+		// {true, false, true, true}, // segfaults
+		{true, true, false, false},
+		{true, true, false, true},
+		{true, true, true, false},
+		{true, true, true, true},
 	} {
 		downloaded := make([][]byte, len(shards))
 		downloaded[0] = slices.Clone(shards[0])
 		downloaded[2] = slices.Clone(shards[2])
-
 		err = enc.ReconstructSome(downloaded, required)
 		if err != nil {
 			t.Fatal(err)
