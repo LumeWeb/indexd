@@ -31,10 +31,11 @@ func (cm *ContractManager) performSectorPinning(ctx context.Context, log *zap.Lo
 	sema := make(chan struct{}, 50)
 	defer close(sema)
 
+loop:
 	for _, hostKey := range hfp {
 		select {
 		case <-ctx.Done():
-			break
+			break loop
 		case sema <- struct{}{}:
 		}
 
