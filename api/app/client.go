@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"go.sia.tech/core/types"
+	"go.sia.tech/indexd/api"
 	"go.sia.tech/indexd/slabs"
 	"go.sia.tech/jape"
 )
@@ -47,18 +48,31 @@ func (c *Client) PinSlab(ctx context.Context, params slabs.SlabPinParams) (slabI
 	return
 }
 
-// Slabs fetches slabs from the indexer by their IDs.
-func (c *Client) Slabs(ctx context.Context, slabIDs []slabs.SlabID) ([]slabs.Slab, error) {
-	if len(slabIDs) == 0 {
-		return nil, fmt.Errorf("no slab IDs provided")
+// Slab fetches a slab from the indexer by its digest.
+func (c *Client) Slab(ctx context.Context, slabID slabs.SlabID) (slabs.Slab, error) {
+	var slab slabs.Slab
+	err := c.c.GET(ctx, c.sign(fmt.Sprintf("/slabs/%s", slabID)), &slab)
+	if err != nil {
+		return slabs.Slab{}, fmt.Errorf("failed to fetch slab: %w", err)
+	}
+	return slab, nil
+}
+
+// SlabDigests fetches the digests of slabs associated with the account.
+// It supports pagination through the provided options.
+func (c *Client) SlabDigests(ctx context.Context, opts ...api.URLQueryParameterOption) ([]slabs.SlabID, error) {
+	values := url.Values{}
+	for _, opt := range opts {
+		opt(values)
 	}
 
-	var slabs []slabs.Slab
-	err := c.c.POST(ctx, c.sign("/slabs"), slabIDs, &slabs)
+	var slabIDs []slabs.SlabID
+	err := c.c.GET(ctx, c.sign("/slabs?"+values.Encode()), &slabIDs)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch slabs: %w", err)
+		return nil, fmt.Errorf("failed to fetch slab digests: %w", err)
 	}
-	return slabs, nil
+
+	return slabIDs, nil
 }
 
 // UnpinSlab unpins a slab from the indexer.

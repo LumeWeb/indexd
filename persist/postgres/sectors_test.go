@@ -353,6 +353,89 @@ func TestSectorsForIntegrityCheck(t *testing.T) {
 	}
 }
 
+func TestSlabIDs(t *testing.T) {
+	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
+
+	// add 2 accounts
+	a1 := proto.Account{1}
+	if err := store.AddAccount(context.Background(), types.PublicKey(a1)); err != nil {
+		t.Fatal("failed to add account:", err)
+	}
+	a2 := proto.Account{2}
+	if err := store.AddAccount(context.Background(), types.PublicKey(a2)); err != nil {
+		t.Fatal("failed to add account:", err)
+	}
+
+	// add two hosts
+	hk1 := store.addTestHost(t)
+	hk2 := store.addTestHost(t)
+
+	// helper to create slab pin params
+	params := func() slabs.SlabPinParams {
+		return slabs.SlabPinParams{
+			EncryptionKey: frand.Entropy256(),
+			MinShards:     10,
+			Sectors: []slabs.SectorPinParams{
+				{
+					Root:    frand.Entropy256(),
+					HostKey: hk1,
+				},
+				{
+					Root:    frand.Entropy256(),
+					HostKey: hk2,
+				},
+			},
+		}
+	}
+
+	// pin 2 slabs on account 1
+	slabID1, err := store.PinSlab(context.Background(), a1, time.Time{}, params())
+	if err != nil {
+		t.Fatal(err)
+	}
+	slabID2, err := store.PinSlab(context.Background(), a1, time.Time{}, params())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// assert account 2 has no slab IDs
+	slabIDs, err := store.SlabIDs(context.Background(), a2, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(slabIDs) != 0 {
+		t.Fatalf("expected 0 slab IDs for account 2, got %d", len(slabIDs))
+	}
+
+	// assert account 1 has 2 slab IDs
+	slabIDs, err = store.SlabIDs(context.Background(), a1, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(slabIDs) != 2 {
+		t.Fatalf("expected 2 slab IDs for account 1, got %d", len(slabIDs))
+	} else if !(slabIDs[0] == slabID1 && slabIDs[1] == slabID2) {
+		t.Fatalf("unexpected slab IDs %v, expected [%v,%v]", slabIDs, slabID1, slabID2)
+	}
+
+	// assert offset and limit are applied
+	if slabIDs, err = store.SlabIDs(context.Background(), a1, 0, 1); err != nil {
+		t.Fatal(err)
+	} else if len(slabIDs) != 1 {
+		t.Fatal("unexpected", len(slabIDs))
+	} else if slabIDs[0] != slabID1 {
+		t.Fatalf("expected slab ID %v, got %v", slabID1, slabIDs[0])
+	} else if slabIDs, err = store.SlabIDs(context.Background(), a1, 1, 1); err != nil {
+		t.Fatal(err)
+	} else if len(slabIDs) != 1 {
+		t.Fatal("unexpected", len(slabIDs))
+	} else if slabIDs[0] != slabID2 {
+		t.Fatalf("expected slab ID %v, got %v", slabID2, slabIDs[0])
+	} else if slabIDs, err = store.SlabIDs(context.Background(), a1, 2, 1); err != nil {
+		t.Fatal(err)
+	} else if len(slabIDs) != 0 {
+		t.Fatalf("expected 0 slab IDs, got %d", len(slabIDs))
+	}
+}
+
 func TestPinSlabs(t *testing.T) {
 	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
 	account := proto.Account{1}
@@ -1021,6 +1104,19 @@ func BenchmarkSlabs(b *testing.B) {
 	// fetch 4GiB of data at a time
 	b.Run("Slabs-4GiB", func(b *testing.B) {
 		runSlabsBenchmark(b, 100)
+	})
+
+	// fetch SlabIDs for account at random offsets
+	b.Run("SlabIDs", func(b *testing.B) {
+		for b.Loop() {
+			offset := frand.Intn(len(initialSlabIDs) - 1000)
+			ids, err := store.SlabIDs(context.Background(), proto.Account{1}, offset, 1000)
+			if err != nil {
+				b.Fatal(err)
+			} else if len(ids) != 1000 {
+				b.Fatalf("expected 1000 slab IDs, got %d", len(ids))
+			}
+		}
 	})
 }
 

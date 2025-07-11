@@ -8,6 +8,7 @@ import (
 
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
+	"go.sia.tech/indexd/api"
 	"go.sia.tech/indexd/slabs"
 	"go.sia.tech/jape"
 	"go.uber.org/zap"
@@ -21,6 +22,7 @@ type (
 	Store interface {
 		PinSlab(context.Context, proto.Account, time.Time, slabs.SlabPinParams) (slabs.SlabID, error)
 		Slabs(ctx context.Context, accountID proto.Account, slabIDs []slabs.SlabID) ([]slabs.Slab, error)
+		SlabIDs(ctx context.Context, accountID proto.Account, offset, limit int) ([]slabs.SlabID, error)
 		UnpinSlab(ctx context.Context, accountID proto.Account, slabID slabs.SlabID) error
 	}
 
@@ -51,7 +53,8 @@ func NewAPI(hostname string, store Store, as AccountStore, opts ...Option) http.
 	}
 
 	routes := map[string]authedHandler{
-		"POST /slabs":           a.handlePOSTSlabs,
+		"GET /slabs":            a.handleGETSlabs,
+		"GET /slabs/:slabid":    a.handleGETSlab,
 		"POST /slabs/pin":       a.handlePOSTSlabsPin,
 		"DELETE /slabs/:slabid": a.handleDELETESlab,
 	}
@@ -69,22 +72,36 @@ func NewAPI(hostname string, store Store, as AccountStore, opts ...Option) http.
 	return jape.Mux(signed)
 }
 
-func (a *app) handlePOSTSlabs(jc jape.Context, pk types.PublicKey) {
-	var ids []slabs.SlabID
-	if err := jc.Decode(&ids); err != nil {
+func (a *app) handleGETSlab(jc jape.Context, pk types.PublicKey) {
+	var slabID slabs.SlabID
+	if err := jc.DecodeParam("slabid", &slabID); err != nil {
 		jc.Error(err, http.StatusBadRequest)
 		return
-	} else if len(ids) == 0 {
-		jc.Error(fmt.Errorf("no slab IDs provided"), http.StatusBadRequest)
+	}
+
+	slabs, err := a.store.Slabs(jc.Request.Context(), proto.Account(pk), []slabs.SlabID{slabID})
+	if jc.Check("failed to fetch slab", err) != nil {
+		return
+	} else if len(slabs) == 0 {
+		jc.Error(fmt.Errorf("slab %s not found", slabID), http.StatusNotFound)
 		return
 	}
 
-	slabs, err := a.store.Slabs(jc.Request.Context(), proto.Account(pk), ids)
-	if jc.Check("failed to fetch slabs", err) != nil {
+	jc.Encode(slabs[0])
+}
+
+func (a *app) handleGETSlabs(jc jape.Context, pk types.PublicKey) {
+	offset, limit, ok := api.ParseOffsetLimit(jc)
+	if !ok {
 		return
 	}
 
-	jc.Encode(slabs)
+	slabIDs, err := a.store.SlabIDs(jc.Request.Context(), proto.Account(pk), offset, limit)
+	if jc.Check("failed to fetch slab digests", err) != nil {
+		return
+	}
+
+	jc.Encode(slabIDs)
 }
 
 func (a *app) handlePOSTSlabsPin(jc jape.Context, pk types.PublicKey) {

@@ -270,6 +270,42 @@ func (s *Store) UnpinSlab(ctx context.Context, accountID proto.Account, slabID s
 	})
 }
 
+// SlabIDs returns the IDs of slabs associated with the given account
+func (s *Store) SlabIDs(ctx context.Context, accountID proto.Account, offset, limit int) ([]slabs.SlabID, error) {
+	if err := validateOffsetLimit(offset, limit); err != nil {
+		return nil, err
+	} else if limit == 0 {
+		return nil, nil
+	}
+
+	var ids []slabs.SlabID
+	if err := s.transaction(ctx, func(ctx context.Context, tx *txn) (err error) {
+		rows, err := tx.Query(ctx, `SELECT digest
+			FROM slabs s
+			INNER JOIN account_slabs ac ON s.id = ac.slab_id
+			INNER JOIN accounts a ON a.id = ac.account_id
+			WHERE a.public_key = $1
+			LIMIT $2 OFFSET $3`, sqlPublicKey(accountID), limit, offset)
+		if err != nil {
+			return fmt.Errorf("failed to query slab digests: %w", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var id slabs.SlabID
+			if err := rows.Scan((*sqlHash256)(&id)); err != nil {
+				return fmt.Errorf("failed to scan slab digest: %w", err)
+			}
+			ids = append(ids, id)
+		}
+		return rows.Err()
+	}); err != nil {
+		return nil, err
+	}
+
+	return ids, nil
+}
+
 // Slabs returns the slabs with the given IDs from the database.
 func (s *Store) Slabs(ctx context.Context, accountID proto.Account, slabIDs []slabs.SlabID) ([]slabs.Slab, error) {
 	if len(slabIDs) == 0 {

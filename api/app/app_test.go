@@ -3,11 +3,13 @@ package app_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"go.sia.tech/core/types"
+	"go.sia.tech/indexd/api"
 	"go.sia.tech/indexd/internal/testutils"
 	"go.sia.tech/indexd/slabs"
 	"go.uber.org/zap"
@@ -105,13 +107,48 @@ func TestApplicationAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal("failed to pin slab:", err)
 	}
-	slabs, err := indexer.App(sk).Slabs(context.Background(), []slabs.SlabID{slabID1, slabID2})
+
+	// assert slab IDs are returned
+	slabsIDs, err := indexer.App(sk).SlabDigests(context.Background())
 	if err != nil {
 		t.Fatal("failed to fetch slabs:", err)
-	} else if len(slabs) != 2 {
-		t.Fatal("expected 2 slabs, got", len(slabs))
-	} else if slabs[0].EncryptionKey != slab1Params.EncryptionKey ||
-		slabs[1].EncryptionKey != slab2Params.EncryptionKey {
-		t.Fatal("expected slabs to have correct encryption keys")
+	} else if len(slabsIDs) != 2 {
+		t.Fatal("expected 2 slabs, got", len(slabsIDs))
+	} else if !reflect.DeepEqual(slabsIDs, []slabs.SlabID{slabID1, slabID2}) {
+		t.Fatal("expected slabs to match pinned slabs, got:", slabsIDs)
+	}
+
+	// assert offset and limit are passed
+	slabsIDs, err = indexer.App(sk).SlabDigests(context.Background(), api.WithOffset(1), api.WithLimit(1))
+	if err != nil {
+		t.Fatal("failed to fetch slabs with offset and limit:", err)
+	} else if len(slabsIDs) != 1 {
+		t.Fatal("expected 1 slab, got", len(slabsIDs))
+	} else if slabsIDs[0] != slabID2 {
+		t.Fatal("expected slabID2, got:", slabsIDs[0])
+	}
+
+	// assert slab is returned
+	slab1, err := indexer.App(sk).Slab(context.Background(), slabID1)
+	if err != nil {
+		t.Fatal("failed to fetch slab:", err)
+	} else if slab1.EncryptionKey != slab1Params.EncryptionKey {
+		t.Fatal("unexpected")
+	} else if slab1.Sectors[0].Root != slab1Params.Sectors[0].Root ||
+		slab1.Sectors[1].Root != slab1Params.Sectors[1].Root ||
+		slab1.Sectors[2].Root != slab1Params.Sectors[2].Root {
+		t.Fatal("unexpected sector roots in slab")
+	}
+
+	// assert slab is returned
+	slab2, err := indexer.App(sk).Slab(context.Background(), slabID2)
+	if err != nil {
+		t.Fatal("failed to fetch slab:", err)
+	} else if slab2.EncryptionKey != slab2Params.EncryptionKey {
+		t.Fatal("unexpected")
+	} else if slab2.Sectors[0].Root != slab2Params.Sectors[0].Root ||
+		slab2.Sectors[1].Root != slab2Params.Sectors[1].Root ||
+		slab2.Sectors[2].Root != slab2Params.Sectors[2].Root {
+		t.Fatal("unexpected sector roots in slab")
 	}
 }
