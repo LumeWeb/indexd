@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -129,7 +130,10 @@ func (a *app) handleDELETESlab(jc jape.Context, pk types.PublicKey) {
 	}
 
 	err := a.store.UnpinSlab(jc.Request.Context(), proto.Account(pk), slabID)
-	if jc.Check("failed to unpin slab", err) != nil {
+	if errors.Is(err, slabs.ErrSlabNotFound) {
+		jc.Error(fmt.Errorf("slab %s not found", slabID), http.StatusNotFound)
+		return
+	} else if jc.Check("failed to unpin slab", err) != nil {
 		return
 	}
 
