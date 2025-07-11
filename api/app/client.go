@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"go.sia.tech/core/types"
+	"go.sia.tech/indexd/api"
+	"go.sia.tech/indexd/hosts"
 	"go.sia.tech/indexd/slabs"
 	"go.sia.tech/jape"
 )
@@ -39,6 +41,16 @@ func NewClient(address string, appKey types.PrivateKey) (*Client, error) {
 		appkey:   appKey,
 		hostname: parsedURL.Hostname(),
 	}, nil
+}
+
+// Hosts returns all usable hosts.
+func (c *Client) Hosts(ctx context.Context, opts ...api.URLQueryParameterOption) (hosts []hosts.Host, err error) {
+	values := url.Values{}
+	for _, opt := range opts {
+		opt(values)
+	}
+	err = c.c.GET(ctx, c.sign("/hosts?"+values.Encode()), &hosts)
+	return
 }
 
 // PinSlab pins a slab to the indexer.

@@ -8,6 +8,8 @@ import (
 
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
+	"go.sia.tech/indexd/api"
+	"go.sia.tech/indexd/hosts"
 	"go.sia.tech/indexd/slabs"
 	"go.sia.tech/jape"
 	"go.uber.org/zap"
@@ -19,6 +21,7 @@ type (
 
 	// Store defines the store interface for the application API.
 	Store interface {
+		Hosts(ctx context.Context, offset, limit int, queryOpts ...hosts.HostQueryOpt) ([]hosts.Host, error)
 		PinSlab(context.Context, proto.Account, time.Time, slabs.SlabPinParams) (slabs.SlabID, error)
 		UnpinSlab(ctx context.Context, accountID proto.Account, slabID slabs.SlabID) error
 	}
@@ -50,6 +53,8 @@ func NewAPI(hostname string, store Store, as AccountStore, opts ...Option) http.
 	}
 
 	routes := map[string]authedHandler{
+		"GET /hosts": a.handleGETHosts,
+
 		"POST /slabs/pin":       a.handlePOSTSlabsPin,
 		"DELETE /slabs/:slabid": a.handleDELETESlab,
 	}
@@ -65,6 +70,23 @@ func NewAPI(hostname string, store Store, as AccountStore, opts ...Option) http.
 		}
 	}
 	return jape.Mux(signed)
+}
+
+func (a *app) handleGETHosts(jc jape.Context, _ types.PublicKey) {
+	offset, limit, ok := api.ParseOffsetLimit(jc)
+	if !ok {
+		return
+	}
+
+	hosts, err := a.store.Hosts(jc.Request.Context(), offset, limit, []hosts.HostQueryOpt{
+		hosts.WithBlocked(false),        // only return unblocked hosts
+		hosts.WithActiveContracts(true), // only return hosts with active contracts
+		hosts.WithUsable(true),          // only return usable hosts
+	}...)
+	if jc.Check("failed to get hosts", err) != nil {
+		return
+	}
+	jc.Encode(hosts)
 }
 
 func (a *app) handlePOSTSlabsPin(jc jape.Context, pk types.PublicKey) {
