@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/chain"
 	"go.sia.tech/coreutils/wallet"
@@ -189,18 +188,22 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger) *Indexer {
 	}
 }
 
-// Database returns the underlying database.
-func (idx *Indexer) Database() *pgxpool.Pool {
-	return idx.store.Database()
+// Database returns the underlying store.
+func (idx *Indexer) Database() *postgres.Store {
+	return idx.store
 }
 
 // HostClient returns a host client for the given host public key.
-func (idx *Indexer) HostClient(ctx context.Context, hk types.PublicKey) (*client.HostClient, error) {
-	h, err := idx.store.Host(ctx, hk)
+func (idx *Indexer) HostClient(hk types.PublicKey) *client.HostClient {
+	h, err := idx.store.Host(context.Background(), hk)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get host %s: %w", hk, err)
+		panic(fmt.Sprintf("failed to get host %s: %v", hk, err)) // developer error
 	}
-	return idx.dialer.DialHost(ctx, hk, h.SiamuxAddr())
+	hc, err := idx.dialer.DialHost(context.Background(), hk, h.SiamuxAddr())
+	if err != nil {
+		panic(fmt.Sprintf("failed to dial host %s: %v", hk, err)) // developer error
+	}
+	return hc
 }
 
 // Tip returns the current tip of the chain.

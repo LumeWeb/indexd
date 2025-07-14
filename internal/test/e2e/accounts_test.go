@@ -39,16 +39,13 @@ func TestAccountFunding(t *testing.T) {
 	acc := proto.Account(a1.PublicKey())
 	hk := hosts[0].PublicKey
 	hp := hosts[0].Settings.Prices
+	hc := indexer.HostClient(hk)
 	token := acc.Token(a1, hk)
 	target := types.Siacoins(1)
-	db := indexer.Database()
+	db := indexer.Database().Database()
 
 	// assert its account balance is zero
-	host, err := indexer.HostClient(context.Background(), hk)
-	if err != nil {
-		t.Fatal(err)
-	}
-	balance, err := host.AccountBalance(context.Background(), acc)
+	balance, err := hc.AccountBalance(context.Background(), acc)
 	if err != nil {
 		t.Fatal(err)
 	} else if !balance.IsZero() {
@@ -65,7 +62,7 @@ func TestAccountFunding(t *testing.T) {
 	}
 
 	// assert it was funded
-	balance, err = host.AccountBalance(context.Background(), acc)
+	balance, err = hc.AccountBalance(context.Background(), acc)
 	if err != nil {
 		t.Fatal(err)
 	} else if !balance.Equals(target) {
@@ -75,13 +72,13 @@ func TestAccountFunding(t *testing.T) {
 	// spend some money
 	var sector [proto.SectorSize]byte
 	frand.Read(sector[:])
-	_, err = host.WriteSector(context.Background(), hp, token, bytes.NewReader(sector[:]), proto.SectorSize)
+	_, err = hc.WriteSector(context.Background(), hp, token, bytes.NewReader(sector[:]), proto.SectorSize)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// assert it was spent
-	balance, err = host.AccountBalance(context.Background(), acc)
+	balance, err = hc.AccountBalance(context.Background(), acc)
 	if err != nil {
 		t.Fatal(err)
 	} else if !balance.Add(hp.RPCWriteSectorCost(proto.SectorSize).RenterCost()).Equals(target) {
@@ -96,7 +93,7 @@ func TestAccountFunding(t *testing.T) {
 
 	// assert it was refilled
 	time.Sleep(time.Second)
-	balance, err = host.AccountBalance(context.Background(), acc)
+	balance, err = hc.AccountBalance(context.Background(), acc)
 	if err != nil {
 		t.Fatal(err)
 	} else if !balance.Equals(target) {
