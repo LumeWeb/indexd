@@ -84,8 +84,8 @@ func TestAccountFunding(t *testing.T) {
 	balance, err = host.AccountBalance(context.Background(), acc)
 	if err != nil {
 		t.Fatal(err)
-	} else if balance.Equals(target) {
-		t.Fatal("expected account balance to be slighlty less than 1SC")
+	} else if !balance.Add(hp.RPCWriteSectorCost(proto.SectorSize).RenterCost()).Equals(target) {
+		t.Fatal("expected account balance to be slightly less than 1SC")
 	}
 
 	// manipulate next_fund so the account will get refilled
