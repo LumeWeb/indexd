@@ -46,10 +46,9 @@ loop:
 				wg.Done()
 			}()
 
-			err = cm.hm.WithScannedHost(ctx, hostKey, func(host hosts.Host) error {
+			if err := cm.hm.WithScannedHost(ctx, hostKey, func(host hosts.Host) error {
 				return cm.performSectorPinningOnHost(ctx, host, hostLog)
-			})
-			if err != nil {
+			}); err != nil {
 				hostLog.Debug("failed to pin sectors", zap.Error(err))
 				return
 			}
