@@ -250,12 +250,16 @@ func TestPerformContractPruningOnHost(t *testing.T) {
 		switch c.ID {
 		case fcid1:
 			store.contracts[i].Size = proto.SectorSize * uint64(len(h1Mock.sectorRoots[fcid1]))
+			store.revisions[i].Revision.Filesize = store.contracts[i].Size
 		case fcid2:
 			store.contracts[i].Size = proto.SectorSize * uint64(len(h1Mock.sectorRoots[fcid2]))
+			store.revisions[i].Revision.Filesize = store.contracts[i].Size
 		case fcid3:
 			store.contracts[i].Size = proto.SectorSize * uint64(len(h2Mock.sectorRoots[fcid3]))
+			store.revisions[i].Revision.Filesize = store.contracts[i].Size
 		case fcid4:
 			store.contracts[i].Size = proto.SectorSize * uint64(len(h5Mock.sectorRoots[fcid4]))
+			store.revisions[i].Revision.Filesize = store.contracts[i].Size
 		}
 	}
 

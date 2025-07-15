@@ -51,10 +51,9 @@ func (cm *ContractManager) performContractPruning(ctx context.Context, log *zap.
 				wg.Done()
 			}()
 
-			err = cm.hm.WithScannedHost(ctx, hostKey, func(host hosts.Host) error {
+			if err := cm.hm.WithScannedHost(ctx, hostKey, func(host hosts.Host) error {
 				return cm.performContractPruningOnHost(ctx, host, hostLog)
-			})
-			if err != nil {
+			}); err != nil {
 				hostLog.Debug("failed to prune contracts", zap.Error(err))
 			}
 		}(ctx, hostKey, log.With(zap.Stringer("hostKey", hostKey)))
@@ -118,11 +117,14 @@ func (cm *ContractManager) pruneContract(ctx context.Context, client HostClient,
 		rootsBatchSize = 10000
 	)
 
-	contract, err := cm.store.ContractElement(ctx, contractID)
+	contract, renewed, err := cm.store.ContractRevision(ctx, contractID)
 	if err != nil {
-		return 0, fmt.Errorf("failed to fetch contract: %w", err)
+		return 0, fmt.Errorf("failed to fetch contract revision: %w", err)
+	} else if renewed {
+		cm.log.Debug("skipping pruning of renewed contract", zap.Stringer("contractID", contractID))
+		return 0, nil
 	}
-	contractSectors := contract.V2FileContract.Filesize / proto.SectorSize
+	contractSectors := contract.Revision.Filesize / proto.SectorSize
 
 	var pruned int
 	for offset := uint64(0); offset < contractSectors; offset += sectorsPerTB {

@@ -1,4 +1,4 @@
-package testutils
+package test
 
 import (
 	"context"
@@ -49,9 +49,10 @@ type Indexer struct {
 	*admin.Client
 	App func(types.PrivateKey) *app.Client
 
-	db     *postgres.Store
 	cm     *chain.Manager
+	dialer *client.SiamuxDialer
 	syncer *Syncer
+	store  *postgres.Store
 	wallet *wallet.SingleAddressWallet
 }
 
@@ -179,11 +180,30 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger) *Indexer {
 			return client
 		},
 
-		db:     store,
 		cm:     c.cm,
+		dialer: dialer,
+		store:  store,
 		syncer: syncer,
 		wallet: wm,
 	}
+}
+
+// Database returns the underlying store.
+func (idx *Indexer) Database() *postgres.Store {
+	return idx.store
+}
+
+// HostClient returns a host client for the given host public key.
+func (idx *Indexer) HostClient(hk types.PublicKey) *client.HostClient {
+	h, err := idx.store.Host(context.Background(), hk)
+	if err != nil {
+		panic(fmt.Sprintf("failed to get host %s: %v", hk, err)) // developer error
+	}
+	hc, err := idx.dialer.DialHost(context.Background(), hk, h.SiamuxAddr())
+	if err != nil {
+		panic(fmt.Sprintf("failed to dial host %s: %v", hk, err)) // developer error
+	}
+	return hc
 }
 
 // Tip returns the current tip of the chain.
