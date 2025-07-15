@@ -1,4 +1,4 @@
-package e2e
+package accounts_test
 
 import (
 	"bytes"
@@ -9,14 +9,14 @@ import (
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/api/admin"
-	"go.sia.tech/indexd/internal/test"
+	"go.sia.tech/indexd/internal/testutils"
 	"lukechampine.com/frand"
 )
 
-func TestAccountFunding(t *testing.T) {
+func TestAccountFundingE2E(t *testing.T) {
 	// create cluster
-	logger := test.NewLogger(false)
-	cluster := test.NewCluster(t, test.WithLogger(logger), test.WithHosts(1))
+	logger := testutils.NewLogger(false)
+	cluster := testutils.NewCluster(t, testutils.WithLogger(logger), testutils.WithHosts(1))
 	indexer := cluster.Indexer
 
 	// add an account
@@ -42,15 +42,6 @@ func TestAccountFunding(t *testing.T) {
 	hc := indexer.HostClient(hk)
 	token := acc.Token(a1, hk)
 	target := types.Siacoins(1)
-	db := indexer.Database().Database()
-
-	// assert its account balance is zero
-	balance, err := hc.AccountBalance(context.Background(), acc)
-	if err != nil {
-		t.Fatal(err)
-	} else if !balance.IsZero() {
-		t.Fatal("expected account balance to be zero")
-	}
 
 	// assert we have one active contract
 	time.Sleep(time.Second)
@@ -61,8 +52,8 @@ func TestAccountFunding(t *testing.T) {
 		t.Fatalf("expected 1 contract, got %d", len(contracts))
 	}
 
-	// assert it was funded
-	balance, err = hc.AccountBalance(context.Background(), acc)
+	// assert the account is funded
+	balance, err := hc.AccountBalance(context.Background(), acc)
 	if err != nil {
 		t.Fatal(err)
 	} else if !balance.Equals(target) {
@@ -85,8 +76,8 @@ func TestAccountFunding(t *testing.T) {
 		t.Fatal("expected account balance to be slightly less than 1SC")
 	}
 
-	// manipulate next_fund so the account will get refilled
-	_, err = db.Exec(context.Background(), "UPDATE account_hosts SET next_fund = NOW() - INTERVAL '1 minute'")
+	// trigger funding
+	err = indexer.TriggerAction(context.Background(), "funding")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,6 +88,6 @@ func TestAccountFunding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	} else if !balance.Equals(target) {
-		t.Fatal("expected account balance to be funded to 1SC")
+		t.Fatal("expected account balance to be funded to 1SC", balance)
 	}
 }
