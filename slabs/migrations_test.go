@@ -13,6 +13,7 @@ import (
 	"github.com/klauspost/reedsolomon"
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
+	"go.sia.tech/indexd/alerts"
 	"go.sia.tech/indexd/contracts"
 	"go.sia.tech/indexd/hosts"
 	"go.uber.org/zap"
@@ -104,7 +105,8 @@ func TestMigrateSlab(t *testing.T) {
 	// prepare slab manager
 	msk := types.GeneratePrivateKey()
 	ssk := types.GeneratePrivateKey()
-	mgr, err := newSlabManager(am, hm, db, dialer, msk, ssk)
+	alerter := alerts.NewManager()
+	mgr, err := newSlabManager(am, hm, db, dialer, alerter, msk, ssk)
 	if err != nil {
 		t.Fatal(err)
 	}

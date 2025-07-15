@@ -94,8 +94,17 @@ func (s *mockStore) Hosts(ctx context.Context, offset, limit int, queryOpts ...h
 	return hosts, nil
 }
 
-func (s *mockStore) HostsForIntegrityChecks(ctx context.Context, limit int) ([]types.PublicKey, error) {
-	panic("not implemented")
+func (s *mockStore) HostsForIntegrityChecks(ctx context.Context, limit int) (result []types.PublicKey, err error) {
+	return nil, nil
+}
+
+func (s *mockStore) HostsWithLostSectors(ctx context.Context) (hks []types.PublicKey, err error) {
+	for hk, lostSectors := range s.lostSectors {
+		if len(lostSectors) > 0 {
+			hks = append(hks, hk)
+		}
+	}
+	return
 }
 
 func (s *mockStore) MaintenanceSettings(ctx context.Context) (contracts.MaintenanceSettings, error) {
