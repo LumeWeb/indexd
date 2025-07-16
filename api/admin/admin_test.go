@@ -395,6 +395,25 @@ func TestHostsAPI(t *testing.T) {
 	} else if len(notContracted) != 2 {
 		t.Fatalf("invalid number of hosts: %d", len(notContracted))
 	}
+
+	// manually scan host
+	host1, err := indexer.Host(context.Background(), h1.PublicKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanHost1, err := indexer.ScanHost(context.Background(), h1.PublicKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanHost1.LastSuccessfulScan = host1.LastSuccessfulScan
+	scanHost1.NextScan = host1.NextScan
+	scanHost1.RecentUptime = host1.RecentUptime
+	scanHost1.Settings.Prices.ValidUntil = host1.Settings.Prices.ValidUntil
+	scanHost1.Settings.Prices.Signature = host1.Settings.Prices.Signature
+
+	if !reflect.DeepEqual(host1, scanHost1) {
+		t.Fatalf("expected host %+v, got %+v", host1, scanHost1)
+	}
 }
 
 func TestSettingsAPI(t *testing.T) {

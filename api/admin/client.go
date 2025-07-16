@@ -106,8 +106,8 @@ func (c *Client) Host(ctx context.Context, hostKey types.PublicKey) (h hosts.Hos
 }
 
 // ScanHost triggers a manual host scan.
-func (c *Client) ScanHost(hostKey types.PublicKey) (resp hosts.Host, err error) {
-	err = c.c.POST(context.Background(), fmt.Sprintf("/host/%s/scan", hostKey), nil, &resp)
+func (c *Client) ScanHost(ctx context.Context, hostKey types.PublicKey) (resp hosts.Host, err error) {
+	err = c.c.POST(ctx, fmt.Sprintf("/host/%s/scan", hostKey), nil, &resp)
 	return
 }
 
