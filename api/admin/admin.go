@@ -15,6 +15,7 @@ import (
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/wallet"
 	"go.sia.tech/indexd/accounts"
+	"go.sia.tech/indexd/api"
 	"go.sia.tech/indexd/build"
 	"go.sia.tech/indexd/contracts"
 	"go.sia.tech/indexd/explorer"
@@ -25,17 +26,7 @@ import (
 )
 
 const (
-	defaultLimit = 100
-	maxLimit     = 500
-	stdTxnSize   = 1200 // bytes
-)
-
-var (
-	// ErrInvalidOffset is returned when the requested offset is invalid.
-	ErrInvalidOffset = errors.New("offset must be non-negative")
-
-	// ErrInvalidLimit is returned when the requested limit is invalid.
-	ErrInvalidLimit = fmt.Errorf("limit must between 1 and %d", maxLimit)
+	stdTxnSize = 1200 // bytes
 )
 
 var startTime = time.Now()
@@ -245,7 +236,7 @@ func (a *admin) handlePOSTTrigger(jc jape.Context) {
 }
 
 func (a *admin) handleGETAccounts(jc jape.Context) {
-	offset, limit, ok := parseOffsetLimit(jc)
+	offset, limit, ok := api.ParseOffsetLimit(jc)
 	if !ok {
 		return
 	}
@@ -383,7 +374,7 @@ func (a *admin) handleGETContract(jc jape.Context) {
 }
 
 func (a *admin) handleGETContracts(jc jape.Context) {
-	offset, limit, ok := parseOffsetLimit(jc)
+	offset, limit, ok := api.ParseOffsetLimit(jc)
 	if !ok {
 		return
 	}
@@ -430,7 +421,7 @@ func (a *admin) handleGETHost(jc jape.Context) {
 }
 
 func (a *admin) handleGETHosts(jc jape.Context) {
-	offset, limit, ok := parseOffsetLimit(jc)
+	offset, limit, ok := api.ParseOffsetLimit(jc)
 	if !ok {
 		return
 	}
@@ -466,7 +457,7 @@ func (a *admin) handleGETHosts(jc jape.Context) {
 }
 
 func (a *admin) handleGETHostsBlocklist(jc jape.Context) {
-	offset, limit, ok := parseOffsetLimit(jc)
+	offset, limit, ok := api.ParseOffsetLimit(jc)
 	if !ok {
 		return
 	}
@@ -558,7 +549,7 @@ func (a *admin) handleGETWallet(jc jape.Context) {
 }
 
 func (a *admin) handleGETWalletEvents(jc jape.Context) {
-	offset, limit, ok := parseOffsetLimit(jc)
+	offset, limit, ok := api.ParseOffsetLimit(jc)
 	if !ok {
 		return
 	}
@@ -626,23 +617,4 @@ func (a *admin) handlePOSTWalletSend(jc jape.Context) {
 	}
 
 	jc.Encode(txn.ID())
-}
-
-func parseOffsetLimit(jc jape.Context) (offset int, limit int, ok bool) {
-	if jc.DecodeForm("offset", &offset) != nil {
-		return 0, 0, false
-	} else if offset < 0 {
-		jc.Error(ErrInvalidOffset, http.StatusBadRequest)
-		return 0, 0, false
-	}
-
-	limit = defaultLimit
-	if jc.DecodeForm("limit", &limit) != nil {
-		return 0, 0, false
-	} else if limit < 1 || limit > maxLimit {
-		jc.Error(ErrInvalidLimit, http.StatusBadRequest)
-		return 0, 0, false
-	}
-
-	return offset, limit, true
 }

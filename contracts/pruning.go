@@ -45,10 +45,11 @@ func (cm *ContractManager) performContractPruning(ctx context.Context, force boo
 	sema := make(chan struct{}, 50)
 	defer close(sema)
 
+loop:
 	for _, hostKey := range hfp {
 		select {
 		case <-ctx.Done():
-			break
+			break loop
 		case sema <- struct{}{}:
 		}
 
@@ -91,10 +92,11 @@ func (cm *ContractManager) performContractPruningOnHost(ctx context.Context, hos
 	}
 
 	hostLog.Debug("pruning contracts on host", zap.Int("contracts", len(contracts)))
+loop:
 	for _, contract := range contracts {
 		select {
 		case <-ctx.Done():
-			break
+			break loop
 		default:
 		}
 
