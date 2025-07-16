@@ -13,6 +13,7 @@ import (
 
 	"go.sia.tech/core/consensus"
 	"go.sia.tech/core/types"
+	"go.sia.tech/coreutils/syncer"
 	"go.sia.tech/coreutils/wallet"
 	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/api"
@@ -82,6 +83,7 @@ type (
 
 	// A Syncer can connect to other peers and synchronize the blockchain.
 	Syncer interface {
+		Connect(ctx context.Context, addr string) (*syncer.Peer, error)
 		BroadcastV2TransactionSet(index types.ChainIndex, txns []types.V2Transaction) error
 	}
 
@@ -134,6 +136,12 @@ func NewAPI(chain ChainManager, contracts ContractManager, hosts HostManager, sy
 
 	routes := map[string]jape.Handler{
 		"GET /state": a.handleGETState,
+
+		// syncer endpoints
+		"POST /syncer/connect": a.handlePOSTSyncerConnect,
+
+		// txpool endpoints
+		"GET /txpool/recommendedfee": a.handleGETTxpoolRecommendedFee,
 
 		// accounts endpoints
 		"GET    /accounts":            a.handleGETAccounts,
@@ -332,6 +340,22 @@ func (a *admin) handleGETState(jc jape.Context) {
 		},
 		ScanHeight: ci.Height,
 	})
+}
+
+func (a *admin) handlePOSTSyncerConnect(jc jape.Context) {
+	var addr string
+	if jc.Decode(&addr) != nil {
+		return
+	}
+	_, err := a.syncer.Connect(jc.Request.Context(), addr)
+	if jc.Check("couldn't connect to peer", err) != nil {
+		return
+	}
+	jc.Encode(nil)
+}
+
+func (a *admin) handleGETTxpoolRecommendedFee(jc jape.Context) {
+	jc.Encode(a.chain.RecommendedFee())
 }
 
 func (a *admin) handleGETExplorerSiacoinExchangeRate(jc jape.Context) {
