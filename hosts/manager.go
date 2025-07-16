@@ -229,7 +229,7 @@ func (m *HostManager) WithScannedHost(ctx context.Context, hk types.PublicKey, f
 	logger.Debug("host has outdated prices, rescan")
 
 	// scan the host if the prices were outdated
-	host, err = m.scanHost(ctx, hk)
+	host, err = m.ScanHost(ctx, hk)
 	if err != nil {
 		return fmt.Errorf("failed to scan host, %w", err)
 	} else if !host.IsGood() {
@@ -320,9 +320,9 @@ func (m *HostManager) pruneHosts(ctx context.Context) {
 	}
 }
 
-// scanHost scans the host with given host key and returns it with updated
+// ScanHost scans the host with given host key and returns it with updated
 // settings and checks.
-func (m *HostManager) scanHost(ctx context.Context, hk types.PublicKey) (Host, error) {
+func (m *HostManager) ScanHost(ctx context.Context, hk types.PublicKey) (Host, error) {
 	logger := m.log.With(zap.Stringer("hk", hk))
 
 	ctx, cancel := context.WithTimeout(ctx, scanTimeout)
@@ -398,7 +398,7 @@ loop:
 				wg.Done()
 			}()
 
-			if _, err := m.scanHost(ctx, hk); errors.Is(err, context.Canceled) {
+			if _, err := m.ScanHost(ctx, hk); errors.Is(err, context.Canceled) {
 				return
 			} else if errors.Is(err, errNodeOffline) {
 				once.Do(func() { m.log.Warn("indexer is offline, skipping scans") })

@@ -105,6 +105,12 @@ func (c *Client) Host(ctx context.Context, hostKey types.PublicKey) (h hosts.Hos
 	return
 }
 
+// ScanHost triggers a manual host scan.
+func (c *Client) ScanHost(hostKey types.PublicKey) (resp hosts.Host, err error) {
+	err = c.c.POST(context.Background(), fmt.Sprintf("/host/%s/scan", hostKey), nil, &resp)
+	return
+}
+
 // Hosts returns all hosts known to the indexer.
 func (c *Client) Hosts(ctx context.Context, opts ...HostQueryParameterOption) (hosts []hosts.Host, err error) {
 	values := url.Values{}

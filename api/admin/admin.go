@@ -52,6 +52,7 @@ type (
 	// HostManager defines an interface that allows triggering a host scan.
 	HostManager interface {
 		TriggerHostScanning()
+		ScanHost(ctx context.Context, hk types.PublicKey) (hosts.Host, error)
 	}
 
 	// Explorer retrieves data about the Sia network from an external source.
@@ -159,7 +160,8 @@ func NewAPI(chain ChainManager, contracts ContractManager, hosts HostManager, sy
 		"GET /explorer/exchange-rate/siacoin/:currency": a.handleGETExplorerSiacoinExchangeRate,
 
 		// host endpoints
-		"GET    /host/:hostkey": a.handleGETHost,
+		"GET    /host/:hostkey":      a.handleGETHost,
+		"POST   /host/:hostkey/scan": a.handlePOSTHostScan,
 
 		// hosts endpoints
 		"GET    /hosts":                    a.handleGETHosts,
@@ -436,6 +438,21 @@ func (a *admin) handleGETHost(jc jape.Context) {
 		jc.Error(err, http.StatusNotFound)
 		return
 	} else if jc.Check("failed to get host", err) != nil {
+		return
+	}
+	jc.Encode(host)
+}
+
+func (a *admin) handlePOSTHostScan(jc jape.Context) {
+	var hk types.PublicKey
+	if jc.DecodeParam("hostkey", &hk) != nil {
+		return
+	}
+	host, err := a.hosts.ScanHost(jc.Request.Context(), hk)
+	if errors.Is(err, hosts.ErrNotFound) {
+		jc.Error(err, http.StatusNotFound)
+		return
+	} else if jc.Check("failed to scan host", err) != nil {
 		return
 	}
 	jc.Encode(host)
