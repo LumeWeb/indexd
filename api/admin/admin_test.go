@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"go.sia.tech/core/types"
+	"go.sia.tech/coreutils/chain"
+	"go.sia.tech/coreutils/testutil"
 	"go.sia.tech/coreutils/wallet"
 	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/api"
@@ -19,6 +21,7 @@ import (
 	"go.sia.tech/indexd/pins"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest"
 	"lukechampine.com/frand"
 )
 
@@ -233,6 +236,37 @@ func TestExplorerAPI(t *testing.T) {
 		t.Fatal(err)
 	} else if rate == 0 {
 		t.Fatal("expected non-zero rate")
+	}
+}
+
+func TestSyncerAPI(t *testing.T) {
+	c := testutils.NewConsensusNode(t, zap.NewNop())
+	indexer := testutils.NewIndexer(t, c, zap.NewNop())
+
+	log := zaptest.NewLogger(t)
+	network, genesis := testutil.V2Network()
+	dbstore, tipState, err := chain.NewDBStore(chain.NewMemDB(), network, genesis, chain.NewZapMigrationLogger(log.Named("chaindb")))
+	if err != nil {
+		t.Fatalf("failed to create chain store: %v", err)
+	}
+	cm := chain.NewManager(dbstore, tipState, chain.WithLog(log.Named("chain")))
+	s := testutils.NewSyncer(t, genesis.ID(), cm)
+	defer s.Close()
+
+	if err := indexer.SyncerConnect(s.Addr()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTxpoolAPI(t *testing.T) {
+	c := testutils.NewConsensusNode(t, zap.NewNop())
+	indexer := testutils.NewIndexer(t, c, zap.NewNop())
+
+	fee, err := indexer.TxpoolRecommendedFee()
+	if err != nil {
+		t.Fatal(err)
+	} else if fee == types.ZeroCurrency {
+		t.Fatal("expected non-zero fee")
 	}
 }
 
