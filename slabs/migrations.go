@@ -88,29 +88,23 @@ func (m *SlabManager) migrateSlab(ctx context.Context, slab Slab, allHosts []hos
 		return fmt.Errorf("failed to download slab %s: %w", slab.ID, err)
 	}
 
-	// TODO: using ReconstructSome segfaults with some combinations of
-	// downloaded shards and required indices, see TestRSReconstructSome
-	//
-	// required := make([]bool, len(slab.Sectors))
-	// for _, i := range indices {
-	// 	required[i] = true
-	// }
+	// indicate what shards are required
+	required := make([]bool, len(slab.Sectors))
+	for _, i := range indices {
+		required[i] = true
+	}
 
 	// reconstruct the missing shards
 	rs, err := reedsolomon.New(int(slab.MinShards), len(slab.Sectors)-int(slab.MinShards))
 	if err != nil {
 		return fmt.Errorf("failed to create reedsolomon encoder: %w", err)
-	} else if err := rs.Reconstruct(shards); err != nil {
+	} else if err := rs.ReconstructSome(shards, required); err != nil {
 		return fmt.Errorf("failed to reconstruct shards for slab %s: %w", slab.ID, err)
 	}
 
 	// nil shards that are not missing
-	missing := make(map[int]struct{}, len(indices))
-	for _, i := range indices {
-		missing[i] = struct{}{}
-	}
-	for i := range shards {
-		if _, ok := missing[i]; !ok {
+	for i, missing := range required {
+		if !missing {
 			shards[i] = nil
 		}
 	}
