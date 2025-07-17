@@ -46,7 +46,7 @@ type (
 	// AccountManager defines an interface that allows funding accounts on the
 	// host using a given set of contracts.
 	AccountManager interface {
-		FundAccounts(ctx context.Context, host hosts.Host, contractIDs []types.FileContractID, log *zap.Logger) error
+		FundAccounts(ctx context.Context, host hosts.Host, contractIDs []types.FileContractID, force bool, log *zap.Logger) error
 	}
 
 	// ChainManager is the minimal interface of ChainManager functionality the
@@ -172,7 +172,7 @@ type (
 
 		renterKey types.PublicKey
 
-		triggerFundingChan     chan struct{}
+		triggerFundingChan     chan bool
 		triggerMaintenanceChan chan struct{}
 		triggerPruningChan     chan struct{}
 
@@ -249,7 +249,7 @@ func newContractManager(renterKey types.PublicKey, accountManager AccountManager
 
 		renterKey: renterKey,
 
-		triggerFundingChan:     make(chan struct{}, 1),
+		triggerFundingChan:     make(chan bool, 1),
 		triggerMaintenanceChan: make(chan struct{}, 1),
 		triggerPruningChan:     make(chan struct{}, 1),
 
@@ -274,11 +274,21 @@ func newContractManager(renterKey types.PublicKey, accountManager AccountManager
 // TriggerAccountFunding triggers the account funding process. This trigger is
 // used when a new account is added and ensures users don't have to wait for the
 // next maintenance loop before their account is funded.
-func (cm *ContractManager) TriggerAccountFunding() {
-	select {
-	case cm.triggerFundingChan <- struct{}{}:
-	default:
+func (cm *ContractManager) TriggerAccountFunding(force bool) error {
+	ctx, cancel, err := cm.tg.AddContext(context.Background())
+	if err != nil {
+		return err
 	}
+
+	go func() {
+		defer cancel()
+
+		select {
+		case <-ctx.Done():
+		case cm.triggerFundingChan <- force:
+		}
+	}()
+	return nil
 }
 
 // TriggerContractPruning triggers contract pruning for all active contracts
@@ -330,9 +340,9 @@ func (cm *ContractManager) maintenanceLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-cm.triggerFundingChan:
-			log.Debug("triggering account funding")
-			if err := cm.performAccountFunding(ctx, log); err != nil {
+		case force := <-cm.triggerFundingChan:
+			log.Debug("triggering account funding", zap.Bool("force", force))
+			if err := cm.performAccountFunding(ctx, force, log); err != nil {
 				log.Error("account funding failed", zap.Error(err))
 			}
 			continue
@@ -354,7 +364,7 @@ func (cm *ContractManager) maintenanceLoop(ctx context.Context) {
 			log.Error("contract maintenance failed", zap.Error(err))
 		}
 
-		if err := cm.performAccountFunding(ctx, log); err != nil {
+		if err := cm.performAccountFunding(ctx, false, log); err != nil {
 			log.Error("account funding failed", zap.Error(err))
 		}
 
@@ -416,7 +426,7 @@ func (cm *ContractManager) blockBadHosts(ctx context.Context) error {
 	return nil
 }
 
-func (cm *ContractManager) performAccountFunding(ctx context.Context, log *zap.Logger) error {
+func (cm *ContractManager) performAccountFunding(ctx context.Context, force bool, log *zap.Logger) error {
 	start := time.Now()
 	log = log.Named("accounts")
 
@@ -455,7 +465,7 @@ func (cm *ContractManager) performAccountFunding(ctx context.Context, log *zap.L
 					return
 				}
 
-				err = cm.am.FundAccounts(ctx, host, contractIDs, log)
+				err = cm.am.FundAccounts(ctx, host, contractIDs, force, log)
 				if err != nil {
 					log.Debug("failed to fund accounts", zap.Error(err))
 					return

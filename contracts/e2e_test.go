@@ -52,7 +52,7 @@ func TestContractPruningE2E(t *testing.T) {
 	for _, host := range hosts {
 		var sector [proto.SectorSize]byte
 		frand.Read(sector[:])
-		_, err = indexer.HostClient(host.PublicKey).WriteSector(context.Background(), host.Settings.Prices, acc.Token(a1, host.PublicKey), bytes.NewReader(sector[:]), proto.SectorSize)
+		_, err = indexer.HostClient(t, host.PublicKey).WriteSector(context.Background(), host.Settings.Prices, acc.Token(a1, host.PublicKey), bytes.NewReader(sector[:]), proto.SectorSize)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -85,7 +85,7 @@ func TestContractPruningE2E(t *testing.T) {
 	}
 
 	for _, host := range hosts {
-		res, err := indexer.HostClient(host.PublicKey).SectorRoots(context.Background(), host.Settings.Prices, contracts[host.PublicKey], 0, 1)
+		res, err := indexer.HostClient(t, host.PublicKey).SectorRoots(context.Background(), host.Settings.Prices, contracts[host.PublicKey], 0, 1)
 		if err != nil {
 			t.Fatal(err)
 		} else if len(res.Roots) != 1 {
