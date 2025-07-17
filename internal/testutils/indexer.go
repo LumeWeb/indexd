@@ -194,14 +194,14 @@ func (idx *Indexer) Store() *postgres.Store {
 }
 
 // HostClient returns a host client for the given host public key.
-func (idx *Indexer) HostClient(hk types.PublicKey) *client.HostClient {
+func (idx *Indexer) HostClient(t testing.TB, hk types.PublicKey) *client.HostClient {
 	h, err := idx.db.Host(context.Background(), hk)
 	if err != nil {
-		panic(fmt.Sprintf("failed to get host %s: %v", hk, err)) // developer error
+		t.Fatalf("failed to get host %s: %v", hk, err)
 	}
 	hc, err := idx.dialer.DialHost(context.Background(), hk, h.SiamuxAddr())
 	if err != nil {
-		panic(fmt.Sprintf("failed to dial host %s: %v", hk, err)) // developer error
+		t.Fatalf("failed to dial host %s: %v", hk, err)
 	}
 	return hc
 }
