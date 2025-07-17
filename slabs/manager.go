@@ -15,6 +15,7 @@ import (
 	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/alerts"
 	"go.sia.tech/indexd/client"
+	"go.sia.tech/indexd/contracts"
 	"go.sia.tech/indexd/hosts"
 	"go.uber.org/zap"
 )
@@ -36,6 +37,7 @@ type (
 		migrationAccountKey types.PrivateKey
 
 		shardTimeout time.Duration
+		slabTimeout  time.Duration
 
 		alerter AlertsManager
 		am      AccountManager
@@ -83,15 +85,19 @@ type (
 	// in the database.
 	Store interface {
 		AddAccount(ctx context.Context, ak types.PublicKey) error
+		Contracts(ctx context.Context, offset, limit int, queryOpts ...contracts.ContractQueryOpt) ([]contracts.Contract, error)
 		Hosts(ctx context.Context, offset, limit int, queryOpts ...hosts.HostQueryOpt) ([]hosts.Host, error)
 		HostsForIntegrityChecks(ctx context.Context, limit int) ([]types.PublicKey, error)
 		HostsWithLostSectors(ctx context.Context) ([]types.PublicKey, error)
+		MaintenanceSettings(ctx context.Context) (contracts.MaintenanceSettings, error)
 		MarkFailingSectorsLost(ctx context.Context, hostKey types.PublicKey, maxFailedIntegrityChecks uint) error
 		MarkSectorsLost(ctx context.Context, hostKey types.PublicKey, roots []types.Hash256) error
+		MigrateSector(ctx context.Context, root types.Hash256, hostKey types.PublicKey) (bool, error)
 		PinSlab(ctx context.Context, account proto.Account, nextIntegrityCheck time.Time, slab SlabPinParams) (SlabID, error)
 		RecordIntegrityCheck(ctx context.Context, success bool, nextCheck time.Time, hostKey types.PublicKey, roots []types.Hash256) error
 		SectorsForIntegrityCheck(ctx context.Context, hostKey types.PublicKey, limit int) ([]types.Hash256, error)
 		Slabs(ctx context.Context, accountID proto.Account, slabIDs []SlabID) ([]Slab, error)
+		UnhealthySlab(ctx context.Context, maxRepairAttempt time.Time) (Slab, error)
 	}
 
 	// AlertsManager defines an interface to register alerts.
@@ -158,6 +164,7 @@ func newSlabManager(am AccountManager, hm HostManager, store Store, dialer Diale
 		migrationAccountKey: migrationAccount,
 
 		shardTimeout: 30 * time.Second,
+		slabTimeout:  time.Minute,
 
 		am:       am,
 		dialer:   dialer,
@@ -210,7 +217,7 @@ func (m *SlabManager) maintenanceLoop(ctx context.Context) {
 			m.log.Error("failed to perform integrity checks", zap.Error(err))
 		}
 
-		if err := m.performSlabMigrations(); err != nil {
+		if err := m.performSlabMigrations(ctx); err != nil {
 			m.log.Error("failed to perform slab migrations", zap.Error(err))
 		}
 	}
@@ -286,12 +293,42 @@ func (m *SlabManager) performIntegrityChecks(ctx context.Context) error {
 	return nil
 }
 
-func (m *SlabManager) performSlabMigrations() error {
+func (m *SlabManager) performSlabMigrations(ctx context.Context) error {
 	start := time.Now()
 	logger := m.log.Named("migrations")
 	logger.Debug("starting slab migrations", zap.Time("start", start))
 
-	// TODO: implement
+	const slabsPerBatch = 10
+	nextBatch := func(ctx context.Context) (batch []Slab, _ error) {
+		for len(batch) < slabsPerBatch {
+			slab, err := m.store.UnhealthySlab(ctx, start)
+			if errors.Is(err, ErrSlabNotFound) {
+				return batch, nil
+			} else if errors.Is(err, context.Canceled) {
+				return nil, nil
+			} else if err != nil {
+				return nil, err
+			}
+			batch = append(batch, slab)
+		}
+		return
+	}
+
+	for {
+		batch, err := nextBatch(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to fetch unhealthy slabs: %w", err)
+		} else if len(batch) == 0 {
+			break
+		}
+
+		err = m.migrateSlabs(ctx, batch, logger)
+		if errors.Is(err, context.Canceled) {
+			break
+		} else if err != nil {
+			return fmt.Errorf("failed to migrate slabs: %w", err)
+		}
+	}
 
 	logger.Debug("finished slab migrations", zap.Duration("elapsed", time.Since(start)))
 	return nil
