@@ -7,7 +7,7 @@ import (
 	"sync"
 
 	"github.com/klauspost/reedsolomon"
-
+	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/contracts"
 	"go.sia.tech/indexd/hosts"
@@ -15,7 +15,7 @@ import (
 	"lukechampine.com/frand"
 )
 
-func (m *SlabManager) migrateSlabs(ctx context.Context, slabs []Slab, l *zap.Logger) error {
+func (m *SlabManager) migrateSlabs(ctx context.Context, slabIDs []SlabID, l *zap.Logger) error {
 	logger := l.Named(hex.EncodeToString(frand.Bytes(16))) // unique id per batch
 
 	// fetch all available contracts
@@ -52,11 +52,16 @@ func (m *SlabManager) migrateSlabs(ctx context.Context, slabs []Slab, l *zap.Log
 	}
 
 	var wg sync.WaitGroup
-	for _, slab := range slabs {
+	for _, slabID := range slabIDs {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 
+			slab, err := m.store.Slab(ctx, slabID)
+			if err != nil {
+				logger.Error("failed to fetch slab", zap.String("slabID", slabID.String()), zap.Error(err))
+				return
+			}
 			if err := m.migrateSlab(ctx, slab, allHosts, goodContracts, ms.Period, logger); err != nil {
 				logger.Error("failed to migrate slab", zap.Error(err))
 				return
@@ -68,7 +73,21 @@ func (m *SlabManager) migrateSlabs(ctx context.Context, slabs []Slab, l *zap.Log
 }
 
 func (m *SlabManager) migrateSlab(ctx context.Context, slab Slab, allHosts []hosts.Host, goodContracts []contracts.Contract, period uint64, l *zap.Logger) error {
+	fmt.Println("migrating slab", slab.ID)
 	logger := l.Named(slab.ID.String())
+
+	hostss := make(map[types.PublicKey]hosts.Host)
+	for _, h := range allHosts {
+		hostss[h.PublicKey] = h
+		fmt.Println("host", h.PublicKey)
+	}
+	for _, c := range goodContracts {
+		fmt.Println("contract", c.ID, "host", c.HostKey, "good", c.Good, "GFU", c.GoodForUpload(hostss[c.HostKey].Settings.Prices, hostss[c.HostKey].Settings.MaxCollateral, period))
+	}
+
+	for i, sector := range slab.Sectors {
+		fmt.Println("sector", i, "root", sector.Root, "host", sector.HostKey, "contract", sector.ContractID)
+	}
 
 	indices, usableHosts := sectorsToMigrate(slab, allHosts, goodContracts, period)
 	if len(indices) == 0 {
@@ -77,6 +96,10 @@ func (m *SlabManager) migrateSlab(ctx context.Context, slab Slab, allHosts []hos
 	} else if len(usableHosts) == 0 {
 		logger.Warn("tried to migrate slab but no hosts are available for migration")
 		return nil
+	}
+	fmt.Println("slab sectors:")
+	for i, sector := range slab.Sectors {
+		fmt.Println("sector", i, "root", sector.Root, "host", sector.HostKey, "contract", sector.ContractID)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, m.slabTimeout)
@@ -88,12 +111,26 @@ func (m *SlabManager) migrateSlab(ctx context.Context, slab Slab, allHosts []hos
 		return fmt.Errorf("failed to download slab %s: %w", slab.ID, err)
 	}
 
+	fmt.Println("downloaded shards")
+	for i, shard := range shards {
+		if shard == nil {
+			fmt.Println("shard", i, "is nil")
+			continue
+		}
+		fmt.Println("shard", i, "root", proto.SectorRoot((*[proto.SectorSize]byte)(shard)), "data", shard[:6], "length", len(shard))
+	}
+
 	// indicate what shards are required
 	required := make([]bool, len(slab.Sectors))
 	for _, i := range indices {
 		required[i] = true
 	}
+	fmt.Println("required shards", required)
+	// for i := range required {
+	// 	required[i] = true
+	// }
 
+	fmt.Println("RS schema", int(slab.MinShards), len(slab.Sectors)-int(slab.MinShards))
 	// reconstruct the missing shards
 	rs, err := reedsolomon.New(int(slab.MinShards), len(slab.Sectors)-int(slab.MinShards))
 	if err != nil {
@@ -102,10 +139,20 @@ func (m *SlabManager) migrateSlab(ctx context.Context, slab Slab, allHosts []hos
 		return fmt.Errorf("failed to reconstruct shards for slab %s: %w", slab.ID, err)
 	}
 
+	fmt.Println("reconstructed shards", len(shards), "of which", len(indices), "are missing")
+	for i, shard := range shards {
+		if shard == nil {
+			fmt.Println("shard", i, "is nil")
+			continue
+		}
+		fmt.Println("reconstructed shard", i, "root", proto.SectorRoot((*[proto.SectorSize]byte)(shards[i])), "data", shards[i][:6], "length", len(shards[i]))
+	}
+
 	// nil shards that are not missing
 	for i, missing := range required {
 		if !missing {
 			shards[i] = nil
+			fmt.Println("nil shard", i)
 		}
 	}
 
@@ -114,8 +161,11 @@ func (m *SlabManager) migrateSlab(ctx context.Context, slab Slab, allHosts []hos
 
 	// update the database with the new locations for the migrated shards
 	for _, shard := range migratedShards {
-		if _, err := m.store.MigrateSector(ctx, shard.Root, shard.HostKey); err != nil {
+		fmt.Println("MIGRATED", shard.Root, "to host", shard.HostKey)
+		if migrated, err := m.store.MigrateSector(ctx, shard.Root, shard.HostKey); err != nil {
 			return fmt.Errorf("failed to migrate sector %s: %w", shard.Root, err)
+		} else if !migrated {
+			logger.Warn("sector was not migrated", zap.String("root", shard.Root.String()), zap.String("host", shard.HostKey.String()))
 		}
 	}
 
@@ -127,6 +177,7 @@ func (m *SlabManager) migrateSlab(ctx context.Context, slab Slab, allHosts []hos
 		return nil
 	}
 
+	fmt.Println("MIGRATION SUCCESSFUL", slab.ID, "migrated", len(migratedShards), "shards to", len(usableHosts), "hosts")
 	logger.Debug("successfully migrated slab", zap.Int("toMigrate", len(indices)), zap.Int("migrated", len(migratedShards)))
 	return nil
 }
@@ -148,6 +199,9 @@ func sectorsToMigrate(slab Slab, allHosts []hosts.Host, goodContracts []contract
 		host, ok := hostsMap[contract.HostKey]
 		if ok && contract.GoodForUpload(host.Settings.Prices, host.Settings.MaxCollateral, period) {
 			goodContractMap[contract.ID] = contract
+		} else {
+			fmt.Println("good for upload", contract.GoodForUpload(host.Settings.Prices, host.Settings.MaxCollateral, period))
+			fmt.Println("skipping contract", contract.ID, "for host", contract.HostKey, "not good for upload")
 		}
 	}
 
@@ -166,6 +220,7 @@ func sectorsToMigrate(slab Slab, allHosts []hosts.Host, goodContracts []contract
 		goodContract := sector.ContractID != nil && goodContractMap[*sector.ContractID] != contracts.Contract{}
 		if isLost || !goodContract {
 			toMigrate = append(toMigrate, i)
+			fmt.Println("sector", i, "needs migration", "lost", isLost, "good contract", goodContract, "contract ID", sector.ContractID, "host key", sector.HostKey)
 			continue
 		}
 
@@ -174,6 +229,9 @@ func sectorsToMigrate(slab Slab, allHosts []hosts.Host, goodContracts []contract
 
 		// add the CIDRs of the host to the map
 		for _, network := range hostsMap[*sector.HostKey].Networks {
+			if network.IP.IsPrivate() || network.IP.IsLoopback() || network.IP.IsUnspecified() {
+				continue // TODO: handle private IPs
+			}
 			usedCIDRs[network.String()] = struct{}{}
 		}
 	}

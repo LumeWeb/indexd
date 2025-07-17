@@ -15,8 +15,10 @@ import (
 	"go.sia.tech/coreutils/chain"
 	"go.sia.tech/coreutils/wallet"
 	"go.sia.tech/indexd/accounts"
+	"go.sia.tech/indexd/alerts"
 	"go.sia.tech/indexd/api/admin"
 	"go.sia.tech/indexd/api/app"
+	"go.sia.tech/indexd/slabs"
 
 	"go.sia.tech/indexd/client"
 	"go.sia.tech/indexd/contracts"
@@ -43,22 +45,44 @@ var (
 	}
 )
 
-// Indexer is a test utility combining an indexer, an http client for the
-// indexer and useful helpers for testing.
-type Indexer struct {
-	*admin.Client
-	App func(types.PrivateKey) *app.Client
+type (
 
-	db     *postgres.Store
-	cm     *chain.Manager
-	syncer *Syncer
-	dialer *client.SiamuxDialer
-	wallet *wallet.SingleAddressWallet
+	// Indexer is a test utility combining an indexer, an http client for the
+	// indexer and useful helpers for testing.
+	Indexer struct {
+		*admin.Client
+		App func(types.PrivateKey) *app.Client
+
+		db     *postgres.Store
+		cm     *chain.Manager
+		dialer *client.SiamuxDialer
+		syncer *Syncer
+		wallet *wallet.SingleAddressWallet
+	}
+
+	// IndexerOpt is a functional option for configuring an indexer for testing
+	IndexerOpt func(*indexerCfg)
+
+	indexerCfg struct {
+		slabOpts []slabs.Option
+	}
+)
+
+// WithSlabOptions allows for passing slab options to the indexer
+func WithSlabOptions(opts ...slabs.Option) IndexerOpt {
+	return func(cfg *indexerCfg) {
+		cfg.slabOpts = opts
+	}
 }
 
-// NewIndexer creates a new indexer for testing that is automatically closed up
+// newIndexer creates a new indexer for testing that is automatically closed up
 // after the test is finished.
-func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger) *Indexer {
+func newIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger, opts ...IndexerOpt) *Indexer {
+	cfg := &indexerCfg{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
 	// prepare store
 	store := NewDB(t, log)
 
@@ -80,6 +104,11 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger) *Indexer {
 	contracts, err := contracts.NewManager(walletKey, am, c.cm, store, dialer, hm, s, wm, contracts.WithLogger(log.Named("contracts")), contracts.WithMaintenanceFrequency(250*time.Millisecond))
 	if err != nil {
 		t.Fatalf("failed to create contract manager: %v", err)
+	}
+
+	slabs, err := slabs.NewManager(am, hm, store, dialer, alerts.NewManager(), types.GeneratePrivateKey(), types.GeneratePrivateKey(), cfg.slabOpts...)
+	if err != nil {
+		t.Fatalf("failed to create slab manager: %v", err)
 	}
 
 	subscriber, err := subscriber.New(c.cm, hm, contracts, wm, store, subscriber.WithLogger(log.Named("subscriber")))
@@ -166,6 +195,9 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger) *Indexer {
 		if err := closeWithTimeout(am.Close); err != nil {
 			t.Errorf("failed to close account manager: %v", err)
 		}
+		if err := closeWithTimeout(slabs.Close); err != nil {
+			t.Errorf("failed to close slab manager: %v", err)
+		}
 		if err := closeWithTimeout(subscriber.Close); err != nil {
 			t.Errorf("failed to close subscriber: %v", err)
 		}
@@ -190,14 +222,14 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger) *Indexer {
 }
 
 // HostClient returns a host client for the given host public key.
-func (idx *Indexer) HostClient(hk types.PublicKey) *client.HostClient {
+func (idx *Indexer) HostClient(t *testing.T, hk types.PublicKey) *client.HostClient {
 	h, err := idx.db.Host(context.Background(), hk)
 	if err != nil {
-		panic(fmt.Sprintf("failed to get host %s: %v", hk, err)) // developer error
+		t.Fatalf("failed to get host %s: %v", hk, err) // developer error
 	}
 	hc, err := idx.dialer.DialHost(context.Background(), hk, h.SiamuxAddr())
 	if err != nil {
-		panic(fmt.Sprintf("failed to dial host %s: %v", hk, err)) // developer error
+		t.Fatalf("failed to dial host %s: %v", hk, err) // developer error
 	}
 	return hc
 }

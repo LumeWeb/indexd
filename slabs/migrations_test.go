@@ -111,15 +111,15 @@ func TestMigrateSlab(t *testing.T) {
 	}
 
 	// assert it's unhealthy
-	unhealthSlab, err := db.UnhealthySlab(context.Background(), time.Now())
+	unhealthySlabID, err := db.UnhealthySlab(context.Background(), time.Now())
 	if err != nil {
 		t.Fatal(err)
-	} else if unhealthSlab.ID != slabID {
-		t.Fatalf("expected slab ID %v, got %v", slabID, unhealthSlab.ID)
+	} else if unhealthySlabID != slabID {
+		t.Fatalf("expected slab ID %v, got %v", slabID, unhealthySlabID)
 	}
 
 	// migrate the slab
-	err = mgr.migrateSlabs(context.Background(), []Slab{unhealthSlab}, zap.NewNop())
+	err = mgr.migrateSlabs(context.Background(), []SlabID{unhealthySlabID}, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,11 +139,11 @@ func TestMigrateSlab(t *testing.T) {
 	}
 
 	// assert it's still unhealthy
-	unhealthSlab, err = db.UnhealthySlab(context.Background(), time.Now())
+	unhealthySlabID, err = db.UnhealthySlab(context.Background(), time.Now())
 	if err != nil {
 		t.Fatal(err)
-	} else if unhealthSlab.ID != slabID {
-		t.Fatalf("expected slab ID %v, got %v", slabID, unhealthSlab.ID)
+	} else if unhealthySlabID != slabID {
+		t.Fatalf("expected slab ID %v, got %v", slabID, unhealthySlabID)
 	}
 
 	// add another good host
@@ -157,7 +157,7 @@ func TestMigrateSlab(t *testing.T) {
 	db.contracts[h5.PublicKey] = c5
 
 	// migrate the slab again
-	err = mgr.migrateSlabs(context.Background(), []Slab{unhealthSlab}, zap.NewNop())
+	err = mgr.migrateSlabs(context.Background(), []SlabID{unhealthySlabID}, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}

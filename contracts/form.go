@@ -79,6 +79,9 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 	usedCidrs := make(map[string]types.PublicKey)
 	addHost := func(host hosts.Host) {
 		for _, cidr := range host.Networks {
+			if cidr.IP.IsPrivate() || cidr.IP.IsLoopback() || cidr.IP.IsUnspecified() {
+				continue
+			}
 			usedCidrs[cidr.IP.String()] = host.PublicKey
 		}
 		wanted--

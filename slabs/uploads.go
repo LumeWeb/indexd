@@ -73,8 +73,9 @@ func (m *SlabManager) uploadShards(ctx context.Context, shards [][]byte, goodHos
 	uploaded := make([]Shard, 0, len(shards))
 
 	var uploadErr error
-	for _, shard := range shards {
+	for i, shard := range shards {
 		if shard == nil {
+			fmt.Println("skipping nil shard", i)
 			continue
 		}
 
@@ -120,7 +121,7 @@ func (m *SlabManager) uploadShard(ctx context.Context, h hosts.Host, shard io.Re
 		return proto.Usage{}, types.Hash256{}, fmt.Errorf("failed to dial host: %w", err)
 	}
 
-	settings, err := client.Settings(ctx, h.PublicKey)
+	settings, err := client.Settings(ctx)
 	if err != nil {
 		return proto.Usage{}, types.Hash256{}, fmt.Errorf("failed to fetch host settings: %w", err)
 	}

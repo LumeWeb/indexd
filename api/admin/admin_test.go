@@ -2,7 +2,6 @@ package admin_test
 
 import (
 	"context"
-	"errors"
 	"os"
 	"reflect"
 	"strings"
@@ -23,8 +22,8 @@ import (
 )
 
 func TestAccountsAPI(t *testing.T) {
-	c := testutils.NewConsensusNode(t, zap.NewNop())
-	indexer := testutils.NewIndexer(t, c, zap.NewNop())
+	cluster := testutils.NewCluster(t)
+	indexer := cluster.Indexer
 
 	var accs []types.PublicKey
 	for range 10 {
@@ -108,22 +107,10 @@ func TestAccountsAPI(t *testing.T) {
 func TestContractsAPI(t *testing.T) {
 	// create cluster with one host
 	logger := newTestLogger(false)
-	c := testutils.NewConsensusNode(t, logger)
-	h := c.NewHost(t, types.GeneratePrivateKey(), zap.NewNop())
-
-	// create indexer
-	indexer := testutils.NewIndexer(t, c, logger)
-
-	// fund host and indexer wallet
-	c.MineBlocks(t, h.WalletAddress(), 1)
-	c.MineBlocks(t, indexer.WalletAddr(), 1)
-	c.MineBlocks(t, types.Address{}, c.Network().MaturityDelay)
-
-	// announce host
-	if err := h.Announce(); err != nil {
-		t.Fatal(err)
-	}
-	c.MineBlocks(t, types.Address{}, 1)
+	cluster := testutils.NewCluster(t, testutils.WithHosts(1), testutils.WithLogger(logger))
+	indexer := cluster.Indexer
+	c := cluster.ConsensusNode
+	h := cluster.Hosts[0]
 	time.Sleep(time.Second)
 
 	// assert it got scanned
@@ -225,10 +212,8 @@ func TestContractsAPI(t *testing.T) {
 }
 
 func TestExplorerAPI(t *testing.T) {
-	c := testutils.NewConsensusNode(t, zap.NewNop())
-	indexer := testutils.NewIndexer(t, c, zap.NewNop())
-
-	rate, err := indexer.ExplorerSiacoinExchangeRate(context.Background(), "usd")
+	cluster := testutils.NewCluster(t)
+	rate, err := cluster.Indexer.ExplorerSiacoinExchangeRate(context.Background(), "usd")
 	if err != nil {
 		t.Fatal(err)
 	} else if rate == 0 {
@@ -237,26 +222,14 @@ func TestExplorerAPI(t *testing.T) {
 }
 
 func TestHostsAPI(t *testing.T) {
-	// create cluster
-	c := testutils.NewConsensusNode(t, zap.NewNop())
-	h1 := c.NewHost(t, types.GeneratePrivateKey(), zap.NewNop())
-	h2 := c.NewHost(t, types.GeneratePrivateKey(), zap.NewNop())
-	indexer := testutils.NewIndexer(t, c, zap.NewNop())
-
-	// fund hosts
-	c.MineBlocks(t, h1.WalletAddress(), 1)
-	c.MineBlocks(t, h2.WalletAddress(), 1)
-	c.MineBlocks(t, types.Address{}, c.Network().MaturityDelay)
-
-	// announce hosts
-	err := errors.Join(h1.Announce(), h2.Announce())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// mine a block and allow hosts to be scanned
-	c.MineBlocks(t, types.Address{}, 1)
+	// create cluster with two hosts
+	cluster := testutils.NewCluster(t, testutils.WithHosts(2))
+	indexer := cluster.Indexer
 	time.Sleep(time.Second)
+
+	// convenience variables
+	h1 := cluster.Hosts[0]
+	h2 := cluster.Hosts[1]
 
 	// assert both hosts got scanned
 	if hosts, err := indexer.Hosts(context.Background()); err != nil {
@@ -364,8 +337,8 @@ func TestHostsAPI(t *testing.T) {
 }
 
 func TestSettingsAPI(t *testing.T) {
-	c := testutils.NewConsensusNode(t, zap.NewNop())
-	indexer := testutils.NewIndexer(t, c, zap.NewNop())
+	cluster := testutils.NewCluster(t)
+	indexer := cluster.Indexer
 
 	// assert contract settings can be fetched and updated
 	cs, err := indexer.SettingsContracts(context.Background())
@@ -437,10 +410,10 @@ func TestSettingsAPI(t *testing.T) {
 }
 
 func TestWalletAPI(t *testing.T) {
-	// create indexer
-	c := testutils.NewConsensusNode(t, zap.NewNop())
-	indexer := testutils.NewIndexer(t, c, zap.NewNop())
-	c.MineBlocks(t, indexer.WalletAddr(), 1)
+	// create cluster
+	cluster := testutils.NewCluster(t)
+	indexer := cluster.Indexer
+	c := cluster.ConsensusNode
 
 	// assert events are being persisted
 	events, err := indexer.WalletEvents(context.Background())

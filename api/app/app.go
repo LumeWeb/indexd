@@ -23,7 +23,7 @@ type (
 	// Store defines the store interface for the application API.
 	Store interface {
 		PinSlab(context.Context, proto.Account, time.Time, slabs.SlabPinParams) (slabs.SlabID, error)
-		Slab(context.Context, slabs.SlabID) (slabs.PinnedSlab, error)
+		PinnedSlab(context.Context, slabs.SlabID) (slabs.PinnedSlab, error)
 		SlabIDs(ctx context.Context, accountID proto.Account, offset, limit int) ([]slabs.SlabID, error)
 		UnpinSlab(context.Context, proto.Account, slabs.SlabID) error
 		UsableHosts(ctx context.Context, offset, limit int) ([]hosts.HostInfo, error)
@@ -80,7 +80,7 @@ func (a *app) handleGETSlab(jc jape.Context, pk types.PublicKey) {
 		return
 	}
 
-	slab, err := a.store.Slab(jc.Request.Context(), slabID)
+	slab, err := a.store.PinnedSlab(jc.Request.Context(), slabID)
 	if errors.Is(err, slabs.ErrSlabNotFound) {
 		jc.Error(slabs.ErrSlabNotFound, http.StatusNotFound)
 		return

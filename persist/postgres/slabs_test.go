@@ -14,7 +14,7 @@ import (
 	"lukechampine.com/frand"
 )
 
-func TestSlab(t *testing.T) {
+func TestPinnedSlab(t *testing.T) {
 	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
 	account := proto.Account{1}
 
@@ -62,7 +62,7 @@ func TestSlab(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	slab, err := store.Slab(context.Background(), slabID)
+	slab, err := store.PinnedSlab(context.Background(), slabID)
 	if err != nil {
 		t.Fatal(err)
 	} else if !reflect.DeepEqual(slab, expected) {
@@ -77,7 +77,7 @@ func TestSlab(t *testing.T) {
 	}
 
 	// assert the slab no longer contains the lost sectors
-	slab, err = store.Slab(context.Background(), slabID)
+	slab, err = store.PinnedSlab(context.Background(), slabID)
 	if err != nil {
 		t.Fatal(err)
 	}

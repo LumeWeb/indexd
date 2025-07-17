@@ -139,7 +139,6 @@ func (c *HostClient) FormContract(ctx context.Context, settings proto.HostSettin
 	if err != nil {
 		return rhp.RPCFormContractResult{}, fmt.Errorf("failed to form contract: %w", err)
 	}
-
 	return res, nil
 }
 
@@ -176,8 +175,8 @@ func (c *HostClient) FreeSectors(ctx context.Context, hostPrices proto.HostPrice
 }
 
 // ReadSector reads a sector from the host and writes it to the provided writer.
-func (c *HostClient) ReadSector(ctx context.Context, settings proto.HostSettings, token proto.AccountToken, root types.Hash256, w io.Writer, offset, length uint64) (rhp.RPCReadSectorResult, error) {
-	return rhp.RPCReadSector(ctx, c.client, settings.Prices, token, w, root, offset, length)
+func (c *HostClient) ReadSector(ctx context.Context, hostPrices proto.HostPrices, token proto.AccountToken, w io.Writer, root types.Hash256, offset, length uint64) (rhp.RPCReadSectorResult, error) {
+	return rhp.RPCReadSector(ctx, c.client, hostPrices, token, w, root, offset, length)
 }
 
 // RefreshContract refreshes the contract with the host.
@@ -254,6 +253,11 @@ func (c *HostClient) ReplenishAccounts(ctx context.Context, contractID types.Fil
 		return rhp.RPCReplenishAccountsResult{}, 0, fmt.Errorf("failed to replenish accounts: %w", err)
 	}
 	return res, funded, nil
+}
+
+// Settings returns the host settings.
+func (c *HostClient) Settings(ctx context.Context) (proto.HostSettings, error) {
+	return rhp.RPCSettings(ctx, c.client)
 }
 
 // WriteSector writes a sector to the host.
