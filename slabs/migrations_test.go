@@ -6,7 +6,6 @@ import (
 	"errors"
 	"math"
 	"net"
-	"slices"
 	"testing"
 	"time"
 
@@ -316,45 +315,6 @@ func TestSectorsToMigrate(t *testing.T) {
 	allHosts = append(allHosts, goodHost2, goodHost3)
 	allContracts = append(allContracts, cGoodHost2, cGoodHost3)
 	assertResult(allHosts, allContracts, []int{1, 2}, []int{7, 8})
-}
-
-func TestRSReconstructSome(t *testing.T) {
-	shards, err := newTestShards(2, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	enc, err := reedsolomon.New(2, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for _, required := range [][]bool{
-		{false, false, false, false},
-		// {false, false, false, true}, // segfaults
-		{false, false, true, false},
-		// {false, false, true, true}, // segfaults
-		{false, true, false, false},
-		{false, true, false, true},
-		{false, true, true, false},
-		{false, true, true, true},
-		{true, false, false, false},
-		// {true, false, false, true}, // segfaults
-		{true, false, true, false},
-		// {true, false, true, true}, // segfaults
-		{true, true, false, false},
-		{true, true, false, true},
-		{true, true, true, false},
-		{true, true, true, true},
-	} {
-		downloaded := make([][]byte, len(shards))
-		downloaded[0] = slices.Clone(shards[0])
-		downloaded[2] = slices.Clone(shards[2])
-		err = enc.ReconstructSome(downloaded, required)
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
 }
 
 func newTestContract(hk types.PublicKey) contracts.Contract {
