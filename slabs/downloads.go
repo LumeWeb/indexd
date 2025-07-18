@@ -123,7 +123,6 @@ outer:
 				logger.Debug("failed to download shard", zap.Error(err))
 				return
 			}
-			fmt.Println("downloaded shard", "index", sectorIdx, slab.Sectors[sectorIdx].Root, slab.Sectors[sectorIdx].HostKey, "data", shards[sectorIdx][:6], "length", len(shards[sectorIdx]))
 
 			err = m.am.DebitServiceAccount(ctx, host.PublicKey, m.migrationAccount, usage.RenterCost())
 			if err != nil {

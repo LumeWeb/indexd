@@ -53,9 +53,9 @@ type (
 		*admin.Client
 		App func(types.PrivateKey) *app.Client
 
-		db     *postgres.Store
 		cm     *chain.Manager
 		dialer *client.SiamuxDialer
+		store  *postgres.Store
 		syncer *Syncer
 		wallet *wallet.SingleAddressWallet
 	}
@@ -213,17 +213,22 @@ func newIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger, opts ...Indexer
 			return client
 		},
 
-		db:     store,
 		cm:     c.cm,
 		dialer: dialer,
+		store:  store,
 		syncer: syncer,
 		wallet: wm,
 	}
 }
 
+// Database returns the underlying store.
+func (idx *Indexer) Database() *postgres.Store {
+	return idx.store
+}
+
 // HostClient returns a host client for the given host public key.
 func (idx *Indexer) HostClient(t *testing.T, hk types.PublicKey) *client.HostClient {
-	h, err := idx.db.Host(context.Background(), hk)
+	h, err := idx.store.Host(context.Background(), hk)
 	if err != nil {
 		t.Fatalf("failed to get host %s: %v", hk, err) // developer error
 	}

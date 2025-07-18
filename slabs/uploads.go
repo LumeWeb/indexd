@@ -73,9 +73,8 @@ func (m *SlabManager) uploadShards(ctx context.Context, shards [][]byte, goodHos
 	uploaded := make([]Shard, 0, len(shards))
 
 	var uploadErr error
-	for i, shard := range shards {
+	for _, shard := range shards {
 		if shard == nil {
-			fmt.Println("skipping nil shard", i)
 			continue
 		}
 

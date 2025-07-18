@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"go.sia.tech/core/types"
+	"go.sia.tech/coreutils/chain"
+	"go.sia.tech/coreutils/testutil"
 	"go.sia.tech/coreutils/wallet"
 	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/api"
@@ -18,6 +20,7 @@ import (
 	"go.sia.tech/indexd/pins"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest"
 	"lukechampine.com/frand"
 )
 
@@ -221,6 +224,31 @@ func TestExplorerAPI(t *testing.T) {
 	}
 }
 
+func TestSyncerAPI(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	network, genesis := testutil.V2Network()
+	dbstore, tipState, err := chain.NewDBStore(chain.NewMemDB(), network, genesis, chain.NewZapMigrationLogger(log.Named("chaindb")))
+	if err != nil {
+		t.Fatalf("failed to create chain store: %v", err)
+	}
+	cm := chain.NewManager(dbstore, tipState, chain.WithLog(log.Named("chain")))
+	s := testutils.NewSyncer(t, genesis.ID(), cm)
+	defer s.Close()
+
+	if err := testutils.NewCluster(t).Indexer.SyncerConnect(s.Addr()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTxpoolAPI(t *testing.T) {
+	fee, err := testutils.NewCluster(t).Indexer.TxpoolRecommendedFee()
+	if err != nil {
+		t.Fatal(err)
+	} else if fee == types.ZeroCurrency {
+		t.Fatal("expected non-zero fee")
+	}
+}
+
 func TestHostsAPI(t *testing.T) {
 	// create cluster with two hosts
 	cluster := testutils.NewCluster(t, testutils.WithHosts(2))
@@ -333,6 +361,25 @@ func TestHostsAPI(t *testing.T) {
 		t.Fatal(err)
 	} else if len(notContracted) != 2 {
 		t.Fatalf("invalid number of hosts: %d", len(notContracted))
+	}
+
+	// manually scan host
+	host1, err := indexer.Host(context.Background(), h1.PublicKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanHost1, err := indexer.ScanHost(context.Background(), h1.PublicKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanHost1.LastSuccessfulScan = host1.LastSuccessfulScan
+	scanHost1.NextScan = host1.NextScan
+	scanHost1.RecentUptime = host1.RecentUptime
+	scanHost1.Settings.Prices.ValidUntil = host1.Settings.Prices.ValidUntil
+	scanHost1.Settings.Prices.Signature = host1.Settings.Prices.Signature
+
+	if !reflect.DeepEqual(host1, scanHost1) {
+		t.Fatalf("expected host %+v, got %+v", host1, scanHost1)
 	}
 }
 

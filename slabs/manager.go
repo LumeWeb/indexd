@@ -344,10 +344,8 @@ func (m *SlabManager) performSlabMigrations(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to fetch unhealthy slabs: %w", err)
 		} else if len(batch) == 0 {
-			fmt.Println("no more slabs to migrate")
 			break
 		}
-		fmt.Println("found slabs to migrate", batch)
 
 		err = m.migrateSlabs(ctx, batch, logger)
 		if errors.Is(err, context.Canceled) {
