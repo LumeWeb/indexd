@@ -259,6 +259,11 @@ func (c *HostClient) Settings(ctx context.Context) (proto.HostSettings, error) {
 	return rhp.RPCSettings(ctx, c.client)
 }
 
+// VerifySector verifies the integrity of a sector on the host.
+func (c *HostClient) VerifySector(ctx context.Context, hostPrices proto.HostPrices, token proto.AccountToken, root types.Hash256) (rhp.RPCVerifySectorResult, error) {
+	return rhp.RPCVerifySector(ctx, c.client, hostPrices, token, root)
+}
+
 // WriteSector writes a sector to the host.
 func (c *HostClient) WriteSector(ctx context.Context, settings proto.HostPrices, token proto.AccountToken, data io.Reader, length uint64) (rhp.RPCWriteSectorResult, error) {
 	// sanity check

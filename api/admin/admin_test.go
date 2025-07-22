@@ -184,7 +184,7 @@ func TestContractsAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	renewHeight := contract.ProofHeight - cs.RenewWindow + 1
+	renewHeight := contract.ProofHeight - cs.RenewWindow
 
 	// mine until contracts get renewed
 	ci, err := indexer.Tip()
@@ -193,7 +193,7 @@ func TestContractsAPI(t *testing.T) {
 	} else if ci.Height > renewHeight {
 		t.Fatal("unexpected")
 	}
-	c.MineBlocks(t, types.Address{}, renewHeight-ci.Height)
+	c.MineBlocks(t, types.Address{}, renewHeight-ci.Height+1)
 	time.Sleep(time.Second)
 
 	// assert contract was renewed - we don't pass the option here to asserts

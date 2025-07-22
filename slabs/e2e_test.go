@@ -98,13 +98,6 @@ func TestMigrationsE2E(t *testing.T) {
 	}
 }
 
-func newTestSector() (types.Hash256, [proto.SectorSize]byte) {
-	var sector [proto.SectorSize]byte
-	frand.Read(sector[:])
-	root := proto.SectorRoot(&sector)
-	return root, sector
-}
-
 func newTestShards(t *testing.T, dataShards, parityShards int) ([][]byte, []types.Hash256) {
 	enc, err := reedsolomon.New(dataShards, parityShards)
 	if err != nil {

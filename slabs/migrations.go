@@ -152,9 +152,6 @@ func sectorsToMigrate(slab Slab, allHosts []hosts.Host, goodContracts []contract
 		host, ok := hostsMap[contract.HostKey]
 		if ok && contract.GoodForUpload(host.Settings.Prices, host.Settings.MaxCollateral, period) {
 			goodContractMap[contract.ID] = contract
-		} else {
-			fmt.Println("good for upload", contract.GoodForUpload(host.Settings.Prices, host.Settings.MaxCollateral, period))
-			fmt.Println("skipping contract", contract.ID, "for host", contract.HostKey, "not good for upload")
 		}
 	}
 

@@ -77,16 +77,20 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 
 	// helpers for CIDR check
 	usedCidrs := make(map[string]types.PublicKey)
+	usedHosts := make(map[types.PublicKey]struct{})
 	addHost := func(host hosts.Host) {
 		for _, cidr := range host.Networks {
-			if cidr.IP.IsPrivate() || cidr.IP.IsLoopback() || cidr.IP.IsUnspecified() {
-				continue
+			usedHosts[host.PublicKey] = struct{}{}
+			if !(cidr.IP.IsPrivate() || cidr.IP.IsLoopback() || cidr.IP.IsUnspecified()) {
+				usedCidrs[cidr.IP.String()] = host.PublicKey
 			}
-			usedCidrs[cidr.IP.String()] = host.PublicKey
 		}
 		wanted--
 	}
-	hasCidrConflict := func(host hosts.Host) (types.PublicKey, bool) {
+	isUsed := func(host hosts.Host) (types.PublicKey, bool) {
+		if _, used := usedHosts[host.PublicKey]; used {
+			return host.PublicKey, true
+		}
 		for _, cidr := range host.Networks {
 			if hk, known := usedCidrs[cidr.IP.String()]; known {
 				return hk, true
@@ -102,7 +106,7 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 			// host should be good
 			hostLog.Debug("host is not usable due to bad usability")
 			return false
-		} else if usedBy, used := hasCidrConflict(host); used {
+		} else if usedBy, used := isUsed(host); used {
 			// host should be on a unique cidr
 			hostLog.Debug("host is not usable cidr is already in use", zap.Stringer("usedBy", usedBy))
 			return false

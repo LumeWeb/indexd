@@ -92,7 +92,7 @@ func newIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger, opts ...Indexer
 	wm := NewWallet(t, c, walletKey)
 
 	syncer := NewSyncer(t, c.genesis.ID(), c.cm)
-	hm, err := hosts.NewManager(syncer, store, hosts.WithLogger(log.Named("hosts")), hosts.WithScanFrequency(500*time.Millisecond), hosts.WithScanInterval(time.Second))
+	hm, err := hosts.NewManager(syncer, store, hosts.WithLogger(log.Named("hosts")), hosts.WithScanFrequency(200*time.Millisecond), hosts.WithScanInterval(time.Second))
 	if err != nil {
 		t.Fatalf("failed to create host manager: %v", err)
 	}
@@ -101,7 +101,7 @@ func newIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger, opts ...Indexer
 	dialer := client.NewSiamuxDialer(c.cm, signer, store, log)
 	am := accounts.NewManager(store, accounts.NewFunder(dialer), accounts.WithLogger(log.Named("accounts")))
 
-	contracts, err := contracts.NewManager(walletKey, am, c.cm, store, dialer, hm, s, wm, contracts.WithLogger(log.Named("contracts")), contracts.WithMaintenanceFrequency(250*time.Millisecond))
+	contracts, err := contracts.NewManager(walletKey, am, c.cm, store, dialer, hm, s, wm, contracts.WithLogger(log.Named("contracts")), contracts.WithMaintenanceFrequency(200*time.Millisecond))
 	if err != nil {
 		t.Fatalf("failed to create contract manager: %v", err)
 	}
@@ -237,6 +237,11 @@ func (idx *Indexer) HostClient(t *testing.T, hk types.PublicKey) *client.HostCli
 		t.Fatalf("failed to dial host %s: %v", hk, err) // developer error
 	}
 	return hc
+}
+
+// Store returns the underlying store.
+func (idx *Indexer) Store() *postgres.Store {
+	return idx.store
 }
 
 // Tip returns the current tip of the chain.
