@@ -29,6 +29,70 @@ func TestSlab(t *testing.T) {
 		hosts[i] = store.addTestHost(t)
 	}
 
+	// pin slab
+	params := slabs.SlabPinParams{
+		EncryptionKey: frand.Entropy256(),
+		MinShards:     10,
+		Sectors:       make([]slabs.SectorPinParams, 0, len(hosts)),
+	}
+	var expectedSectors []slabs.Sector
+	for _, host := range hosts {
+		root := frand.Entropy256()
+		params.Sectors = append(params.Sectors, slabs.SectorPinParams{
+			Root:    root,
+			HostKey: host,
+		})
+		expectedSectors = append(expectedSectors, slabs.Sector{
+			Root:       root,
+			HostKey:    &host,
+			ContractID: nil, // not pinned to a contract
+		})
+	}
+
+	// pin slab
+	slabID, err := store.PinSlab(context.Background(), account, time.Time{}, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// fetch slab
+	got, err := store.Slab(context.Background(), slabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// assert it matches the expected slab
+	expectedID, err := params.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := slabs.Slab{
+		ID:            expectedID,
+		EncryptionKey: params.EncryptionKey,
+		MinShards:     params.MinShards,
+		Sectors:       expectedSectors,
+		PinnedAt:      got.PinnedAt, // ignore pinned at
+	}
+	if !reflect.DeepEqual(got, expected) {
+		t.Fatalf("expected slab %v, got %v", expected, got)
+	}
+}
+
+func TestPinnedSlab(t *testing.T) {
+	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
+	account := proto.Account{1}
+
+	// add account
+	if err := store.AddAccount(context.Background(), types.PublicKey(account)); err != nil {
+		t.Fatal(err)
+	}
+
+	// add hosts
+	hosts := make([]types.PublicKey, 30)
+	for i := range hosts {
+		hosts[i] = store.addTestHost(t)
+	}
+
 	pinned := slabs.SlabPinParams{
 		EncryptionKey: frand.Entropy256(),
 		MinShards:     10,
@@ -62,7 +126,7 @@ func TestSlab(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	slab, err := store.Slab(context.Background(), slabID)
+	slab, err := store.PinnedSlab(context.Background(), slabID)
 	if err != nil {
 		t.Fatal(err)
 	} else if !reflect.DeepEqual(slab, expected) {
@@ -77,7 +141,7 @@ func TestSlab(t *testing.T) {
 	}
 
 	// assert the slab no longer contains the lost sectors
-	slab, err = store.Slab(context.Background(), slabID)
+	slab, err = store.PinnedSlab(context.Background(), slabID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +157,7 @@ func TestSlab(t *testing.T) {
 		}
 	}
 
-	_, err = store.Slab(context.Background(), slabID)
+	_, err = store.PinnedSlab(context.Background(), slabID)
 	if !errors.Is(err, slabs.ErrUnrecoverable) {
 		t.Fatalf("expected ErrUnrecoverable, got %v", err)
 	}
