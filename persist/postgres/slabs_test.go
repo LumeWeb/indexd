@@ -93,7 +93,7 @@ func TestPinnedSlab(t *testing.T) {
 		}
 	}
 
-	_, err = store.Slab(context.Background(), slabID)
+	_, err = store.PinnedSlab(context.Background(), slabID)
 	if !errors.Is(err, slabs.ErrUnrecoverable) {
 		t.Fatalf("expected ErrUnrecoverable, got %v", err)
 	}

@@ -37,7 +37,7 @@ const (
 )
 
 var (
-	testMaintenanceSettings = contracts.MaintenanceSettings{
+	MaintenanceSettings = contracts.MaintenanceSettings{
 		Enabled:         true,
 		Period:          144,
 		RenewWindow:     72,
@@ -64,9 +64,17 @@ type (
 	IndexerOpt func(*indexerCfg)
 
 	indexerCfg struct {
-		slabOpts []slabs.Option
+		slabOpts            []slabs.Option
+		maintenanceSettings contracts.MaintenanceSettings
 	}
 )
+
+// WithMaintenanceSettings allows for passing maintenance settings to the indexer
+func WithMaintenanceSettings(ms contracts.MaintenanceSettings) IndexerOpt {
+	return func(cfg *indexerCfg) {
+		cfg.maintenanceSettings = ms
+	}
+}
 
 // WithSlabOptions allows for passing slab options to the indexer
 func WithSlabOptions(opts ...slabs.Option) IndexerOpt {
@@ -78,13 +86,13 @@ func WithSlabOptions(opts ...slabs.Option) IndexerOpt {
 // newIndexer creates a new indexer for testing that is automatically closed up
 // after the test is finished.
 func newIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger, opts ...IndexerOpt) *Indexer {
-	cfg := &indexerCfg{}
+	cfg := &indexerCfg{maintenanceSettings: MaintenanceSettings}
 	for _, opt := range opts {
 		opt(cfg)
 	}
 
 	// prepare store
-	store := NewDB(t, log)
+	store := NewDB(t, cfg.maintenanceSettings, log)
 
 	s := NewSyncer(t, c.genesis.ID(), c.cm)
 

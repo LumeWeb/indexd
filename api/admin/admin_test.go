@@ -243,8 +243,11 @@ func TestTxpoolAPI(t *testing.T) {
 }
 
 func TestHostsAPI(t *testing.T) {
+	ms := testutils.MaintenanceSettings
+	ms.Enabled = false
+
 	// create cluster with two hosts
-	cluster := testutils.NewCluster(t, testutils.WithHosts(2))
+	cluster := testutils.NewCluster(t, testutils.WithHosts(2), testutils.WithIndexer(testutils.WithMaintenanceSettings(ms)))
 	indexer := cluster.Indexer
 	time.Sleep(time.Second)
 
@@ -465,22 +468,14 @@ func TestWalletAPI(t *testing.T) {
 		t.Fatalf("expected miner payout, %+v", events[0])
 	}
 
-	// assert wallet is empty
-	res, err := indexer.Wallet(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	} else if !res.Confirmed.Add(res.Unconfirmed).IsZero() {
-		t.Fatal("expected wallet to be empty")
-	}
-
 	// mine until funds mature
 	c.MineBlocks(t, types.Address{}, c.Network().MaturityDelay)
 
 	// assert wallet is funded
-	res, err = indexer.Wallet(context.Background())
+	res, err := indexer.Wallet(context.Background())
 	if err != nil {
 		t.Fatal(err)
-	} else if res.Confirmed.IsZero() {
+	} else if res.Confirmed.Cmp(c.Network().GenesisState().BlockReward()) != 0 {
 		t.Fatal("expected wallet to be funded")
 	} else if res.Address != indexer.WalletAddr() {
 		t.Fatal("invalid address")

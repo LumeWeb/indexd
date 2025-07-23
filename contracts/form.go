@@ -77,22 +77,23 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 
 	// helpers for CIDR check
 	usedCidrs := make(map[string]types.PublicKey)
-	usedHosts := make(map[types.PublicKey]struct{})
 	addHost := func(host hosts.Host) {
-		for _, cidr := range host.Networks {
-			usedHosts[host.PublicKey] = struct{}{}
-			if !(cidr.IP.IsPrivate() || cidr.IP.IsLoopback() || cidr.IP.IsUnspecified()) {
-				usedCidrs[cidr.IP.String()] = host.PublicKey
+		for _, network := range host.Networks {
+			cidr := network.IP.String()
+			if network.IP.IsUnspecified() {
+				cidr = host.PublicKey.String()
 			}
+			usedCidrs[cidr] = host.PublicKey
 		}
 		wanted--
 	}
 	isUsed := func(host hosts.Host) (types.PublicKey, bool) {
-		if _, used := usedHosts[host.PublicKey]; used {
-			return host.PublicKey, true
-		}
-		for _, cidr := range host.Networks {
-			if hk, known := usedCidrs[cidr.IP.String()]; known {
+		for _, network := range host.Networks {
+			cidr := network.IP.String()
+			if network.IP.IsUnspecified() {
+				cidr = host.PublicKey.String()
+			}
+			if hk, known := usedCidrs[cidr]; known {
 				return hk, true
 			}
 		}
@@ -148,7 +149,7 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 	// fetch all hosts that are usable and not blocked
 	var candidates []hosts.Host
 	for offset := 0; ; offset += batchSize {
-		batch, err := cm.store.Hosts(ctx, offset, batchSize, hosts.WithUsable(true), hosts.WithBlocked(false))
+		batch, err := cm.store.Hosts(ctx, offset, batchSize, hosts.WithUsable(true), hosts.WithBlocked(false), hosts.WithActiveContracts(false))
 		if err != nil {
 			return fmt.Errorf("failed to fetch hosts to form contracts with: %w", err)
 		}

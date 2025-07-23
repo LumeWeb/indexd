@@ -243,7 +243,7 @@ func (s *storeMock) Hosts(ctx context.Context, offset, limit int, queryOpts ...h
 		}
 		if opts.ActiveContracts != nil {
 			keep = keep && *opts.ActiveContracts == slices.ContainsFunc(s.contracts, func(contract Contract) bool {
-				return contract.HostKey == h.PublicKey
+				return contract.HostKey == h.PublicKey && contract.Good
 			})
 		}
 		if keep {

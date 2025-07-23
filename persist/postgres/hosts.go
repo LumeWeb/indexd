@@ -196,7 +196,7 @@ WHERE
 	-- blocked host filter
 	AND (($4::boolean IS NULL) OR ($4::boolean = hosts.blocked))
 	-- active contracts filter
-	AND (($5::boolean IS NULL) OR ($5::boolean = EXISTS (SELECT 1 FROM contracts WHERE host_id = hosts.id AND state >= $6 AND state <= $7)))
+	AND (($5::boolean IS NULL) OR ($5::boolean = EXISTS (SELECT 1 FROM contracts WHERE host_id = hosts.id AND state >= $6 AND state <= $7 AND good = TRUE)))
 	LIMIT $1 OFFSET $2
 ;`, limit, offset, opts.Good, opts.Blocked, opts.ActiveContracts, contracts.ContractStatePending, contracts.ContractStateActive)
 		if err != nil {

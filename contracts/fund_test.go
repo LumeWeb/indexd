@@ -102,11 +102,13 @@ func TestPerformAccountFunding(t *testing.T) {
 		ID:                 types.FileContractID{1},
 		HostKey:            hk1,
 		RemainingAllowance: types.Siacoins(1),
+		Good:               true,
 	})
 	store.contracts = append(store.contracts, Contract{
 		ID:                 types.FileContractID{2},
 		HostKey:            hk1,
 		RemainingAllowance: types.Siacoins(2),
+		Good:               true,
 	})
 
 	// add h2 with one contract
@@ -119,6 +121,7 @@ func TestPerformAccountFunding(t *testing.T) {
 		ID:                 types.FileContractID{3},
 		HostKey:            hk2,
 		RemainingAllowance: types.Siacoins(1),
+		Good:               true,
 	})
 
 	// add h3, which is unusable
@@ -128,6 +131,7 @@ func TestPerformAccountFunding(t *testing.T) {
 		ID:                 types.FileContractID{4},
 		HostKey:            hk3,
 		RemainingAllowance: types.Siacoins(1),
+		Good:               true,
 	})
 
 	// add h4, which is blocked
@@ -137,6 +141,7 @@ func TestPerformAccountFunding(t *testing.T) {
 		ID:                 types.FileContractID{5},
 		HostKey:            hk4,
 		RemainingAllowance: types.Siacoins(1),
+		Good:               true,
 	})
 
 	// fund accounts
@@ -147,7 +152,7 @@ func TestPerformAccountFunding(t *testing.T) {
 
 	// assert there were two calls, one for each usable host
 	if len(amMock.calls) != 2 {
-		t.Fatal("unexpected")
+		t.Fatal("unexpected", len(amMock.calls))
 	}
 	call1 := amMock.calls[0]
 	call2 := amMock.calls[1]

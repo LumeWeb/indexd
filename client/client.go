@@ -200,6 +200,13 @@ func (c *HostClient) RefreshContract(ctx context.Context, settings proto.HostSet
 func (c *HostClient) RenewContract(ctx context.Context, settings proto.HostSettings, contractID types.FileContractID, proofHeight uint64) (rhp.RPCRenewContractResult, error) {
 	var res rhp.RPCRenewContractResult
 	if err := c.withRevision(ctx, contractID, func(contract rhp.ContractRevision) (_ rhp.ContractRevision, err error) {
+		collateral := contract.Revision.TotalCollateral.Sub(contract.Revision.MissedHostValue)
+		allowance := contract.Revision.RenterOutput.Value
+		minAllowance := proto.MinRenterAllowance(settings.Prices, collateral)
+		if allowance.Cmp(minAllowance) < 0 {
+			allowance = minAllowance
+		}
+
 		// NOTE: when renewing a contract we keep the same allowance and collateral.
 		// This has the following advantages:
 		// 1. Contracts drain over time if they contain more funds than needed
@@ -207,8 +214,8 @@ func (c *HostClient) RenewContract(ctx context.Context, settings proto.HostSetti
 		//    additional funds. Only the fees need to be paid.
 		res, err = rhp.RPCRenewContract(ctx, c.client, c.cm, c.signer, c.cm.TipState(), settings.Prices, contract.Revision, proto.RPCRenewContractParams{
 			ContractID:  contractID,
-			Allowance:   contract.Revision.RenterOutput.Value,
-			Collateral:  contract.Revision.MissedHostValue,
+			Allowance:   allowance,
+			Collateral:  collateral,
 			ProofHeight: proofHeight,
 		})
 		if err != nil {
