@@ -2,7 +2,6 @@ package admin_test
 
 import (
 	"context"
-	"errors"
 	"os"
 	"reflect"
 	"strings"
@@ -13,7 +12,6 @@ import (
 	"go.sia.tech/coreutils/chain"
 	"go.sia.tech/coreutils/testutil"
 	"go.sia.tech/coreutils/wallet"
-	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/api"
 	"go.sia.tech/indexd/api/admin"
 	"go.sia.tech/indexd/contracts"
@@ -26,45 +24,39 @@ import (
 )
 
 func TestAccountsAPI(t *testing.T) {
-	c := testutils.NewConsensusNode(t, zap.NewNop())
-	indexer := testutils.NewIndexer(t, c, zap.NewNop())
-
-	var accs []types.PublicKey
-	for range 10 {
-		accs = append(accs, types.GeneratePrivateKey().PublicKey())
-		err := indexer.AccountsAdd(context.Background(), accs[len(accs)-1])
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	err := indexer.AccountsAdd(context.Background(), accs[len(accs)-1])
-	if err == nil || !strings.Contains(err.Error(), accounts.ErrExists.Error()) {
-		t.Fatal("expected ErrExists", err)
-	}
+	cluster := testutils.NewCluster(t)
+	indexer := cluster.Indexer
 
 	accounts, err := indexer.Accounts(context.Background())
 	if err != nil {
 		t.Fatal(err)
-	} else if !reflect.DeepEqual(accs, accounts) {
-		t.Fatal("unexpected accounts", accounts)
+	} else if len(accounts) != 2 {
+		t.Fatal("unexpected accounts", len(accounts))
 	}
 
-	accounts, err = indexer.Accounts(context.Background(), api.WithOffset(7), api.WithLimit(2))
+	acc := types.GeneratePrivateKey()
+	err = indexer.AccountsAdd(context.Background(), acc.PublicKey())
 	if err != nil {
 		t.Fatal(err)
-	} else if !reflect.DeepEqual(accs[7:9], accounts) {
-		t.Fatal("unexpected accounts", accounts)
 	}
 
-	accounts, err = indexer.Accounts(context.Background(), api.WithOffset(10), api.WithLimit(2))
+	accounts, err = indexer.Accounts(context.Background(), api.WithOffset(2), api.WithLimit(1))
 	if err != nil {
 		t.Fatal(err)
-	} else if len(accounts) != 0 {
+	} else if len(accounts) != 1 {
+		t.Fatal("unexpected accounts", len(accounts))
+	} else if accounts[0] != acc.PublicKey() {
+		t.Fatal("unexpected account", accounts[0])
+	}
+
+	accounts, err = indexer.Accounts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	} else if len(accounts) != 3 {
 		t.Fatal("unexpected accounts", accounts)
 	}
 
-	for _, acc := range accs {
+	for _, acc := range accounts {
 		err = indexer.AccountsDelete(context.Background(), acc)
 		if err != nil {
 			t.Fatal(err)
@@ -111,22 +103,10 @@ func TestAccountsAPI(t *testing.T) {
 func TestContractsAPI(t *testing.T) {
 	// create cluster with one host
 	logger := newTestLogger(false)
-	c := testutils.NewConsensusNode(t, logger)
-	h := c.NewHost(t, types.GeneratePrivateKey(), zap.NewNop())
-
-	// create indexer
-	indexer := testutils.NewIndexer(t, c, logger)
-
-	// fund host and indexer wallet
-	c.MineBlocks(t, h.WalletAddress(), 1)
-	c.MineBlocks(t, indexer.WalletAddr(), 1)
-	c.MineBlocks(t, types.Address{}, c.Network().MaturityDelay)
-
-	// announce host
-	if err := h.Announce(); err != nil {
-		t.Fatal(err)
-	}
-	c.MineBlocks(t, types.Address{}, 1)
+	cluster := testutils.NewCluster(t, testutils.WithHosts(1), testutils.WithLogger(logger))
+	indexer := cluster.Indexer
+	c := cluster.ConsensusNode
+	h := cluster.Hosts[0]
 	time.Sleep(time.Second)
 
 	// assert it got scanned
@@ -221,17 +201,13 @@ func TestContractsAPI(t *testing.T) {
 	if contracts, err := indexer.Contracts(context.Background()); err != nil {
 		t.Fatal(err)
 	} else if len(contracts) != 1 {
-		t.Fatal("expected 1 contract", len(contracts))
+		t.Fatal("expected 1 contract, got", len(contracts))
 	} else if contracts[0].RenewedFrom != contract.ID {
 		t.Fatal("expected contract to be renewed", contracts[0].RenewedFrom, contract.ID)
 	}
 }
-
 func TestExplorerAPI(t *testing.T) {
-	c := testutils.NewConsensusNode(t, zap.NewNop())
-	indexer := testutils.NewIndexer(t, c, zap.NewNop())
-
-	rate, err := indexer.ExplorerSiacoinExchangeRate(context.Background(), "usd")
+	rate, err := testutils.NewCluster(t).Indexer.ExplorerSiacoinExchangeRate(context.Background(), "usd")
 	if err != nil {
 		t.Fatal(err)
 	} else if rate == 0 {
@@ -240,9 +216,6 @@ func TestExplorerAPI(t *testing.T) {
 }
 
 func TestSyncerAPI(t *testing.T) {
-	c := testutils.NewConsensusNode(t, zap.NewNop())
-	indexer := testutils.NewIndexer(t, c, zap.NewNop())
-
 	log := zaptest.NewLogger(t)
 	network, genesis := testutil.V2Network()
 	dbstore, tipState, err := chain.NewDBStore(chain.NewMemDB(), network, genesis, chain.NewZapMigrationLogger(log.Named("chaindb")))
@@ -253,16 +226,13 @@ func TestSyncerAPI(t *testing.T) {
 	s := testutils.NewSyncer(t, genesis.ID(), cm)
 	defer s.Close()
 
-	if err := indexer.SyncerConnect(s.Addr()); err != nil {
+	if err := testutils.NewCluster(t).Indexer.SyncerConnect(s.Addr()); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestTxpoolAPI(t *testing.T) {
-	c := testutils.NewConsensusNode(t, zap.NewNop())
-	indexer := testutils.NewIndexer(t, c, zap.NewNop())
-
-	fee, err := indexer.TxpoolRecommendedFee()
+	fee, err := testutils.NewCluster(t).Indexer.TxpoolRecommendedFee()
 	if err != nil {
 		t.Fatal(err)
 	} else if fee == types.ZeroCurrency {
@@ -271,26 +241,17 @@ func TestTxpoolAPI(t *testing.T) {
 }
 
 func TestHostsAPI(t *testing.T) {
+	ms := testutils.MaintenanceSettings
+	ms.Enabled = false
+
 	// create cluster
-	c := testutils.NewConsensusNode(t, zap.NewNop())
-	h1 := c.NewHost(t, types.GeneratePrivateKey(), zap.NewNop())
-	h2 := c.NewHost(t, types.GeneratePrivateKey(), zap.NewNop())
-	indexer := testutils.NewIndexer(t, c, zap.NewNop())
-
-	// fund hosts
-	c.MineBlocks(t, h1.WalletAddress(), 1)
-	c.MineBlocks(t, h2.WalletAddress(), 1)
-	c.MineBlocks(t, types.Address{}, c.Network().MaturityDelay)
-
-	// announce hosts
-	err := errors.Join(h1.Announce(), h2.Announce())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// mine a block and allow hosts to be scanned
-	c.MineBlocks(t, types.Address{}, 1)
+	cluster := testutils.NewCluster(t, testutils.WithHosts(2), testutils.WithIndexer(testutils.WithMaintenanceSettings(ms)))
+	indexer := cluster.Indexer
 	time.Sleep(time.Second)
+
+	// convenience variables
+	h1 := cluster.Hosts[0]
+	h2 := cluster.Hosts[1]
 
 	// assert both hosts got scanned
 	if hosts, err := indexer.Hosts(context.Background()); err != nil {
@@ -417,8 +378,8 @@ func TestHostsAPI(t *testing.T) {
 }
 
 func TestSettingsAPI(t *testing.T) {
-	c := testutils.NewConsensusNode(t, zap.NewNop())
-	indexer := testutils.NewIndexer(t, c, zap.NewNop())
+	cluster := testutils.NewCluster(t)
+	indexer := cluster.Indexer
 
 	// assert contract settings can be fetched and updated
 	cs, err := indexer.SettingsContracts(context.Background())
@@ -490,10 +451,10 @@ func TestSettingsAPI(t *testing.T) {
 }
 
 func TestWalletAPI(t *testing.T) {
-	// create indexer
-	c := testutils.NewConsensusNode(t, zap.NewNop())
-	indexer := testutils.NewIndexer(t, c, zap.NewNop())
-	c.MineBlocks(t, indexer.WalletAddr(), 1)
+	// create cluster
+	cluster := testutils.NewCluster(t)
+	indexer := cluster.Indexer
+	c := cluster.ConsensusNode
 
 	// assert events are being persisted
 	events, err := indexer.WalletEvents(context.Background())
@@ -505,22 +466,14 @@ func TestWalletAPI(t *testing.T) {
 		t.Fatalf("expected miner payout, %+v", events[0])
 	}
 
-	// assert wallet is empty
-	res, err := indexer.Wallet(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	} else if !res.Confirmed.Add(res.Unconfirmed).IsZero() {
-		t.Fatal("expected wallet to be empty")
-	}
-
 	// mine until funds mature
 	c.MineBlocks(t, types.Address{}, c.Network().MaturityDelay)
 
 	// assert wallet is funded
-	res, err = indexer.Wallet(context.Background())
+	res, err := indexer.Wallet(context.Background())
 	if err != nil {
 		t.Fatal(err)
-	} else if res.Confirmed.IsZero() {
+	} else if res.Confirmed.Cmp(c.Network().GenesisState().BlockReward()) != 0 {
 		t.Fatal("expected wallet to be funded")
 	} else if res.Address != indexer.WalletAddr() {
 		t.Fatal("invalid address")

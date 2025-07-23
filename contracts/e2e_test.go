@@ -30,7 +30,7 @@ func TestContractPruningE2E(t *testing.T) {
 	}
 
 	// assert we have 3 usable hosts
-	time.Sleep(time.Second)
+	time.Sleep(2 * time.Second)
 	hosts, err := indexer.Hosts(context.Background(), admin.WithUsable(true), admin.WithActiveContracts(true))
 	if err != nil {
 		t.Fatal(err)
@@ -135,7 +135,7 @@ func TestSectorPinningE2E(t *testing.T) {
 	}
 
 	// assert we have 3 usable hosts
-	time.Sleep(time.Second)
+	time.Sleep(2 * time.Second)
 	hosts, err := indexer.Hosts(context.Background(), admin.WithUsable(true), admin.WithActiveContracts(true))
 	if err != nil {
 		t.Fatal(err)

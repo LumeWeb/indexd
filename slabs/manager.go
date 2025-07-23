@@ -87,7 +87,7 @@ type (
 		AddAccount(ctx context.Context, ak types.PublicKey) error
 		Contracts(ctx context.Context, offset, limit int, queryOpts ...contracts.ContractQueryOpt) ([]contracts.Contract, error)
 		Hosts(ctx context.Context, offset, limit int, queryOpts ...hosts.HostQueryOpt) ([]hosts.Host, error)
-		HostsForIntegrityChecks(ctx context.Context, limit int) ([]types.PublicKey, error)
+		HostsForIntegrityChecks(ctx context.Context, maxLastCheck time.Time, limit int) ([]types.PublicKey, error)
 		HostsWithLostSectors(ctx context.Context) ([]types.PublicKey, error)
 		MaintenanceSettings(ctx context.Context) (contracts.MaintenanceSettings, error)
 		MarkFailingSectorsLost(ctx context.Context, hostKey types.PublicKey, maxFailedIntegrityChecks uint) error
@@ -96,8 +96,9 @@ type (
 		PinSlab(ctx context.Context, account proto.Account, nextIntegrityCheck time.Time, slab SlabPinParams) (SlabID, error)
 		RecordIntegrityCheck(ctx context.Context, success bool, nextCheck time.Time, hostKey types.PublicKey, roots []types.Hash256) error
 		SectorsForIntegrityCheck(ctx context.Context, hostKey types.PublicKey, limit int) ([]types.Hash256, error)
+		Slab(ctx context.Context, slabID SlabID) (Slab, error)
 		Slabs(ctx context.Context, accountID proto.Account, slabIDs []SlabID) ([]Slab, error)
-		UnhealthySlab(ctx context.Context, maxRepairAttempt time.Time) (Slab, error)
+		UnhealthySlab(ctx context.Context, maxRepairAttempt time.Time) (SlabID, error)
 	}
 
 	// AlertsManager defines an interface to register alerts.
@@ -242,7 +243,7 @@ func (m *SlabManager) performIntegrityChecks(ctx context.Context) error {
 	logger.Debug("starting integrity checks", zap.Time("start", start))
 
 	for {
-		usedHosts, err := m.store.HostsForIntegrityChecks(ctx, 100)
+		usedHosts, err := m.store.HostsForIntegrityChecks(ctx, start, 100)
 		if err != nil {
 			return fmt.Errorf("failed to fetch hosts to block: %w", err)
 		} else if len(usedHosts) == 0 {
@@ -299,9 +300,9 @@ func (m *SlabManager) performSlabMigrations(ctx context.Context) error {
 	logger.Debug("starting slab migrations", zap.Time("start", start))
 
 	const slabsPerBatch = 10
-	nextBatch := func(ctx context.Context) (batch []Slab, _ error) {
+	nextBatch := func(ctx context.Context) (batch []SlabID, _ error) {
 		for len(batch) < slabsPerBatch {
-			slab, err := m.store.UnhealthySlab(ctx, start)
+			slabID, err := m.store.UnhealthySlab(ctx, start)
 			if errors.Is(err, ErrSlabNotFound) {
 				return batch, nil
 			} else if errors.Is(err, context.Canceled) {
@@ -309,7 +310,7 @@ func (m *SlabManager) performSlabMigrations(ctx context.Context) error {
 			} else if err != nil {
 				return nil, err
 			}
-			batch = append(batch, slab)
+			batch = append(batch, slabID)
 		}
 		return
 	}
