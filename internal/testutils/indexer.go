@@ -64,7 +64,6 @@ type (
 	IndexerOpt func(*indexerCfg)
 
 	indexerCfg struct {
-		slabOpts            []slabs.Option
 		maintenanceSettings contracts.MaintenanceSettings
 	}
 )
@@ -73,13 +72,6 @@ type (
 func WithMaintenanceSettings(ms contracts.MaintenanceSettings) IndexerOpt {
 	return func(cfg *indexerCfg) {
 		cfg.maintenanceSettings = ms
-	}
-}
-
-// WithSlabOptions allows for passing slab options to the indexer
-func WithSlabOptions(opts ...slabs.Option) IndexerOpt {
-	return func(cfg *indexerCfg) {
-		cfg.slabOpts = opts
 	}
 }
 
@@ -112,7 +104,7 @@ func newIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger, opts ...Indexer
 		t.Fatalf("failed to create contract manager: %v", err)
 	}
 
-	slabs, err := slabs.NewManager(am, hm, store, dialer, alerts.NewManager(), types.GeneratePrivateKey(), types.GeneratePrivateKey(), cfg.slabOpts...)
+	slabs, err := slabs.NewManager(am, hm, store, dialer, alerts.NewManager(), types.GeneratePrivateKey(), types.GeneratePrivateKey())
 	if err != nil {
 		t.Fatalf("failed to create slab manager: %v", err)
 	}

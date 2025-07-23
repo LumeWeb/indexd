@@ -80,7 +80,7 @@ func (cm *ContractManager) refreshContract(ctx context.Context, contract Contrac
 		hc, err := cm.dialer.DialHost(ctx, host.PublicKey, host.SiamuxAddr())
 		if err != nil {
 			contractLog.Debug("failed to dial host", zap.Error(err))
-			return fmt.Errorf("failed to dial host: %w", err)
+			return nil
 		}
 		defer hc.Close()
 		res, err := hc.RefreshContract(ctx, host.Settings, proto.RPCRefreshContractParams{
@@ -90,7 +90,7 @@ func (cm *ContractManager) refreshContract(ctx context.Context, contract Contrac
 		})
 		if err != nil {
 			contractLog.Debug("failed to renew", zap.Error(err))
-			return fmt.Errorf("failed to refresh contract: %w", err)
+			return nil
 		}
 		renewed := res.Contract
 		minerFee := res.RenewalSet.Transactions[len(res.RenewalSet.Transactions)-1].MinerFee
