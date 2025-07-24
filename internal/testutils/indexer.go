@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"go.sia.tech/core/blake2b"
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/chain"
 	"go.sia.tech/coreutils/wallet"
@@ -68,6 +69,12 @@ type (
 	}
 )
 
+func defaultIndexerCfg() *indexerCfg {
+	return &indexerCfg{
+		maintenanceSettings: MaintenanceSettings,
+	}
+}
+
 // WithMaintenanceSettings allows for passing maintenance settings to the indexer
 func WithMaintenanceSettings(ms contracts.MaintenanceSettings) IndexerOpt {
 	return func(cfg *indexerCfg) {
@@ -75,8 +82,10 @@ func WithMaintenanceSettings(ms contracts.MaintenanceSettings) IndexerOpt {
 	}
 }
 
-func newIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger, opts ...IndexerOpt) *Indexer {
-	cfg := &indexerCfg{maintenanceSettings: MaintenanceSettings}
+// NewIndexer creates a new indexer for testing that is automatically closed up
+// after the test is finished.
+func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger, opts ...IndexerOpt) *Indexer {
+	cfg := defaultIndexerCfg()
 	for _, opt := range opts {
 		opt(cfg)
 	}
@@ -99,12 +108,12 @@ func newIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger, opts ...Indexer
 	dialer := client.NewSiamuxDialer(c.cm, signer, store, log)
 	am := accounts.NewManager(store, accounts.NewFunder(dialer), accounts.WithLogger(log.Named("accounts")))
 
-	contracts, err := contracts.NewManager(walletKey, am, c.cm, store, dialer, hm, s, wm, contracts.WithLogger(log.Named("contracts")), contracts.WithMaintenanceFrequency(200*time.Millisecond))
+	contracts, err := contracts.NewManager(walletKey, am, c.cm, store, dialer, hm, s, wm, contracts.WithLogger(log.Named("contracts")), contracts.WithMaintenanceFrequency(200*time.Millisecond), contracts.WithDisabledCIDRChecks())
 	if err != nil {
 		t.Fatalf("failed to create contract manager: %v", err)
 	}
 
-	slabs, err := slabs.NewManager(am, hm, store, dialer, alerts.NewManager(), types.GeneratePrivateKey(), types.GeneratePrivateKey())
+	slabs, err := slabs.NewManager(am, hm, store, dialer, alerts.NewManager(), deriveKey(walletKey, "migration"), deriveKey(walletKey, "service"))
 	if err != nil {
 		t.Fatalf("failed to create slab manager: %v", err)
 	}
@@ -267,6 +276,15 @@ func closeWithTimeout(closeFn func() error) error {
 	})
 
 	return closeFn()
+}
+
+func deriveKey(sk types.PrivateKey, name string) types.PrivateKey {
+	seed := blake2b.Sum256(append(sk[:], []byte(name)...))
+	pk := types.NewPrivateKeyFromSeed(seed[:])
+	for i := range seed {
+		seed[i] = 0
+	}
+	return pk
 }
 
 // shutdownWithTimeout is a wrapper around closeWithTimeout to handle shutdown

@@ -37,7 +37,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func runRootCmd(ctx context.Context, cfg config.Config, walletKey, migrationAccount, serviceAccount types.PrivateKey, network *consensus.Network, genesis types.Block, log *zap.Logger) error {
+func runRootCmd(ctx context.Context, cfg config.Config, walletKey types.PrivateKey, network *consensus.Network, genesis types.Block, log *zap.Logger) error {
 	store, err := postgres.NewStore(ctx, cfg.Database, contracts.DefaultMaintenanceSettings, hosts.DefaultUsabilitySettings, log.Named("postgres"))
 	if err != nil {
 		return fmt.Errorf("failed to create postgres store: %w", err)
@@ -122,7 +122,7 @@ func runRootCmd(ctx context.Context, cfg config.Config, walletKey, migrationAcco
 	}
 	defer contracts.Close()
 
-	slabs, err := slabs.NewManager(am, hm, store, dialer, alerts.NewManager(), types.GeneratePrivateKey(), types.GeneratePrivateKey())
+	slabs, err := slabs.NewManager(am, hm, store, dialer, alerts.NewManager(), walletKey, walletKey)
 	if err != nil {
 		return fmt.Errorf("failed to create slab manager: %w", err)
 	}

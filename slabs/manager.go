@@ -155,7 +155,7 @@ func NewManager(am AccountManager, hm HostManager, store Store, dialer *client.S
 	return sm, nil
 }
 
-func newSlabManager(am AccountManager, hm HostManager, store Store, dialer Dialer, alerter AlertsManager, migrationAccount, serviceAccount types.PrivateKey, opts ...Option) (*SlabManager, error) {
+func newSlabManager(am AccountManager, hm HostManager, store Store, dialer Dialer, alerter AlertsManager, migrationAccount, integrityAccount types.PrivateKey, opts ...Option) (*SlabManager, error) {
 	m := &SlabManager{
 		integrityCheckInterval:       7 * 24 * time.Hour,
 		failedIntegrityCheckInterval: 6 * time.Hour,
@@ -171,7 +171,7 @@ func newSlabManager(am AccountManager, hm HostManager, store Store, dialer Diale
 		dialer:   dialer,
 		hm:       hm,
 		store:    store,
-		verifier: NewSectorVerifier(am, dialer, serviceAccount),
+		verifier: NewSectorVerifier(am, dialer, integrityAccount),
 		alerter:  alerter,
 		tg:       threadgroup.New(),
 		log:      zap.NewNop(),
@@ -181,18 +181,27 @@ func newSlabManager(am AccountManager, hm HostManager, store Store, dialer Diale
 	}
 
 	// add accounts to store
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := store.AddAccount(ctx, types.PublicKey(m.migrationAccount)); err != nil && !errors.Is(err, accounts.ErrExists) {
-		return nil, fmt.Errorf("failed to add migration account: %w", err)
-	} else if err := store.AddAccount(ctx, types.PublicKey(proto.Account(serviceAccount.PublicKey()))); err != nil && !errors.Is(err, accounts.ErrExists) {
-		return nil, fmt.Errorf("failed to add service account: %w", err)
+	err := ensureAccount(store, integrityAccount, migrationAccount)
+	if err != nil {
+		return nil, fmt.Errorf("failed to ensure service account: %w", err)
 	}
 
 	// let AccountManager know about the service accounts
-	am.RegisterServiceAccount(m.migrationAccount)
-	am.RegisterServiceAccount(proto.Account(serviceAccount.PublicKey()))
+	am.RegisterServiceAccount(proto.Account(migrationAccount.PublicKey()))
+	am.RegisterServiceAccount(proto.Account(integrityAccount.PublicKey()))
 	return m, nil
+}
+
+func ensureAccount(s Store, pks ...types.PrivateKey) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	for _, account := range pks {
+		if err := s.AddAccount(ctx, account.PublicKey()); err != nil && !errors.Is(err, accounts.ErrExists) {
+			return fmt.Errorf("failed to add account %s: %w", account, err)
+		}
+	}
+	return nil
 }
 
 // Close closes the manager.

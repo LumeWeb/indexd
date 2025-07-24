@@ -359,10 +359,6 @@ func main() {
 		defer log.Sync()
 		zap.RedirectStdLog(log.Named("stdlib"))
 
-		// TODO: allow configuring these keys or derive them from a master key
-		migrationAccount := types.GeneratePrivateKey()
-		serviceAccount := types.GeneratePrivateKey()
-
-		checkFatalError("daemon startup failed", runRootCmd(ctx, cfg, walletKey, migrationAccount, serviceAccount, network, genesis, log))
+		checkFatalError("daemon startup failed", runRootCmd(ctx, cfg, walletKey, network, genesis, log))
 	}
 }

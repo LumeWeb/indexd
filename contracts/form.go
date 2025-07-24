@@ -78,19 +78,21 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 	// helpers for CIDR check
 	usedCidrs := make(map[string]types.PublicKey)
 	addHost := func(host hosts.Host) {
+		if cm.disableCIDRChecks {
+			usedCidrs[host.PublicKey.String()] = host.PublicKey
+			wanted--
+			return
+		}
 		for _, network := range host.Networks {
-			// in testing the host's IP is often unspecified, to ensure we don't
-			// form multiple contracts with the same host we use the host's
-			// public key as the CIDR
-			cidr := network.IP.String()
-			if network.IP.IsUnspecified() {
-				cidr = host.PublicKey.String()
-			}
-			usedCidrs[cidr] = host.PublicKey
+			usedCidrs[network.IP.String()] = host.PublicKey
 		}
 		wanted--
 	}
 	hasCidrConflict := func(host hosts.Host) (types.PublicKey, bool) {
+		if cm.disableCIDRChecks {
+			hk, known := usedCidrs[host.PublicKey.String()]
+			return hk, known
+		}
 		for _, network := range host.Networks {
 			cidr := network.IP.String()
 			if network.IP.IsUnspecified() {
