@@ -80,11 +80,10 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 	addHost := func(host hosts.Host) {
 		if cm.disableCIDRChecks {
 			usedCidrs[host.PublicKey.String()] = host.PublicKey
-			wanted--
-			return
-		}
-		for _, network := range host.Networks {
-			usedCidrs[network.IP.String()] = host.PublicKey
+		} else {
+			for _, network := range host.Networks {
+				usedCidrs[network.IP.String()] = host.PublicKey
+			}
 		}
 		wanted--
 	}
