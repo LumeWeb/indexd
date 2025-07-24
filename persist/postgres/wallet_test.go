@@ -150,9 +150,11 @@ func TestSingleAddressWalletStoreTip(t *testing.T) {
 		t.Fatal("unexpected tip", ci)
 	}
 
-	update := types.ChainIndex{Height: 1, ID: types.BlockID{1}}
+	update := newTestChainIndex()
 	if _, err := store.pool.Exec(context.Background(), `UPDATE global_settings SET scanned_height = $1, scanned_block_id = $2`, update.Height, sqlHash256(update.ID)); err != nil {
 		t.Fatal(err)
+	} else if update == (types.ChainIndex{}) {
+		t.Fatal("unexpected tip", ci)
 	}
 
 	ci, err = store.Tip()
