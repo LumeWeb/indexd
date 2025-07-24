@@ -80,6 +80,7 @@ func TestPerformContractRefreshes(t *testing.T) {
 	const (
 		proofHeight      = 100
 		expirationHeight = 200
+		period           = 300
 	)
 
 	formContract := func(contractID types.FileContractID, hostKey types.PublicKey, good, oof, ooc bool) {
@@ -166,7 +167,7 @@ func TestPerformContractRefreshes(t *testing.T) {
 		}
 	}
 
-	if err := contracts.performContractRefreshes(context.Background(), zap.NewNop()); err != nil {
+	if err := contracts.performContractRefreshes(context.Background(), period, zap.NewNop()); err != nil {
 		t.Fatal(err)
 	} else if len(dialer.HostClient(good.PublicKey).refreshCalls) != 4 {
 		t.Fatalf("expected 4 refresh calls, got %v", len(dialer.HostClient(good.PublicKey).refreshCalls))

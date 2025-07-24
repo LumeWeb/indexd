@@ -503,3 +503,118 @@ func newTestRevision(hk types.PublicKey) types.V2FileContract {
 		TotalCollateral:  types.Siacoins(100),
 	}
 }
+
+func TestContractFunding(t *testing.T) {
+	defaultSettings := proto.HostSettings{
+		MaxCollateral: types.Siacoins(1), // unattainable
+		Prices: proto.HostPrices{
+			StoragePrice: types.NewCurrency64(1), // 1 H/byte/block
+			IngressPrice: types.NewCurrency64(1), // 1 H/byte/block
+			EgressPrice:  types.NewCurrency64(1), // 1 H/byte/block
+			Collateral:   types.NewCurrency64(2), // 2 H/byte/block
+		},
+	}
+
+	calcCost := func(settings proto.HostSettings, sectors uint64) (types.Currency, types.Currency) {
+		uploadCost := settings.Prices.RPCWriteSectorCost(proto.SectorSize).RenterCost().Mul64(sectors)
+		downloadCost := settings.Prices.RPCReadSectorCost(proto.SectorSize).RenterCost().Mul64(sectors)
+		storeCost := settings.Prices.RPCAppendSectorsCost(sectors, 1).RenterCost()
+		expectedAllowance := storeCost.Add(uploadCost).Add(downloadCost)
+		expectedCollateral := proto.MaxHostCollateral(settings.Prices, storeCost)
+		return expectedAllowance, expectedCollateral
+	}
+
+	tests := []struct {
+		name            string
+		initialDataSize uint64
+		minAllowance    types.Currency
+		minCollateral   types.Currency
+		modSettings     func(settings *proto.HostSettings)
+		calc            func(settings proto.HostSettings) (expectedAllowance types.Currency, expectedCollateral types.Currency)
+	}{
+		{
+			name:            "empty contract",
+			initialDataSize: 0,
+			calc: func(settings proto.HostSettings) (expectedAllowance types.Currency, expectedCollateral types.Currency) {
+				return calcCost(settings, minContractGrowthRate/proto.SectorSize) // value should be minimum growth rate
+			},
+		},
+		{
+			name:            "clamped to min values",
+			initialDataSize: 0,
+			minAllowance:    types.Siacoins(1),
+			minCollateral:   types.Siacoins(1),
+			calc: func(settings proto.HostSettings) (expectedAllowance types.Currency, expectedCollateral types.Currency) {
+				return types.Siacoins(1), types.Siacoins(1) // clamped to min
+			},
+		},
+		{
+			name:            "clamped to min allowance",
+			initialDataSize: 0,
+			minAllowance:    types.Siacoins(10),
+			calc: func(settings proto.HostSettings) (expectedAllowance types.Currency, expectedCollateral types.Currency) {
+				_, expectedCollateral = calcCost(settings, minContractGrowthRate/proto.SectorSize) // value should be minimum growth rate
+				return types.Siacoins(10), expectedCollateral                                      // clamped to min allowance
+			},
+		},
+		{
+			name:            "clamped to min collateral",
+			initialDataSize: 0,
+			minCollateral:   types.Siacoins(10),
+			calc: func(settings proto.HostSettings) (expectedAllowance types.Currency, expectedCollateral types.Currency) {
+				expectedAllowance, _ = calcCost(settings, minContractGrowthRate/proto.SectorSize) // value should be minimum growth rate
+				return expectedAllowance, types.Siacoins(10)                                      // clamped to min collateral
+			},
+		},
+		{
+			name:            "data less than min growth rate",
+			initialDataSize: 100,
+			calc: func(settings proto.HostSettings) (expectedAllowance types.Currency, expectedCollateral types.Currency) {
+				return calcCost(settings, minContractGrowthRate/proto.SectorSize) // value should still be minimum growth rate
+			},
+		},
+		{
+			name:            "data close to min growth rate",
+			initialDataSize: 100 << 30, // 100 GiB
+			calc: func(settings proto.HostSettings) (expectedAllowance types.Currency, expectedCollateral types.Currency) {
+				return calcCost(settings, (128<<30)/proto.SectorSize) // value should be closest multiple of 32 GiB
+			},
+		},
+		{
+			name:            "data over max growth rate",
+			initialDataSize: 500 << 30, // 500 GiB
+			calc: func(settings proto.HostSettings) (expectedAllowance types.Currency, expectedCollateral types.Currency) {
+				return calcCost(settings, maxContractGrowthRate/proto.SectorSize) // clamped to max
+			},
+		},
+		{
+			name:            "data over max growth rate clamped to max collateral",
+			initialDataSize: 3 << 40, // 3 TiB
+			modSettings: func(settings *proto.HostSettings) {
+				settings.MaxCollateral = types.NewCurrency64(10) // want to test that collateral is clamped to the host's max
+			},
+			calc: func(settings proto.HostSettings) (expectedAllowance types.Currency, expectedCollateral types.Currency) {
+				expectedAllowance, _ = calcCost(settings, maxContractGrowthRate/proto.SectorSize) // clamped to max
+				expectedCollateral = types.NewCurrency64(10)                                      // clamped to the host's max collateral)
+				return
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			settings := defaultSettings
+			if test.modSettings != nil {
+				test.modSettings(&settings)
+			}
+			expectedAllowance, expectedCollateral := test.calc(settings)
+			allowance, collateral := contractFunding(settings, test.initialDataSize, test.minAllowance, test.minCollateral, 1)
+			if !allowance.Equals(expectedAllowance) {
+				t.Errorf("expected allowance %v but got %v", expectedAllowance, allowance)
+			}
+			if !collateral.Equals(expectedCollateral) {
+				t.Errorf("expected collateral %v but got %v", expectedCollateral, collateral)
+			}
+		})
+	}
+}
