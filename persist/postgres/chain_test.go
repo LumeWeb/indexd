@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"errors"
-	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -36,12 +35,8 @@ func TestResetChainState(t *testing.T) {
 		}
 	}
 
-	// prepare random index
-	var bID types.BlockID
-	frand.Read(bID[:])
-	index := types.ChainIndex{Height: frand.Uint64n(math.MaxInt64), ID: bID}
-
 	// prepare test elements and events
+	index := newTestChainIndex()
 	utxos := []types.SiacoinOutputID{frand.Entropy256()}
 	created := []types.SiacoinElement{newTestSiacoinElement()}
 	events := []wallet.Event{newTestEvent()}
