@@ -183,8 +183,14 @@ func (c *HostClient) ReadSector(ctx context.Context, hostPrices proto.HostPrices
 func (c *HostClient) RefreshContract(ctx context.Context, settings proto.HostSettings, params proto.RPCRefreshContractParams) (rhp.RPCRefreshContractResult, error) {
 	var res rhp.RPCRefreshContractResult
 	if err := c.withRevision(ctx, params.ContractID, func(contract rhp.ContractRevision) (_ rhp.ContractRevision, err error) {
-		res, err = rhp.RPCRefreshContract(ctx, c.client, c.cm, c.signer, c.cm.TipState(), settings.Prices, contract.Revision, params)
-		return res.Contract, err
+		res, err = rhp.RPCRefreshContract(ctx, c.client, c.cm, c.signer, c.cm.TipState(), settings.Prices, contract.Revision, proto.RPCRefreshContractParams{
+			Allowance:  contract.Revision.RenterOutput.Value,
+			Collateral: contract.Revision.MissedHostValue,
+		})
+		if err != nil {
+			return rhp.ContractRevision{}, err
+		}
+		return res.Contract, nil
 	}); err != nil {
 		return rhp.RPCRefreshContractResult{}, fmt.Errorf("failed to refresh contract: %w", err)
 	}
