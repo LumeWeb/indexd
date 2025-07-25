@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
@@ -24,8 +25,9 @@ type Dialer struct {
 	c      AppClient
 	appKey types.PrivateKey
 
-	addrs map[types.PublicKey][]chain.NetAddress
-	conns map[types.PublicKey]rhp.TransportClient
+	addrs          map[types.PublicKey][]chain.NetAddress
+	conns          map[types.PublicKey]rhp.TransportClient
+	cachedSettings map[types.PublicKey]proto.HostSettings
 }
 
 func newDialer(c AppClient, appKey types.PrivateKey) *Dialer {
@@ -33,8 +35,9 @@ func newDialer(c AppClient, appKey types.PrivateKey) *Dialer {
 		c:      c,
 		appKey: appKey,
 
-		addrs: make(map[types.PublicKey][]chain.NetAddress),
-		conns: make(map[types.PublicKey]rhp.TransportClient),
+		addrs:          make(map[types.PublicKey][]chain.NetAddress),
+		conns:          make(map[types.PublicKey]rhp.TransportClient),
+		cachedSettings: make(map[types.PublicKey]proto.HostSettings),
 	}
 }
 
@@ -107,6 +110,10 @@ func (d *Dialer) settings(ctx context.Context, hostKey types.PublicKey) (rhp.Tra
 		return nil, proto.HostPrices{}, fmt.Errorf("failed to dial host: %w", err)
 	}
 
+	if settings, ok := d.cachedSettings[hostKey]; ok && time.Now().Before(settings.Prices.ValidUntil) {
+		return tc, settings.Prices, nil
+	}
+
 	settings, err := rhp.RPCSettings(ctx, tc)
 	if proto.ErrorCode(err) == proto.ErrorCodeTransport {
 		tc, err = d.dialHost(ctx, hostKey, false)
@@ -120,6 +127,7 @@ func (d *Dialer) settings(ctx context.Context, hostKey types.PublicKey) (rhp.Tra
 	} else if err != nil {
 		return nil, proto.HostPrices{}, fmt.Errorf("failed to get settings: %w", err)
 	}
+	d.cachedSettings[hostKey] = settings
 
 	return tc, settings.Prices, nil
 }
