@@ -11,6 +11,7 @@ import (
 	"go.sia.tech/coreutils/rhp/v4"
 	"go.sia.tech/coreutils/rhp/v4/quic"
 	"go.sia.tech/coreutils/rhp/v4/siamux"
+	"go.sia.tech/indexd/api"
 	"go.sia.tech/indexd/hosts"
 )
 
@@ -37,17 +38,24 @@ func newDialer(c AppClient, appKey types.PrivateKey) *Dialer {
 // Hosts returns the public keys of all hosts that are available for
 // upload or download.
 func (d *Dialer) Hosts(ctx context.Context) ([]types.PublicKey, error) {
-	hosts, err := d.c.Hosts(ctx)
-	if err != nil {
-		return nil, err
-	}
-
 	clear(d.hosts)
-	pks := make([]types.PublicKey, 0, len(hosts))
+	offset, limit := 0, 100
+	var pks []types.PublicKey
+	for {
+		hosts, err := d.c.Hosts(ctx, api.WithOffset(offset), api.WithLimit(limit))
+		if err != nil {
+			return nil, err
+		}
 
-	for _, host := range hosts {
-		pks = append(pks, host.PublicKey)
-		d.hosts[host.PublicKey] = host
+		for _, host := range hosts {
+			pks = append(pks, host.PublicKey)
+			d.hosts[host.PublicKey] = host
+		}
+
+		offset += len(hosts)
+		if len(hosts) < limit {
+			break
+		}
 	}
 	return pks, nil
 }
