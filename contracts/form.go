@@ -184,7 +184,7 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 		}
 
 		hostKey := candidates[i].PublicKey
-		hostLog := formationLog.With(zap.Stringer("hostKey", hostKey))
+		hostLog := formationLog.With(zap.Stringer("hostKey", hostKey), zap.Bool("full", isFull[hostKey]))
 
 		err := cm.hm.WithScannedHost(ctx, hostKey, func(host hosts.Host) error {
 			// make sure host is still good
