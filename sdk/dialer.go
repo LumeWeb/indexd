@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"time"
 
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
@@ -115,47 +114,66 @@ func (d *Dialer) dialHost(ctx context.Context, hostKey types.PublicKey, reuse bo
 	return nil, errors.New("host has no supported protocols")
 }
 
-func (d *Dialer) settings(ctx context.Context, hostKey types.PublicKey) (rhp.TransportClient, proto.HostPrices, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
+func (d *Dialer) retry(ctx context.Context, hostKey types.PublicKey, fn func(rhp.TransportClient) error) error {
 	// reuse connection if we can
+	d.mu.Lock()
 	tc, err := d.dialHost(ctx, hostKey, true)
 	if err != nil {
-		return nil, proto.HostPrices{}, fmt.Errorf("failed to dial host: %w", err)
+		d.mu.Unlock()
+		return fmt.Errorf("failed to dial host: %w", err)
+	}
+	d.mu.Unlock()
+
+	if err := fn(tc); err != nil && proto.ErrorCode(err) != proto.ErrorCodeTransport {
+		// we received a non transport related error
+		return err
+	} else if err == nil {
+		// success
+		return nil
 	}
 
-	if settings, ok := d.cachedSettings[hostKey]; ok && time.Now().Before(settings.Prices.ValidUntil) {
-		return tc, settings.Prices, nil
+	// we got a transport error, try reconnecting and trying again
+	d.mu.Lock()
+	tc, err = d.dialHost(ctx, hostKey, false)
+	if err != nil {
+		d.mu.Unlock()
+		return fmt.Errorf("failed to redial host: %w", err)
 	}
+	d.mu.Unlock()
 
-	settings, err := rhp.RPCSettings(ctx, tc)
-	if proto.ErrorCode(err) == proto.ErrorCodeTransport {
-		tc, err = d.dialHost(ctx, hostKey, false)
-		if err != nil {
-			return nil, proto.HostPrices{}, fmt.Errorf("failed to retry connecting to host: %w", err)
-		}
+	return fn(tc)
+}
+
+func (d *Dialer) prices(ctx context.Context, hostKey types.PublicKey) (proto.HostPrices, error) {
+	var settings proto.HostSettings
+	err := d.retry(ctx, hostKey, func(tc rhp.TransportClient) (err error) {
 		settings, err = rhp.RPCSettings(ctx, tc)
-		if err != nil {
-			return nil, proto.HostPrices{}, fmt.Errorf("failed to retry getting settings: %w", err)
-		}
-	} else if err != nil {
-		return nil, proto.HostPrices{}, fmt.Errorf("failed to get settings: %w", err)
+		return err
+	})
+	if err != nil {
+		return proto.HostPrices{}, nil
 	}
-	d.cachedSettings[hostKey] = settings
 
-	return tc, settings.Prices, nil
+	d.mu.Lock()
+	d.cachedSettings[hostKey] = settings
+	d.mu.Unlock()
+
+	return settings.Prices, nil
 }
 
 // WriteSector writes a sector to the host identified by the public key.
 func (d *Dialer) WriteSector(ctx context.Context, hostKey types.PublicKey, sector *[proto.SectorSize]byte) (types.Hash256, error) {
-	tc, prices, err := d.settings(ctx, hostKey)
+	prices, err := d.prices(ctx, hostKey)
 	if err != nil {
-		return types.Hash256{}, err
+		return types.Hash256{}, fmt.Errorf("failed to get prices: %w", err)
 	}
 
-	token := (&proto.Account{}).Token(d.appKey, hostKey)
-	result, err := rhp.RPCWriteSector(ctx, tc, prices, token, bytes.NewReader(sector[:]), proto.SectorSize)
+	var result rhp.RPCWriteSectorResult
+	err = d.retry(ctx, hostKey, func(tc rhp.TransportClient) (err error) {
+		token := (&proto.Account{}).Token(d.appKey, hostKey)
+		result, err = rhp.RPCWriteSector(ctx, tc, prices, token, bytes.NewReader(sector[:]), proto.SectorSize)
+		return
+	})
 	if err != nil {
 		return types.Hash256{}, fmt.Errorf("failed to write sector: %w", err)
 	}
@@ -165,14 +183,18 @@ func (d *Dialer) WriteSector(ctx context.Context, hostKey types.PublicKey, secto
 
 // ReadSector reads a sector from the host identified by the public key.
 func (d *Dialer) ReadSector(ctx context.Context, hostKey types.PublicKey, sectorRoot types.Hash256) (*[proto.SectorSize]byte, error) {
-	tc, prices, err := d.settings(ctx, hostKey)
+	prices, err := d.prices(ctx, hostKey)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get prices: %w", err)
 	}
 
 	var buf bytes.Buffer
-	token := (&proto.Account{}).Token(d.appKey, hostKey)
-	if _, err := rhp.RPCReadSector(ctx, tc, prices, token, &buf, sectorRoot, 0, proto.SectorSize); err != nil {
+	err = d.retry(ctx, hostKey, func(tc rhp.TransportClient) (err error) {
+		token := (&proto.Account{}).Token(d.appKey, hostKey)
+		_, err = rhp.RPCReadSector(ctx, tc, prices, token, &buf, sectorRoot, 0, proto.SectorSize)
+		return
+	})
+	if err != nil {
 		return nil, fmt.Errorf("failed to read sector: %w", err)
 	} else if buf.Len() != proto.SectorSize {
 		return nil, fmt.Errorf("did not receive full sector: expected length %d, got %d", proto.SectorSize, buf.Len())
@@ -180,6 +202,5 @@ func (d *Dialer) ReadSector(ctx context.Context, hostKey types.PublicKey, sector
 
 	var result [proto.SectorSize]byte
 	copy(result[:], buf.Bytes())
-
 	return &result, nil
 }
