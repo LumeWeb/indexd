@@ -16,8 +16,8 @@ import (
 func (s *Store) Slab(ctx context.Context, slabID slabs.SlabID) (slab slabs.Slab, err error) {
 	err = s.transaction(ctx, func(ctx context.Context, tx *txn) error {
 		var dbID int64
-		err = tx.QueryRow(ctx, `SELECT s.id, s.encryption_key, s.min_shards FROM slabs s WHERE digest = $1`, sqlHash256(slabID)).Scan(
-			&dbID, (*sqlHash256)(&slab.EncryptionKey), &slab.MinShards)
+		err = tx.QueryRow(ctx, `SELECT s.id, s.encryption_key, s.min_shards, s.pinned_at FROM slabs s WHERE digest = $1`, sqlHash256(slabID)).Scan(
+			&dbID, (*sqlHash256)(&slab.EncryptionKey), &slab.MinShards, &slab.PinnedAt)
 		if errors.Is(err, sql.ErrNoRows) {
 			return slabs.ErrSlabNotFound
 		} else if err != nil {
@@ -133,7 +133,7 @@ ORDER BY ss.slab_index ASC`, slabID).Query(func(rows pgx.Rows) error {
 	return results, err
 }
 
-// PinnedSlab retrieves a slab from the database by its ID.
+// PinnedSlab retrieves a pinned slab from the database by its ID.
 func (s *Store) PinnedSlab(ctx context.Context, slabID slabs.SlabID) (slab slabs.PinnedSlab, err error) {
 	slab.ID = slabID
 	err = s.transaction(ctx, func(ctx context.Context, tx *txn) error {

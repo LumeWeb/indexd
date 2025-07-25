@@ -112,7 +112,9 @@ func (m *SlabManager) migrateSlab(ctx context.Context, slab Slab, allHosts []hos
 			shards[i] = nil // nil shards that are not missing
 		}
 	}
-	migratedShards, err := m.uploadShards(ctx, shards, usableHosts, logger)
+
+	// upload the missing shards
+	migratedShards, err := m.uploadShards(ctx, slab, shards, usableHosts, logger)
 
 	// update the database with the new locations for the migrated shards
 	for _, shard := range migratedShards {
