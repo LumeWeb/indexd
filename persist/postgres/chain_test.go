@@ -12,7 +12,6 @@ import (
 	"go.sia.tech/indexd/subscriber"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
-	"lukechampine.com/frand"
 )
 
 type testProofUpdater struct{ fn func(*types.StateElement) }
@@ -37,10 +36,14 @@ func TestResetChainState(t *testing.T) {
 
 	// prepare test elements and events
 	index := newTestChainIndex()
-	utxos := []types.SiacoinOutputID{frand.Entropy256()}
 	created := []types.SiacoinElement{newTestSiacoinElement()}
 	events := []wallet.Event{newTestEvent()}
 	events[0].Index = index
+	set := wallet.BroadcastedSet{
+		Basis:         index,
+		Transactions:  []types.V2Transaction{{MinerFee: types.Siacoins(1)}},
+		BroadcastedAt: time.Now().Round(time.Second),
+	}
 
 	// prepare store with random chain state
 	if err := store.UpdateChainState(context.Background(), func(tx subscriber.UpdateTx) error {
@@ -50,7 +53,7 @@ func TestResetChainState(t *testing.T) {
 		)
 	}); err != nil {
 		t.Fatal(err)
-	} else if err := store.LockUTXOs(utxos, time.Now().Add(time.Minute)); err != nil {
+	} else if err := store.AddBroadcastedSet(set); err != nil {
 		t.Fatal(err)
 	}
 
@@ -62,7 +65,7 @@ func TestResetChainState(t *testing.T) {
 	}
 
 	assertTableCount("wallet_siacoin_elements", 1)
-	assertTableCount("wallet_locked_utxos", 1)
+	assertTableCount("wallet_broadcasted_sets", 1)
 	assertTableCount("wallet_events", 1)
 
 	if err := store.ResetChainState(context.Background()); err != nil {
@@ -77,7 +80,7 @@ func TestResetChainState(t *testing.T) {
 	}
 
 	assertTableCount("wallet_siacoin_elements", 0)
-	assertTableCount("wallet_locked_utxos", 0)
+	assertTableCount("wallet_broadcasted_sets", 0)
 	assertTableCount("wallet_events", 0)
 }
 
