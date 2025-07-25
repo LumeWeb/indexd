@@ -149,7 +149,7 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 	// fetch all hosts that are usable and not blocked
 	var candidates []hosts.Host
 	for offset := 0; ; offset += batchSize {
-		batch, err := cm.store.Hosts(ctx, offset, batchSize, hosts.WithUsable(true), hosts.WithBlocked(false), hosts.WithActiveContracts(false))
+		batch, err := cm.store.Hosts(ctx, offset, batchSize, hosts.WithUsable(true), hosts.WithBlocked(false))
 		if err != nil {
 			return fmt.Errorf("failed to fetch hosts to form contracts with: %w", err)
 		}

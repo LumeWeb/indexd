@@ -196,7 +196,7 @@ WHERE
 	-- blocked host filter
 	AND (($4::boolean IS NULL) OR ($4::boolean = hosts.blocked))
 	-- active contracts filter
-	AND (($5::boolean IS NULL) OR ($5::boolean = EXISTS (SELECT 1 FROM contracts WHERE host_id = hosts.id AND state >= $6 AND state <= $7 AND good = TRUE)))
+	AND (($5::boolean IS NULL) OR ($5::boolean = EXISTS (SELECT 1 FROM contracts WHERE host_id = hosts.id AND state >= $6 AND state <= $7)))
 	LIMIT $1 OFFSET $2
 ;`, limit, offset, opts.Good, opts.Blocked, opts.ActiveContracts, contracts.ContractStatePending, contracts.ContractStateActive)
 		if err != nil {
@@ -538,8 +538,8 @@ WITH globals AS (
 	LEFT JOIN hosts_blocklist hb ON hosts.public_key = hb.public_key
 	WHERE hb.public_key IS NULL AND last_successful_scan IS NOT NULL -- not blocked and has settings
 ) 
-SELECT
-	hosts.id,	
+SELECT 
+	hosts.id,
 	hosts.public_key
 FROM hosts 
 CROSS JOIN globals

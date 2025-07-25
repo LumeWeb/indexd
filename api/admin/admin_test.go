@@ -12,6 +12,7 @@ import (
 	"go.sia.tech/coreutils/chain"
 	"go.sia.tech/coreutils/testutil"
 	"go.sia.tech/coreutils/wallet"
+	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/api"
 	"go.sia.tech/indexd/api/admin"
 	"go.sia.tech/indexd/contracts"
@@ -24,39 +25,45 @@ import (
 )
 
 func TestAccountsAPI(t *testing.T) {
-	cluster := testutils.NewCluster(t)
-	indexer := cluster.Indexer
+	c := testutils.NewConsensusNode(t, zap.NewNop())
+	indexer := testutils.NewIndexer(t, c, zap.NewNop())
+
+	var accs []types.PublicKey
+	for range 10 {
+		accs = append(accs, types.GeneratePrivateKey().PublicKey())
+		err := indexer.AccountsAdd(context.Background(), accs[len(accs)-1])
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	err := indexer.AccountsAdd(context.Background(), accs[len(accs)-1])
+	if err == nil || !strings.Contains(err.Error(), accounts.ErrExists.Error()) {
+		t.Fatal("expected ErrExists", err)
+	}
 
 	accounts, err := indexer.Accounts(context.Background())
 	if err != nil {
 		t.Fatal(err)
-	} else if len(accounts) != 2 {
-		t.Fatal("unexpected accounts", len(accounts))
-	}
-
-	acc := types.GeneratePrivateKey()
-	err = indexer.AccountsAdd(context.Background(), acc.PublicKey())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	accounts, err = indexer.Accounts(context.Background(), api.WithOffset(2), api.WithLimit(1))
-	if err != nil {
-		t.Fatal(err)
-	} else if len(accounts) != 1 {
-		t.Fatal("unexpected accounts", len(accounts))
-	} else if accounts[0] != acc.PublicKey() {
-		t.Fatal("unexpected account", accounts[0])
-	}
-
-	accounts, err = indexer.Accounts(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	} else if len(accounts) != 3 {
+	} else if !reflect.DeepEqual(accs, accounts) {
 		t.Fatal("unexpected accounts", accounts)
 	}
 
-	for _, acc := range accounts {
+	accounts, err = indexer.Accounts(context.Background(), api.WithOffset(7), api.WithLimit(2))
+	if err != nil {
+		t.Fatal(err)
+	} else if !reflect.DeepEqual(accs[7:9], accounts) {
+		t.Fatal("unexpected accounts", accounts)
+	}
+
+	accounts, err = indexer.Accounts(context.Background(), api.WithOffset(10), api.WithLimit(2))
+	if err != nil {
+		t.Fatal(err)
+	} else if len(accounts) != 0 {
+		t.Fatal("unexpected accounts", accounts)
+	}
+
+	for _, acc := range accs {
 		err = indexer.AccountsDelete(context.Background(), acc)
 		if err != nil {
 			t.Fatal(err)
@@ -184,7 +191,7 @@ func TestContractsAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	renewHeight := contract.ProofHeight - cs.RenewWindow
+	renewHeight := contract.ProofHeight - cs.RenewWindow + 1
 
 	// mine until contracts get renewed
 	ci, err := indexer.Tip()
@@ -193,7 +200,7 @@ func TestContractsAPI(t *testing.T) {
 	} else if ci.Height > renewHeight {
 		t.Fatal("unexpected")
 	}
-	c.MineBlocks(t, types.Address{}, renewHeight-ci.Height+1)
+	c.MineBlocks(t, types.Address{}, renewHeight-ci.Height)
 	time.Sleep(time.Second)
 
 	// assert contract was renewed - we don't pass the option here to asserts
@@ -207,8 +214,10 @@ func TestContractsAPI(t *testing.T) {
 	}
 }
 func TestExplorerAPI(t *testing.T) {
-	cluster := testutils.NewCluster(t)
-	rate, err := cluster.Indexer.ExplorerSiacoinExchangeRate(context.Background(), "usd")
+	c := testutils.NewConsensusNode(t, zap.NewNop())
+	indexer := testutils.NewIndexer(t, c, zap.NewNop())
+
+	rate, err := indexer.ExplorerSiacoinExchangeRate(context.Background(), "usd")
 	if err != nil {
 		t.Fatal(err)
 	} else if rate == 0 {
@@ -217,6 +226,9 @@ func TestExplorerAPI(t *testing.T) {
 }
 
 func TestSyncerAPI(t *testing.T) {
+	c := testutils.NewConsensusNode(t, zap.NewNop())
+	indexer := testutils.NewIndexer(t, c, zap.NewNop())
+
 	log := zaptest.NewLogger(t)
 	network, genesis := testutil.V2Network()
 	dbstore, tipState, err := chain.NewDBStore(chain.NewMemDB(), network, genesis, chain.NewZapMigrationLogger(log.Named("chaindb")))
@@ -227,13 +239,16 @@ func TestSyncerAPI(t *testing.T) {
 	s := testutils.NewSyncer(t, genesis.ID(), cm)
 	defer s.Close()
 
-	if err := testutils.NewCluster(t).Indexer.SyncerConnect(s.Addr()); err != nil {
+	if err := indexer.SyncerConnect(s.Addr()); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestTxpoolAPI(t *testing.T) {
-	fee, err := testutils.NewCluster(t).Indexer.TxpoolRecommendedFee()
+	c := testutils.NewConsensusNode(t, zap.NewNop())
+	indexer := testutils.NewIndexer(t, c, zap.NewNop())
+
+	fee, err := indexer.TxpoolRecommendedFee()
 	if err != nil {
 		t.Fatal(err)
 	} else if fee == types.ZeroCurrency {
@@ -379,8 +394,8 @@ func TestHostsAPI(t *testing.T) {
 }
 
 func TestSettingsAPI(t *testing.T) {
-	cluster := testutils.NewCluster(t)
-	indexer := cluster.Indexer
+	c := testutils.NewConsensusNode(t, zap.NewNop())
+	indexer := testutils.NewIndexer(t, c, zap.NewNop())
 
 	// assert contract settings can be fetched and updated
 	cs, err := indexer.SettingsContracts(context.Background())
@@ -452,10 +467,10 @@ func TestSettingsAPI(t *testing.T) {
 }
 
 func TestWalletAPI(t *testing.T) {
-	// create cluster
-	cluster := testutils.NewCluster(t)
-	indexer := cluster.Indexer
-	c := cluster.ConsensusNode
+	// create indexer
+	c := testutils.NewConsensusNode(t, zap.NewNop())
+	indexer := testutils.NewIndexer(t, c, zap.NewNop())
+	c.MineBlocks(t, indexer.WalletAddr(), 1)
 
 	// assert events are being persisted
 	events, err := indexer.WalletEvents(context.Background())
@@ -467,14 +482,22 @@ func TestWalletAPI(t *testing.T) {
 		t.Fatalf("expected miner payout, %+v", events[0])
 	}
 
+	// assert wallet is empty
+	res, err := indexer.Wallet(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	} else if !res.Confirmed.Add(res.Unconfirmed).IsZero() {
+		t.Fatal("expected wallet to be empty")
+	}
+
 	// mine until funds mature
 	c.MineBlocks(t, types.Address{}, c.Network().MaturityDelay)
 
 	// assert wallet is funded
-	res, err := indexer.Wallet(context.Background())
+	res, err = indexer.Wallet(context.Background())
 	if err != nil {
 		t.Fatal(err)
-	} else if res.Confirmed.Cmp(c.Network().GenesisState().BlockReward()) != 0 {
+	} else if res.Confirmed.IsZero() {
 		t.Fatal("expected wallet to be funded")
 	} else if res.Address != indexer.WalletAddr() {
 		t.Fatal("invalid address")
