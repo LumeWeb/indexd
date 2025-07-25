@@ -81,7 +81,6 @@ func (s *Store) Tip() (ci types.ChainIndex, err error) {
 // including immature outputs.
 func (s *Store) UnspentSiacoinElements() (tip types.ChainIndex, sces []types.SiacoinElement, err error) {
 	err = s.transaction(context.Background(), func(ctx context.Context, tx *txn) error {
-		var tip types.ChainIndex
 		err := tx.QueryRow(ctx, `SELECT scanned_height, scanned_block_id FROM global_settings`).Scan(&tip.Height, (*sqlHash256)(&tip.ID))
 		if err != nil {
 			return fmt.Errorf("failed to query last scanned index: %w", err)

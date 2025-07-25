@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"errors"
-	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -13,7 +12,6 @@ import (
 	"go.sia.tech/indexd/subscriber"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
-	"lukechampine.com/frand"
 )
 
 type testProofUpdater struct{ fn func(*types.StateElement) }
@@ -36,17 +34,13 @@ func TestResetChainState(t *testing.T) {
 		}
 	}
 
-	// prepare random index
-	var bID types.BlockID
-	frand.Read(bID[:])
-	index := types.ChainIndex{Height: frand.Uint64n(math.MaxInt64), ID: bID}
-
 	// prepare test elements and events
+	index := newTestChainIndex()
 	created := []types.SiacoinElement{newTestSiacoinElement()}
 	events := []wallet.Event{newTestEvent()}
 	events[0].Index = index
 	set := wallet.BroadcastedSet{
-		Basis:         types.ChainIndex{Height: 1, ID: types.BlockID{1}},
+		Basis:         index,
 		Transactions:  []types.V2Transaction{{MinerFee: types.Siacoins(1)}},
 		BroadcastedAt: time.Now().Round(time.Second),
 	}

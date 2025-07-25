@@ -3,13 +3,16 @@ package postgres
 import (
 	"context"
 	"errors"
+	"math"
 	"reflect"
 	"testing"
 	"time"
 
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/wallet"
+	"go.sia.tech/indexd/subscriber"
 	"go.uber.org/zap/zaptest"
+	"lukechampine.com/frand"
 )
 
 func TestSingleAddressWalletStoreTip(t *testing.T) {
@@ -26,9 +29,11 @@ func TestSingleAddressWalletStoreTip(t *testing.T) {
 		t.Fatal("unexpected tip", ci)
 	}
 
-	update := types.ChainIndex{Height: 1, ID: types.BlockID{1}}
+	update := newTestChainIndex()
 	if _, err := store.pool.Exec(context.Background(), `UPDATE global_settings SET scanned_height = $1, scanned_block_id = $2`, update.Height, sqlHash256(update.ID)); err != nil {
 		t.Fatal(err)
+	} else if update == (types.ChainIndex{}) {
+		t.Fatal("unexpected tip", ci)
 	}
 
 	ci, err = store.Tip()
@@ -42,14 +47,18 @@ func TestSingleAddressWalletStoreTip(t *testing.T) {
 func TestSingleAddressWalletStoreUnspentSiacoinElements(t *testing.T) {
 	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
 
+	ci := newTestChainIndex()
+	err := store.UpdateChainState(context.Background(), func(tx subscriber.UpdateTx) error { return tx.UpdateLastScannedIndex(context.Background(), ci) })
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	if tip, utxos, err := store.UnspentSiacoinElements(); err != nil {
 		t.Fatal(err)
 	} else if len(utxos) != 0 {
 		t.Fatal("unexpected number of utxos", len(utxos))
-	} else if expectedTip, err := store.Tip(); err != nil {
-		t.Fatal(err)
-	} else if tip != expectedTip {
-		t.Fatal("unexpected tip", tip, expectedTip)
+	} else if tip != ci {
+		t.Fatal("unexpected tip", tip, ci)
 	}
 
 	update := newTestSiacoinElement()
@@ -177,15 +186,18 @@ func TestSingleAddressWalletStoreBroadcastedSets(t *testing.T) {
 
 func newTestEvent() wallet.Event {
 	return wallet.Event{
-		ID: types.Hash256{1},
-		Index: types.ChainIndex{
-			Height: 2,
-			ID:     types.BlockID{3},
-		},
+		ID:             types.Hash256{1},
+		Index:          newTestChainIndex(),
 		Type:           wallet.EventTypeSiafundClaim,
 		Data:           wallet.EventPayout{SiacoinElement: newTestSiacoinElement()},
 		MaturityHeight: 4,
 	}
+}
+
+func newTestChainIndex() (ci types.ChainIndex) {
+	ci.Height = frand.Uint64n(math.MaxInt64)
+	frand.Read(ci.ID[:])
+	return ci
 }
 
 func newTestSiacoinElement() types.SiacoinElement {
