@@ -201,12 +201,11 @@ func TestContractsAPI(t *testing.T) {
 	if contracts, err := indexer.Contracts(context.Background()); err != nil {
 		t.Fatal(err)
 	} else if len(contracts) != 1 {
-		t.Fatal("expected 1 contract", len(contracts))
+		t.Fatal("expected 1 contract, got", len(contracts))
 	} else if contracts[0].RenewedFrom != contract.ID {
 		t.Fatal("expected contract to be renewed", contracts[0].RenewedFrom, contract.ID)
 	}
 }
-
 func TestExplorerAPI(t *testing.T) {
 	cluster := testutils.NewCluster(t)
 	rate, err := cluster.Indexer.ExplorerSiacoinExchangeRate(context.Background(), "usd")
@@ -246,7 +245,7 @@ func TestHostsAPI(t *testing.T) {
 	ms := testutils.MaintenanceSettings
 	ms.Enabled = false
 
-	// create cluster with two hosts
+	// create cluster
 	cluster := testutils.NewCluster(t, testutils.WithHosts(2), testutils.WithIndexer(testutils.WithMaintenanceSettings(ms)))
 	indexer := cluster.Indexer
 	time.Sleep(time.Second)
