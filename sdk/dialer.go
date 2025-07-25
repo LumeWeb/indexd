@@ -41,6 +41,21 @@ func newDialer(c AppClient, appKey types.PrivateKey) *Dialer {
 	}
 }
 
+// Close closes all the open connections on the dialer.
+func (d *Dialer) Close() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	for _, conn := range d.conns {
+		if err := conn.Close(); err != nil {
+			return err
+		}
+	}
+	clear(d.conns)
+
+	return nil
+}
+
 // Hosts returns the public keys of all hosts that are available for
 // upload or download.
 func (d *Dialer) Hosts(ctx context.Context) ([]types.PublicKey, error) {
