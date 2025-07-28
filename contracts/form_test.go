@@ -477,7 +477,7 @@ func TestPerformContractFormationWithContracts(t *testing.T) {
 	// the store should now contain the right number of total contracts which is
 	// the 4 we started with plus the 4 we formed
 	if len(store.contracts) != 8 {
-		t.Fatalf("expected 6 contracts, got %v", len(store.contracts))
+		t.Fatalf("expected 8 contracts, got %v", len(store.contracts))
 	}
 
 	// perform formations again, this time it's a no-op

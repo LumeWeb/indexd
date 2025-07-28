@@ -57,11 +57,11 @@ func (s *formContractSigner) SignV2Inputs(txn *types.V2Transaction, toSign []int
 	s.w.SignV2Inputs(txn, toSign)
 }
 
-// performContractFormation makes sure that we have at least 'minContracts' good
+// performContractFormation makes sure that we have at least 'wanted' good
 // contracts with good hosts in unique CIDRs.
-func (cm *ContractManager) performContractFormation(ctx context.Context, period uint64, minContracts uint64, log *zap.Logger) error {
+func (cm *ContractManager) performContractFormation(ctx context.Context, period uint64, wanted int64, log *zap.Logger) error {
 	formationLog := log.Named("formation")
-	formationLog.Debug("started", zap.Uint64("period", period), zap.Uint64("min", minContracts))
+	formationLog.Debug("started", zap.Uint64("period", period), zap.Int64("wanted", wanted))
 
 	var activeContracts []Contract
 	const batchSize = 50
@@ -89,7 +89,6 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 	}
 
 	// helpers for CIDR check
-	wanted := int64(minContracts)
 	usedCidrs := make(map[string]types.PublicKey)
 	addHost := func(host hosts.Host) {
 		for _, cidr := range host.Networks {
