@@ -156,7 +156,7 @@ func (d *Dialer) retry(ctx context.Context, hostKey types.PublicKey, fn func(rhp
 
 func (d *Dialer) prices(ctx context.Context, hostKey types.PublicKey) (proto.HostPrices, error) {
 	d.mu.Lock()
-	if settings, ok := d.cachedSettings[hostKey]; ok && time.Now().Before(settings.Prices.ValidUntil) {
+	if settings, ok := d.cachedSettings[hostKey]; ok && time.Now().Add(5*time.Second).Before(settings.Prices.ValidUntil) {
 		d.mu.Unlock()
 		return settings.Prices, nil
 	}
