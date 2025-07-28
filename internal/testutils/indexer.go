@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"go.sia.tech/core/blake2b"
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/chain"
 	"go.sia.tech/coreutils/wallet"
@@ -19,6 +18,7 @@ import (
 	"go.sia.tech/indexd/alerts"
 	"go.sia.tech/indexd/api/admin"
 	"go.sia.tech/indexd/api/app"
+	"go.sia.tech/indexd/internal/utils"
 	"go.sia.tech/indexd/slabs"
 
 	"go.sia.tech/indexd/client"
@@ -85,7 +85,7 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger) *Indexer {
 		t.Fatalf("failed to create contract manager: %v", err)
 	}
 
-	slabs, err := slabs.NewManager(am, hm, store, dialer, alerts.NewManager(), deriveKey(walletKey, "migration"), deriveKey(walletKey, "integrity"))
+	slabs, err := slabs.NewManager(am, hm, store, dialer, alerts.NewManager(), utils.DeriveKey(walletKey, "migration"), utils.DeriveKey(walletKey, "integrity"))
 	if err != nil {
 		t.Fatalf("failed to create slabs manager: %v", err)
 	}
@@ -248,15 +248,6 @@ func closeWithTimeout(closeFn func() error) error {
 	})
 
 	return closeFn()
-}
-
-func deriveKey(key types.PrivateKey, purpose string) types.PrivateKey {
-	seed := blake2b.Sum256(append(key[:], []byte(purpose)...))
-	pk := types.NewPrivateKeyFromSeed(seed[:])
-	for i := range seed {
-		seed[i] = 0
-	}
-	return pk
 }
 
 // shutdownWithTimeout is a wrapper around closeWithTimeout to handle shutdown

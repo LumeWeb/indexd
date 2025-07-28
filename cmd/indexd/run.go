@@ -13,7 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"go.sia.tech/core/blake2b"
 	"go.sia.tech/core/consensus"
 	"go.sia.tech/core/gateway"
 	"go.sia.tech/core/types"
@@ -30,6 +29,7 @@ import (
 	"go.sia.tech/indexd/contracts"
 	"go.sia.tech/indexd/explorer"
 	"go.sia.tech/indexd/hosts"
+	"go.sia.tech/indexd/internal/utils"
 	"go.sia.tech/indexd/persist/postgres"
 	"go.sia.tech/indexd/pins"
 	"go.sia.tech/indexd/slabs"
@@ -123,7 +123,7 @@ func runRootCmd(ctx context.Context, cfg config.Config, walletKey types.PrivateK
 	}
 	defer contracts.Close()
 
-	slabs, err := slabs.NewManager(am, hm, store, dialer, alerts.NewManager(), deriveKey(walletKey, "migration"), deriveKey(walletKey, "integrity"))
+	slabs, err := slabs.NewManager(am, hm, store, dialer, alerts.NewManager(), utils.DeriveKey(walletKey, "migration"), utils.DeriveKey(walletKey, "integrity"))
 	if err != nil {
 		return fmt.Errorf("failed to create slabs manager: %w", err)
 	}
@@ -229,15 +229,6 @@ func runRootCmd(ctx context.Context, cfg config.Config, walletKey types.PrivateK
 
 	log.Info("...shutdown complete")
 	return nil
-}
-
-func deriveKey(key types.PrivateKey, purpose string) types.PrivateKey {
-	seed := blake2b.Sum256(append(key[:], []byte(purpose)...))
-	pk := types.NewPrivateKeyFromSeed(seed[:])
-	for i := range seed {
-		seed[i] = 0
-	}
-	return pk
 }
 
 func startLocalhostListener(listenAddr string, log *zap.Logger) (l net.Listener, err error) {
