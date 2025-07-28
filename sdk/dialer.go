@@ -48,13 +48,17 @@ func (d *Dialer) Close() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	for _, conn := range d.conns {
-		if err := conn.Close(); err != nil {
-			return err
+	var errs []error
+	for i := range d.conns {
+		if err := d.conns[i].Close(); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	clear(d.conns)
 
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
 	return nil
 }
 
