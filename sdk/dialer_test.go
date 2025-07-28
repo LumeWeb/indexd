@@ -80,7 +80,7 @@ func TestHostDialer(t *testing.T) {
 
 func TestHostDialerParallel(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	cluster := testutils.NewCluster(t, testutils.WithLogger(logger), testutils.WithHosts(1))
+	cluster := testutils.NewCluster(t, testutils.WithLogger(logger), testutils.WithHosts(2))
 	indexer := cluster.Indexer
 
 	// add an account
@@ -100,10 +100,11 @@ func TestHostDialerParallel(t *testing.T) {
 	defer cancel()
 
 	hks := dialer.Hosts()
-	if len(hks) != 1 {
-		t.Fatalf("expected 1 host, got %d", len(hks))
+	if len(hks) != 2 {
+		t.Fatalf("expected 2 hosts, got %d", len(hks))
 	}
-	hk := hks[0]
+	hk1 := hks[0]
+	hk2 := hks[1]
 
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {
@@ -113,6 +114,11 @@ func TestHostDialerParallel(t *testing.T) {
 
 			var data [proto.SectorSize]byte
 			frand.Read(data[:])
+
+			hk := hk1
+			if i%2 == 0 {
+				hk = hk2
+			}
 
 			root, err := dialer.WriteSector(context.Background(), hk, &data)
 			if err != nil {
