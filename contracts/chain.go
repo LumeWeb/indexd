@@ -70,8 +70,7 @@ func (m *ContractManager) ProcessActions(ctx context.Context) error {
 
 	// prune expired contracts from contract_sectors_map
 	// 'expiredContractSectorsPruneBuffer' blocks after the contract expired
-	if err := m.store.PruneContractSectorsMap(ctx,
-		m.expiredContractSectorsPruneBuffer); err != nil {
+	if err := m.store.PruneContractSectorsMap(ctx, m.expiredContractSectorsPruneBuffer); err != nil {
 		return fmt.Errorf("failed to prune expired contracts: %w", err)
 	}
 	return nil
