@@ -15,7 +15,7 @@ import (
 	"lukechampine.com/frand"
 )
 
-func TestContractPruningE2E(t *testing.T) {
+func TestContractPruning(t *testing.T) {
 	// create cluster
 	logger := testutils.NewLogger(false)
 	cluster := testutils.NewCluster(t, testutils.WithLogger(logger), testutils.WithHosts(3))
@@ -119,7 +119,7 @@ func TestContractPruningE2E(t *testing.T) {
 	}
 }
 
-func TestSectorPinningE2E(t *testing.T) {
+func TestSectorPinning(t *testing.T) {
 	// create cluster
 	logger := testutils.NewLogger(false)
 	cluster := testutils.NewCluster(t, testutils.WithLogger(logger), testutils.WithHosts(3))

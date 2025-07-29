@@ -14,7 +14,7 @@ import (
 	"lukechampine.com/frand"
 )
 
-func TestDataIntegrityE2E(t *testing.T) {
+func TestDataIntegrity(t *testing.T) {
 	// create cluster
 	logger := testutils.NewLogger(false)
 	cluster := testutils.NewCluster(t, testutils.WithLogger(logger), testutils.WithHosts(3), testutils.WithIndexer(testutils.WithSlabOptions(slabs.WithHealthCheckInterval(100*time.Millisecond), slabs.WithIntegrityCheckIntervals(50*time.Millisecond, 50*time.Millisecond))))
