@@ -104,12 +104,18 @@ func (d *Dialer) Close() {
 }
 
 func (d *Dialer) updateHosts(ctx context.Context) error {
+	ctx, cancel, err := d.tg.AddContext(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to add thread to thread group: %w", err)
+	}
+	defer cancel()
+
 	offset, limit := 0, 100
 	addrs := make(map[types.PublicKey][]chain.NetAddress)
 	for {
 		hosts, err := d.c.Hosts(ctx, api.WithOffset(offset), api.WithLimit(limit))
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to get hosts: %w", err)
 		}
 
 		for _, host := range hosts {
@@ -280,6 +286,12 @@ func (d *Dialer) prices(ctx context.Context, hostKey types.PublicKey) (proto.Hos
 
 // WriteSector writes a sector to the host identified by the public key.
 func (d *Dialer) WriteSector(ctx context.Context, hostKey types.PublicKey, sector *[proto.SectorSize]byte) (types.Hash256, error) {
+	ctx, cancel, err := d.tg.AddContext(ctx)
+	if err != nil {
+		return types.Hash256{}, fmt.Errorf("failed to add thread to thread group: %w", err)
+	}
+	defer cancel()
+
 	prices, err := d.prices(ctx, hostKey)
 	if err != nil {
 		return types.Hash256{}, fmt.Errorf("failed to get prices: %w", err)
@@ -300,6 +312,12 @@ func (d *Dialer) WriteSector(ctx context.Context, hostKey types.PublicKey, secto
 
 // ReadSector reads a sector from the host identified by the public key.
 func (d *Dialer) ReadSector(ctx context.Context, hostKey types.PublicKey, sectorRoot types.Hash256) (*[proto.SectorSize]byte, error) {
+	ctx, cancel, err := d.tg.AddContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to add thread to thread group: %w", err)
+	}
+	defer cancel()
+
 	prices, err := d.prices(ctx, hostKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get prices: %w", err)

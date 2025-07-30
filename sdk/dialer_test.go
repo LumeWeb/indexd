@@ -59,6 +59,11 @@ func TestHostDialer(t *testing.T) {
 
 	dialer.Close()
 
+	dialer, err = NewDialer(app, a1, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	// read sector again after closing connection
 	sector, err = dialer.ReadSector(context.Background(), hk, root)
 	if err != nil {
