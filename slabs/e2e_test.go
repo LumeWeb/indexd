@@ -32,7 +32,6 @@ func TestMigrationsE2E(t *testing.T) {
 	}
 
 	// convenience variables
-	acc := proto.Account(a1.PublicKey())
 	app := indexer.App(a1)
 
 	// fetch hosts
@@ -52,7 +51,7 @@ func TestMigrationsE2E(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := client.WriteSector(context.Background(), hs.Prices, acc.Token(a1, hosts[i].PublicKey), bytes.NewReader(shards[i]), proto.SectorSize); err != nil {
+		if _, err := client.WriteSector(context.Background(), hs.Prices, proto.NewAccountToken(a1, hosts[i].PublicKey), bytes.NewReader(shards[i]), proto.SectorSize); err != nil {
 			t.Fatal(err)
 		}
 	}

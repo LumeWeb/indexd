@@ -74,6 +74,7 @@ type (
 func defaultIndexerCfg() *indexerCfg {
 	return &indexerCfg{
 		maintenanceSettings: MaintenanceSettings,
+		slabOpts:            []slabs.Option{slabs.WithDisabledCIDRChecks()},
 	}
 }
 
@@ -87,7 +88,7 @@ func WithMaintenanceSettings(ms contracts.MaintenanceSettings) IndexerOpt {
 // WithSlabOptions allows for passing slab options to the indexer
 func WithSlabOptions(opts ...slabs.Option) IndexerOpt {
 	return func(cfg *indexerCfg) {
-		cfg.slabOpts = opts
+		cfg.slabOpts = append(cfg.slabOpts, opts...)
 	}
 }
 
