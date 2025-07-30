@@ -94,7 +94,7 @@ func (s *mockStore) Hosts(ctx context.Context, offset, limit int, queryOpts ...h
 	return hosts, nil
 }
 
-func (s *mockStore) HostsForIntegrityChecks(ctx context.Context, limit int) (result []types.PublicKey, err error) {
+func (s *mockStore) HostsForIntegrityChecks(ctx context.Context, maxLastCheck time.Time, limit int) (result []types.PublicKey, err error) {
 	return nil, nil
 }
 

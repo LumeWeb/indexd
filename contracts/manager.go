@@ -66,7 +66,7 @@ type (
 		FormContract(ctx context.Context, settings proto.HostSettings, params proto.RPCFormContractParams) (rhp.RPCFormContractResult, error)
 		FreeSectors(ctx context.Context, hostPrices proto.HostPrices, contractID types.FileContractID, indices []uint64) (rhp.RPCFreeSectorsResult, error)
 		RefreshContract(ctx context.Context, settings proto.HostSettings, params proto.RPCRefreshContractParams) (rhp.RPCRefreshContractResult, error)
-		RenewContract(ctx context.Context, settings proto.HostSettings, contractID types.FileContractID, proofHeight uint64) (rhp.RPCRenewContractResult, error)
+		RenewContract(ctx context.Context, settings proto.HostSettings, params proto.RPCRenewContractParams) (rhp.RPCRenewContractResult, error)
 		SectorRoots(ctx context.Context, hostPrices proto.HostPrices, contractID types.FileContractID, offset, length uint64) (rhp.RPCSectorRootsResult, error)
 	}
 
@@ -107,6 +107,7 @@ type (
 		PinSectors(ctx context.Context, contractID types.FileContractID, roots []types.Hash256) error
 		PrunableContractRoots(ctx context.Context, contractID types.FileContractID, roots []types.Hash256) ([]types.Hash256, error)
 		PruneExpiredContractElements(ctx context.Context, maxBlocksSinceExpiry uint64) error
+		PruneContractSectorsMap(ctx context.Context, maxBlocksSinceExpiry uint64) error
 		RejectPendingContracts(ctx context.Context, maxFormation time.Time) error
 		ScheduleContractsForPruning(ctx context.Context) error
 		UnpinnedSectors(ctx context.Context, hostKey types.PublicKey, limit int) ([]types.Hash256, error)
@@ -180,13 +181,15 @@ type (
 		shuffle func(int, func(i, j int))
 		tg      *threadgroup.ThreadGroup
 
-		contractRejectBuffer           time.Duration
-		expiredContractBroadcastBuffer uint64
-		expiredContractPruneBuffer     uint64
-		maintenanceFrequency           time.Duration
-		pruneIntervalSuccess           time.Duration
-		pruneIntervalFailure           time.Duration
-		revisionBroadcastInterval      time.Duration
+		contractRejectBuffer              time.Duration
+		disableCIDRChecks                 bool
+		expiredContractBroadcastBuffer    uint64
+		expiredContractPruneBuffer        uint64
+		expiredContractSectorsPruneBuffer uint64
+		maintenanceFrequency              time.Duration
+		pruneIntervalSuccess              time.Duration
+		pruneIntervalFailure              time.Duration
+		revisionBroadcastInterval         time.Duration
 	}
 )
 
@@ -194,6 +197,13 @@ type (
 func WithLogger(l *zap.Logger) ContractManagerOpt {
 	return func(cm *ContractManager) {
 		cm.log = l
+	}
+}
+
+// WithDisabledCIDRChecks disables the CIDR checks for the contract manager.
+func WithDisabledCIDRChecks() ContractManagerOpt {
+	return func(cm *ContractManager) {
+		cm.disableCIDRChecks = true
 	}
 }
 
@@ -257,13 +267,14 @@ func newContractManager(renterKey types.PublicKey, accountManager AccountManager
 		shuffle: frand.Shuffle,
 		tg:      threadgroup.New(),
 
-		contractRejectBuffer:           6 * time.Hour, // 6 hours after formation
-		expiredContractBroadcastBuffer: 144,           // 144 block after expiration
-		expiredContractPruneBuffer:     144,           // 144 blocks after broadcast
-		maintenanceFrequency:           10 * time.Minute,
-		pruneIntervalSuccess:           24 * time.Hour,     // 1 day
-		pruneIntervalFailure:           3 * time.Hour,      // 3 hours
-		revisionBroadcastInterval:      7 * 24 * time.Hour, // 1 week,
+		contractRejectBuffer:              6 * time.Hour, // 6 hours after formation
+		expiredContractBroadcastBuffer:    144,           // 144 block after expiration
+		expiredContractPruneBuffer:        144,           // 144 blocks after broadcast
+		expiredContractSectorsPruneBuffer: 36,            // 36 blocks (~6 hours) after expiration
+		maintenanceFrequency:              10 * time.Minute,
+		pruneIntervalSuccess:              24 * time.Hour,     // 1 day
+		pruneIntervalFailure:              3 * time.Hour,      // 3 hours
+		revisionBroadcastInterval:         7 * 24 * time.Hour, // 1 week,
 	}
 	for _, opt := range opts {
 		opt(cm)
@@ -510,7 +521,7 @@ func (cm *ContractManager) performContractMaintenance(ctx context.Context, log *
 	}
 
 	// refresh any good contracts that are either out of collateral or funds
-	if err := cm.performContractRefreshes(ctx, log); err != nil {
+	if err := cm.performContractRefreshes(ctx, settings.Period, log); err != nil {
 		return fmt.Errorf("failed to perform contract refreshes: %w", err)
 	}
 
@@ -520,7 +531,7 @@ func (cm *ContractManager) performContractMaintenance(ctx context.Context, log *
 	}
 
 	// form new contracts until there are enough good contracts to use
-	if err := cm.performContractFormation(ctx, settings.Period, settings.WantedContracts, log); err != nil {
+	if err := cm.performContractFormation(ctx, settings.Period, int64(settings.WantedContracts), log); err != nil {
 		return fmt.Errorf("failed to form contracts: %w", err)
 	}
 

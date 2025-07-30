@@ -15,8 +15,11 @@ import (
 	"go.sia.tech/coreutils/chain"
 	"go.sia.tech/coreutils/wallet"
 	"go.sia.tech/indexd/accounts"
+	"go.sia.tech/indexd/alerts"
 	"go.sia.tech/indexd/api/admin"
 	"go.sia.tech/indexd/api/app"
+	"go.sia.tech/indexd/keys"
+	"go.sia.tech/indexd/slabs"
 
 	"go.sia.tech/indexd/client"
 	"go.sia.tech/indexd/contracts"
@@ -35,7 +38,8 @@ const (
 )
 
 var (
-	testMaintenanceSettings = contracts.MaintenanceSettings{
+	// MaintenanceSettings is the default maintenance settings used for testing.
+	MaintenanceSettings = contracts.MaintenanceSettings{
 		Enabled:         true,
 		Period:          144,
 		RenewWindow:     72,
@@ -43,24 +47,51 @@ var (
 	}
 )
 
-// Indexer is a test utility combining an indexer, an http client for the
-// indexer and useful helpers for testing.
-type Indexer struct {
-	*admin.Client
-	App func(types.PrivateKey) *app.Client
+type (
+	// Indexer is a test utility combining an indexer, an http client for the
+	// indexer and useful helpers for testing.
+	Indexer struct {
+		*admin.Client
+		App func(types.PrivateKey) *app.Client
 
-	cm     *chain.Manager
-	dialer *client.SiamuxDialer
-	syncer *Syncer
-	store  *postgres.Store
-	wallet *wallet.SingleAddressWallet
+		cm     *chain.Manager
+		dialer *client.SiamuxDialer
+		syncer *Syncer
+		store  *postgres.Store
+		wallet *wallet.SingleAddressWallet
+	}
+
+	// IndexerOpt is a functional option for configuring an indexer for testing
+	IndexerOpt func(*indexerCfg)
+
+	indexerCfg struct {
+		maintenanceSettings contracts.MaintenanceSettings
+	}
+)
+
+func defaultIndexerCfg() *indexerCfg {
+	return &indexerCfg{
+		maintenanceSettings: MaintenanceSettings,
+	}
+}
+
+// WithMaintenanceSettings allows for passing maintenance settings to the indexer
+func WithMaintenanceSettings(ms contracts.MaintenanceSettings) IndexerOpt {
+	return func(cfg *indexerCfg) {
+		cfg.maintenanceSettings = ms
+	}
 }
 
 // NewIndexer creates a new indexer for testing that is automatically closed up
 // after the test is finished.
-func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger) *Indexer {
+func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger, opts ...IndexerOpt) *Indexer {
+	cfg := defaultIndexerCfg()
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
 	// prepare store
-	store := NewDB(t, log)
+	store := NewDB(t, cfg.maintenanceSettings, log)
 
 	s := NewSyncer(t, c.genesis.ID(), c.cm)
 
@@ -77,9 +108,14 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger) *Indexer {
 	dialer := client.NewSiamuxDialer(c.cm, signer, store, log)
 	am := accounts.NewManager(store, accounts.NewFunder(dialer), accounts.WithLogger(log.Named("accounts")))
 
-	contracts, err := contracts.NewManager(walletKey, am, c.cm, store, dialer, hm, s, wm, contracts.WithLogger(log.Named("contracts")), contracts.WithMaintenanceFrequency(200*time.Millisecond))
+	contracts, err := contracts.NewManager(walletKey, am, c.cm, store, dialer, hm, s, wm, contracts.WithLogger(log.Named("contracts")), contracts.WithMaintenanceFrequency(200*time.Millisecond), contracts.WithDisabledCIDRChecks())
 	if err != nil {
 		t.Fatalf("failed to create contract manager: %v", err)
+	}
+
+	slabs, err := slabs.NewManager(am, hm, store, dialer, alerts.NewManager(), keys.DeriveKey(walletKey, "migration"), keys.DeriveKey(walletKey, "integrity"))
+	if err != nil {
+		t.Fatalf("failed to create slabs manager: %v", err)
 	}
 
 	subscriber, err := subscriber.New(c.cm, hm, contracts, wm, store, subscriber.WithLogger(log.Named("subscriber")))
@@ -165,6 +201,9 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger) *Indexer {
 		}
 		if err := closeWithTimeout(am.Close); err != nil {
 			t.Errorf("failed to close account manager: %v", err)
+		}
+		if err := closeWithTimeout(slabs.Close); err != nil {
+			t.Errorf("failed to close slabs manager: %v", err)
 		}
 		if err := closeWithTimeout(subscriber.Close); err != nil {
 			t.Errorf("failed to close subscriber: %v", err)
