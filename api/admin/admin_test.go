@@ -27,6 +27,15 @@ func TestAccountsAPI(t *testing.T) {
 	c := testutils.NewConsensusNode(t, zap.NewNop())
 	indexer := testutils.NewIndexer(t, c, zap.NewNop())
 
+	// remove all existing accounts (slab related service accounts)
+	existing, err := indexer.Accounts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, acc := range existing {
+		indexer.AccountsDelete(context.Background(), acc)
+	}
+
 	var accs []types.PublicKey
 	for range 10 {
 		accs = append(accs, types.GeneratePrivateKey().PublicKey())
@@ -36,7 +45,7 @@ func TestAccountsAPI(t *testing.T) {
 		}
 	}
 
-	err := indexer.AccountsAdd(context.Background(), accs[len(accs)-1])
+	err = indexer.AccountsAdd(context.Background(), accs[len(accs)-1])
 	if err != nil {
 		t.Fatalf("expected re-adding an account to be treated as a no-op, instead %v", err)
 	}
