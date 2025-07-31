@@ -25,22 +25,22 @@ import (
 var _ HostDialer = (*Dialer)(nil)
 
 type connEntry struct {
+	hostKey types.PublicKey
+
 	mu   sync.Mutex
 	dial chan struct{} // signals dial completion
-
-	hostKey types.PublicKey
-	tc      rhp.TransportClient
+	tc   rhp.TransportClient
 }
 
 // Dialer implements the HostDialer interface.
 type Dialer struct {
 	log *zap.Logger
+	tg  *threadgroup.ThreadGroup
 
 	c      AppClient
 	appKey types.PrivateKey
 
 	mu             sync.Mutex
-	tg             *threadgroup.ThreadGroup
 	addrs          map[types.PublicKey][]chain.NetAddress
 	conns          map[types.PublicKey]*connEntry
 	cachedSettings map[types.PublicKey]proto.HostSettings
@@ -84,10 +84,7 @@ func (d *Dialer) Close() {
 		entry.tc = nil
 		entry.mu.Unlock()
 	}
-
-	d.mu.Lock()
 	clear(d.conns)
-	d.mu.Unlock()
 }
 
 func (d *Dialer) initHosts() error {
@@ -245,6 +242,8 @@ func (d *Dialer) dialHost(ctx context.Context, hostKey types.PublicKey) (rhp.Tra
 			tc, err = siamux.Dial(ctx, addr.Address, hostKey)
 			if err == nil {
 				return tc, nil
+			} else {
+				return nil, err
 			}
 		}
 	}
@@ -253,6 +252,8 @@ func (d *Dialer) dialHost(ctx context.Context, hostKey types.PublicKey) (rhp.Tra
 			tc, err = quic.Dial(ctx, addr.Address, hostKey)
 			if err == nil {
 				return tc, nil
+			} else {
+				return nil, err
 			}
 		}
 	}
