@@ -107,7 +107,7 @@ func TestHostDialerParallel(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
-		go func() {
+		go func(i int) {
 			defer wg.Done()
 
 			var data [proto.SectorSize]byte
@@ -131,7 +131,7 @@ func TestHostDialerParallel(t *testing.T) {
 			if !bytes.Equal(data[:], sector[:]) {
 				t.Error("retrieved sector does not match")
 			}
-		}()
+		}(i)
 	}
 	wg.Wait()
 }

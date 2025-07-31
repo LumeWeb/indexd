@@ -123,7 +123,7 @@ func (d *Dialer) initHosts() error {
 		return fmt.Errorf("failed to refresh hosts list: %w", err)
 	}
 
-	// refresh in bg thread
+	// refresh in background thread
 	ctx, cancel, err = d.tg.AddContext(context.Background())
 	if err != nil {
 		return err
@@ -313,7 +313,7 @@ func (d *Dialer) prices(ctx context.Context, hostKey types.PublicKey) (proto.Hos
 		return err
 	})
 	if err != nil {
-		return proto.HostPrices{}, nil
+		return proto.HostPrices{}, err
 	}
 
 	d.mu.Lock()
