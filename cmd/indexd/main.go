@@ -32,8 +32,9 @@ const (
 )
 
 var cfg = config.Config{
-	Directory: os.Getenv(dataDirEnvVar), // default to env variable
-	Debug:     false,
+	AutoOpenWebUI: true,
+	Directory:     os.Getenv(dataDirEnvVar), // default to env variable
+	Debug:         false,
 	AdminAPI: config.AdminAPI{
 		Address:  "127.0.0.1:9980",
 		Password: os.Getenv(indexdAdminPasswordEnvVar),
@@ -332,8 +333,6 @@ func main() {
 				cfg.Syncer.Peers = append(cfg.Syncer.Peers, syncer.MainnetBootstrapPeers...)
 			case "zen":
 				cfg.Syncer.Peers = append(cfg.Syncer.Peers, syncer.ZenBootstrapPeers...)
-			case "anagami":
-				cfg.Syncer.Peers = append(cfg.Syncer.Peers, syncer.AnagamiBootstrapPeers...)
 			}
 		}
 
@@ -344,8 +343,6 @@ func main() {
 			network, genesis = chain.Mainnet()
 		case "zen":
 			network, genesis = chain.TestnetZen()
-		case "anagami":
-			network, genesis = chain.TestnetAnagami()
 		default:
 			checkFatalError("invalid network", errors.New("must be one of 'mainnet', 'zen' or 'anagami'"))
 		}
