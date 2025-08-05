@@ -90,7 +90,7 @@ func main() {
 		loop:
 			for {
 				// prepare client (refresh the app key daily)
-				client, err := loadClient(ctx, sk)
+				client, err := loadClient(ctx, sk, log)
 				if err != nil {
 					log.Error("failed to load client, timing out for 5 minutes", zap.Error(err))
 					if ok := <-waitFor(ctx, 5*time.Minute); ok {
@@ -140,7 +140,7 @@ func waitFor(ctx context.Context, d time.Duration) <-chan bool {
 	return c
 }
 
-func loadClient(ctx context.Context, masterKey types.PrivateKey) (*sdk.SDK, error) {
+func loadClient(ctx context.Context, masterKey types.PrivateKey, log *zap.Logger) (*sdk.SDK, error) {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 
@@ -158,7 +158,7 @@ func loadClient(ctx context.Context, masterKey types.PrivateKey) (*sdk.SDK, erro
 
 	// create new client
 	clientUntil = time.Now().AddDate(0, 0, 1)
-	client, err = sdk.NewSDK(appURL, appKey)
+	client, err = sdk.NewSDK(appURL, appKey, sdk.WithLogger(log))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create SDK: %w", err)
 	}
