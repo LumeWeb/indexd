@@ -82,7 +82,7 @@ type Dialer struct {
 // NewDialer returns a new Dialer.
 func NewDialer(c AppClient, appKey types.PrivateKey, log *zap.Logger) (*Dialer, error) {
 	d := &Dialer{
-		log: log,
+		log: log.Named("dialer"),
 
 		c:      c,
 		appKey: appKey,

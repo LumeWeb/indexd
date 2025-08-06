@@ -18,6 +18,7 @@ import (
 	"go.sia.tech/indexd/api/app"
 	"go.sia.tech/indexd/hosts"
 	"go.sia.tech/indexd/slabs"
+	"go.uber.org/zap"
 	"golang.org/x/crypto/chacha20"
 	"lukechampine.com/frand"
 )
@@ -536,11 +537,41 @@ func initSDK(client AppClient, dialer HostDialer, appKey types.PrivateKey) (*SDK
 	}, nil
 }
 
+type (
+	option struct {
+		logger *zap.Logger
+	}
+
+	// Option is a functional option for configuring the SDK.
+	Option func(*option)
+)
+
+// WithLogger sets the logger for the SDK. The default behavior is to not log
+// anything.
+func WithLogger(logger *zap.Logger) Option {
+	return func(o *option) {
+		o.logger = logger
+	}
+}
+
 // NewSDK creates a new indexd client with the given app key and base URL.
-func NewSDK(baseURL string, appKey types.PrivateKey) (*SDK, error) {
+func NewSDK(baseURL string, appKey types.PrivateKey, opts ...Option) (*SDK, error) {
+	options := option{
+		logger: zap.NewNop(), // no logging by default
+	}
+	for _, opt := range opts {
+		opt(&options)
+	}
+
+	options.logger = options.logger.Named("sdk") // decorate logger
+
 	c, err := app.NewClient(baseURL, appKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create app client: %w", err)
 	}
-	return initSDK(c, nil, appKey) // TODO: init dialer
+	dialer, err := NewDialer(c, appKey, options.logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create host dialer: %w", err)
+	}
+	return initSDK(c, dialer, appKey)
 }
