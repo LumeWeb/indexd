@@ -294,7 +294,9 @@ func (a *app) handlePOSTAuthConnect(jc jape.Context) {
 	}
 
 	if err := a.store.UseAppConnectKey(ctx, connectKey, req.AppKey); err != nil {
-		a.log.Debug("failed to use connect key", zap.Error(err)) // no need to fail
+		a.log.Debug("failed to use app connect key", zap.Error(err))
+		jc.Error(ErrInternalError, http.StatusInternalServerError)
+		return
 	}
 	jc.Encode(nil)
 }
