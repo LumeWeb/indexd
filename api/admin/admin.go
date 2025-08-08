@@ -17,6 +17,7 @@ import (
 	"go.sia.tech/coreutils/wallet"
 	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/api"
+	"go.sia.tech/indexd/api/app"
 	"go.sia.tech/indexd/build"
 	"go.sia.tech/indexd/contracts"
 	"go.sia.tech/indexd/explorer"
@@ -81,6 +82,10 @@ type (
 		UpdateMaintenanceSettings(ctx context.Context, ms contracts.MaintenanceSettings) error
 		PinnedSettings(ctx context.Context) (pins.PinnedSettings, error)
 		UpdatePinnedSettings(ctx context.Context, ps pins.PinnedSettings) error
+
+		AddAppConnectKey(context.Context, app.AddConnectKey) error
+		DeleteAppConnectKey(context.Context, string) error
+		AppConnectKeys(ctx context.Context, offset, limit int) ([]app.ConnectKey, error)
 	}
 
 	// A Syncer can connect to other peers and synchronize the blockchain.
@@ -179,6 +184,11 @@ func NewAPI(chain ChainManager, contracts ContractManager, hosts HostManager, sy
 		// txpool endpoints
 		"GET /txpool/recommendedfee": a.handleGETTxpoolRecommendedFee,
 
+		// connect endpoints
+		"GET /apps/connect/keys":         a.handleGETAppConnectKeys,
+		"PUT /apps/connect/keys":         a.handlePUTAppConnectKeys,
+		"DELETE /apps/connect/keys/:key": a.handleDELETEAppConnectKeys,
+
 		// wallet endpoints
 		"GET /wallet":            a.handleGETWallet,
 		"GET /wallet/events":     a.handleGETWalletEvents,
@@ -247,6 +257,45 @@ func (a *admin) handlePOSTTrigger(jc jape.Context) {
 		return
 	}
 
+	jc.Encode(nil)
+}
+
+func (a *admin) handleGETAppConnectKeys(jc jape.Context) {
+	offset, limit, ok := api.ParseOffsetLimit(jc)
+	if !ok {
+		return
+	}
+
+	keys, err := a.store.AppConnectKeys(jc.Request.Context(), offset, limit)
+	if jc.Check("failed to get app connect keys", err) != nil {
+		return
+	}
+	jc.Encode(keys)
+}
+
+func (a *admin) handlePUTAppConnectKeys(jc jape.Context) {
+	var key app.AddConnectKey
+	if jc.Decode(&key) != nil {
+		return
+	}
+
+	err := a.store.AddAppConnectKey(jc.Request.Context(), key)
+	if jc.Check("failed to add app connect key", err) != nil {
+		return
+	}
+	jc.Encode(nil)
+}
+
+func (a *admin) handleDELETEAppConnectKeys(jc jape.Context) {
+	var key string
+	if jc.DecodeParam("key", &key) != nil {
+		return
+	}
+
+	err := a.store.DeleteAppConnectKey(jc.Request.Context(), key)
+	if jc.Check("failed to delete app connect key", err) != nil {
+		return
+	}
 	jc.Encode(nil)
 }
 

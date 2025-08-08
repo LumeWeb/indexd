@@ -8,6 +8,7 @@ import (
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/wallet"
 	"go.sia.tech/indexd/api"
+	"go.sia.tech/indexd/api/app"
 	"go.sia.tech/indexd/contracts"
 	"go.sia.tech/indexd/hosts"
 	"go.sia.tech/indexd/pins"
@@ -27,6 +28,27 @@ func NewClient(addr, password string) *Client {
 		BaseURL:  addr,
 		Password: password,
 	}}
+}
+
+// AppConnectKeys retrieves a paginated list of application connection keys.
+func (c *Client) AppConnectKeys(ctx context.Context, offset, limit int) (keys []app.ConnectKey, err error) {
+	values := url.Values{}
+	values.Set("offset", fmt.Sprintf("%d", offset))
+	values.Set("limit", fmt.Sprintf("%d", limit))
+	err = c.c.GET(ctx, "/apps/connect/keys?"+values.Encode(), &keys)
+	return
+}
+
+// DeleteAppConnectKey removes the application connection key with the given key.
+func (c *Client) DeleteAppConnectKey(ctx context.Context, key string) (err error) {
+	err = c.c.DELETE(ctx, fmt.Sprintf("/apps/connect/keys/%s", key))
+	return
+}
+
+// AddAppConnectKey adds a new application connection key.
+func (c *Client) AddAppConnectKey(ctx context.Context, key app.AddConnectKey) (err error) {
+	err = c.c.PUT(ctx, "/apps/connect/keys", key)
+	return
 }
 
 // Accounts returns all accounts registered in the indexer.

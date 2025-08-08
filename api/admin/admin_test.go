@@ -2,8 +2,11 @@ package admin_test
 
 import (
 	"context"
+	"encoding/hex"
+	"fmt"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +17,7 @@ import (
 	"go.sia.tech/coreutils/wallet"
 	"go.sia.tech/indexd/api"
 	"go.sia.tech/indexd/api/admin"
+	"go.sia.tech/indexd/api/app"
 	"go.sia.tech/indexd/contracts"
 	"go.sia.tech/indexd/internal/testutils"
 	"go.sia.tech/indexd/pins"
@@ -22,6 +26,96 @@ import (
 	"go.uber.org/zap/zaptest"
 	"lukechampine.com/frand"
 )
+
+func TestAppConnectKeys(t *testing.T) {
+	c := testutils.NewConsensusNode(t, zap.NewNop())
+	indexer := testutils.NewIndexer(t, c, zap.NewNop())
+	admin := indexer.Client
+
+	keys, err := admin.AppConnectKeys(context.Background(), 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(keys) != 0 {
+		t.Fatal("unexpected keys", keys)
+	}
+
+	var generated []app.ConnectKey
+	for i := range 100 {
+		key := app.ConnectKey{
+			Key:           hex.EncodeToString(frand.Bytes(32)),
+			Description:   fmt.Sprintf("key %d", i),
+			RemainingUses: frand.Intn(1000) + 1,
+		}
+		err = admin.AddAppConnectKey(context.Background(), app.AddConnectKey{
+			Key:           key.Key,
+			Description:   key.Description,
+			RemainingUses: key.RemainingUses,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		generated = append(generated, key)
+	}
+	slices.Reverse(generated)
+
+	// verify keys were added
+	keys, err = admin.AppConnectKeys(context.Background(), 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(keys) != 10 {
+		t.Fatal("unexpected keys", keys)
+	}
+	for i := range keys {
+		generated[i].DateCreated = keys[i].DateCreated
+		if !reflect.DeepEqual(keys[i], generated[i]) {
+			t.Fatal("unexpected key", keys[i], generated[i])
+		}
+	}
+
+	keys, err = admin.AppConnectKeys(context.Background(), 10, 10)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(keys) != 10 {
+		t.Fatal("unexpected keys", keys)
+	}
+	filtered := generated[10:20]
+	for i := range keys {
+		filtered[i].DateCreated = keys[i].DateCreated
+		if !reflect.DeepEqual(keys[i], filtered[i]) {
+			t.Fatal("unexpected key", keys[i], filtered[i])
+		}
+	}
+
+	key := generated[0]
+	key.Description = "foobar"
+
+	if err := admin.AddAppConnectKey(context.Background(), app.AddConnectKey{
+		Key:           key.Key,
+		Description:   key.Description,
+		RemainingUses: key.RemainingUses,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	keys, err = admin.AppConnectKeys(context.Background(), 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	} else if !reflect.DeepEqual(keys[0], key) {
+		t.Fatal("unexpected key", keys[0], key)
+	}
+
+	err = admin.DeleteAppConnectKey(context.Background(), key.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	keys, err = admin.AppConnectKeys(context.Background(), 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	} else if !reflect.DeepEqual(keys[0], generated[1]) {
+		t.Fatal("unexpected key", keys[0], generated[1])
+	}
+}
 
 func TestAccountsAPI(t *testing.T) {
 	c := testutils.NewConsensusNode(t, zap.NewNop())

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -34,8 +35,10 @@ type (
 		UnpinSlab(context.Context, proto.Account, slabs.SlabID) error
 		UsableHosts(ctx context.Context, offset, limit int) ([]hosts.HostInfo, error)
 
+		ValidAppConnectKey(context.Context, string) (bool, error)
+		UseAppConnectKey(context.Context, string, types.PublicKey) error
+
 		HasAccount(ctx context.Context, ak types.PublicKey) (bool, error)
-		AddAccount(ctx context.Context, pk types.PublicKey) error
 	}
 
 	authReq struct {
@@ -71,8 +74,8 @@ type (
 		store Store
 		log   *zap.Logger
 
-		hostname        string
-		authRequiresTLS bool
+		hostname     string
+		advertiseURL string
 
 		mu           sync.Mutex
 		authRequests map[string]authReq // maps request ID to auth request
@@ -94,14 +97,6 @@ var (
 func WithLogger(log *zap.Logger) Option {
 	return func(api *app) {
 		api.log = log
-	}
-}
-
-// WithAuthRequiresTLS sets whether the application API requires TLS when
-// connecting with new apps.
-func WithAuthRequiresTLS(requiresTLS bool) Option {
-	return func(api *app) {
-		api.authRequiresTLS = requiresTLS
 	}
 }
 
@@ -233,12 +228,8 @@ func (a *app) handleAuthRegister(jc jape.Context) {
 		delete(a.authRequests, requestID)
 		a.mu.Unlock()
 	})
-	proto := "https"
-	if !a.authRequiresTLS {
-		proto = "http"
-	}
 	jc.Encode(RegisterAppResponse{
-		ResponseURL: fmt.Sprintf("%s://%s/auth/connect/%s", proto, a.hostname, requestID),
+		ResponseURL: fmt.Sprintf("%s/auth/connect/%s", a.advertiseURL, requestID),
 		Expiration:  expiration,
 	})
 }
@@ -264,13 +255,11 @@ func (a *app) handleGETAuthConnectUI(jc jape.Context) {
 }
 
 func (a *app) handlePOSTAuthConnect(jc jape.Context) {
+	_, connectKey, _ := jc.Request.BasicAuth()
 	ctx := jc.Request.Context()
 
 	if jc.Request.Host != a.hostname {
 		jc.Error(fmt.Errorf("invalid hostname %q", jc.Request.Host), http.StatusBadRequest)
-		return
-	} else if jc.Request.TLS == nil && a.authRequiresTLS {
-		jc.Error(errors.New("application API requires TLS"), http.StatusBadRequest)
 		return
 	}
 
@@ -304,9 +293,8 @@ func (a *app) handlePOSTAuthConnect(jc jape.Context) {
 		return
 	}
 
-	if err := a.store.AddAccount(ctx, req.AppKey); err != nil {
-		jc.Error(ErrInternalError, http.StatusInternalServerError)
-		return
+	if err := a.store.UseAppConnectKey(ctx, connectKey, req.AppKey); err != nil {
+		a.log.Debug("failed to use connect key", zap.Error(err)) // no need to fail
 	}
 	jc.Encode(nil)
 }
@@ -315,14 +303,18 @@ func (a *app) handlePOSTAuthConnect(jc jape.Context) {
 // users, or rather their applications, to pin slabs to the indexer.
 // Authentication happens through presigned URLs that are signed with a private
 // key that corresponds to a previously registered public key.
-func NewAPI(hostname string, store Store, registerAppPassword string, opts ...Option) http.Handler {
+func NewAPI(advertiseURL string, store Store, opts ...Option) (http.Handler, error) {
+	u, err := url.Parse(advertiseURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse advertise URL %q: %w", advertiseURL, err)
+	}
 	a := &app{
 		store: store,
 		log:   zap.NewNop(),
 
-		hostname:        hostname,
-		authRequests:    make(map[string]authReq),
-		authRequiresTLS: true,
+		hostname:     u.Host,
+		advertiseURL: advertiseURL,
+		authRequests: make(map[string]authReq),
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -341,10 +333,20 @@ func NewAPI(hostname string, store Store, registerAppPassword string, opts ...Op
 	wrapBasicAuth := func(h jape.Handler) jape.Handler {
 		return func(jc jape.Context) {
 			_, password, ok := jc.Request.BasicAuth()
-			if !ok || password != registerAppPassword {
+			if !ok {
+				jc.Error(errors.New("missing basic auth credentials"), http.StatusUnauthorized)
+				return
+			}
+
+			ok, err := store.ValidAppConnectKey(jc.Request.Context(), password)
+			if err != nil {
+				jc.Error(ErrInternalError, http.StatusInternalServerError)
+				return
+			} else if !ok {
 				jc.Error(errors.New("unauthorized"), http.StatusUnauthorized)
 				return
 			}
+
 			h(jc)
 		}
 	}
@@ -373,5 +375,5 @@ func NewAPI(hostname string, store Store, registerAppPassword string, opts ...Op
 		"POST /slabs":           wrapCORS(wrapSignedAuth(a.handlePOSTSlabs)),
 		"GET /slabs/:slabid":    wrapCORS(wrapSignedAuth(a.handleGETSlab)),
 		"DELETE /slabs/:slabid": wrapCORS(wrapSignedAuth(a.handleDELETESlab)),
-	})
+	}), nil
 }

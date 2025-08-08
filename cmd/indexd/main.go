@@ -40,8 +40,7 @@ var cfg = config.Config{
 		Password: os.Getenv(indexdAdminPasswordEnvVar),
 	},
 	ApplicationAPI: config.ApplicationAPI{
-		Address:  ":9982",
-		Hostname: "127.0.0.1:9982",
+		Address: ":9982",
 	},
 	Syncer: config.Syncer{
 		Address:   ":9981",
@@ -276,9 +275,6 @@ func main() {
 			os.Exit(1)
 		} else if cfg.RecoveryPhrase == "" {
 			fmt.Fprintf(os.Stderr, "missing recovery phrase - needs to be set via config file\n")
-			os.Exit(1)
-		} else if cfg.ApplicationAPI.Password == "" {
-			fmt.Fprintf(os.Stderr, "missing application API password - needs to be set via config file\n")
 			os.Exit(1)
 		}
 

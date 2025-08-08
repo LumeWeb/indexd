@@ -172,7 +172,6 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger, opts ...Indexer
 
 	appAPIOpts := []app.Option{
 		app.WithLogger(log.Named("api.application")),
-		app.WithAuthRequiresTLS(false), // allow non-TLS connections for testing
 	}
 
 	appListener, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -180,8 +179,13 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger, opts ...Indexer
 		t.Fatalf("failed to listen on application address: %v", err)
 	}
 	appAPIAddr := fmt.Sprintf("http://%s", appListener.Addr().String())
+	appHandler, err := app.NewAPI(appAPIAddr, store, appAPIOpts...)
+	if err != nil {
+		t.Fatalf("failed to create application API: %v", err)
+	}
+
 	appAPI := http.Server{
-		Handler: app.NewAPI(appListener.Addr().String(), store, "foobar", appAPIOpts...),
+		Handler: appHandler,
 	}
 
 	go func() {

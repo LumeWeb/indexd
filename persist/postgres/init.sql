@@ -3,6 +3,13 @@ CREATE TABLE accounts (
     public_key BYTEA UNIQUE NOT NULL CHECK (LENGTH(public_key) = 32)
 );
 
+CREATE TABLE app_connect_keys (
+    app_key TEXT PRIMARY KEY,
+    use_description TEXT NOT NULL,
+    remaining_uses INTEGER NOT NULL,
+    date_created TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE hosts (
     id SERIAL PRIMARY KEY,
     public_key BYTEA UNIQUE NOT NULL CHECK (LENGTH(public_key) = 32),

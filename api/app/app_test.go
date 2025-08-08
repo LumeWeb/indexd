@@ -68,6 +68,15 @@ func TestApplicationAPI(t *testing.T) {
 	sk := types.GeneratePrivateKey()
 	client := indexer.App(sk)
 
+	admin := indexer.Client
+	err = admin.AddAppConnectKey(ctx, app.AddConnectKey{
+		Key:           "foobar",
+		RemainingUses: 1,
+	})
+	if err != nil {
+		t.Fatal("failed to add app connect key:", err)
+	}
+
 	connectResp, err := client.RequestAppConnection(ctx, app.RegisterAppRequest{
 		Name:        "Test App",
 		Description: "A test application",
