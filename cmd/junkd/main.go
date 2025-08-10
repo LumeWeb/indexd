@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -44,6 +46,19 @@ var (
 	elapsed   []time.Duration
 )
 
+func openBrowser(url string) error {
+	switch runtime.GOOS {
+	case "linux":
+		return exec.Command("xdg-open", url).Start()
+	case "windows":
+		return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+	case "darwin":
+		return exec.Command("open", url).Start()
+	default:
+		return fmt.Errorf("unsupported platform %q", runtime.GOOS)
+	}
+}
+
 func init() {
 	flag.StringVar(&indexerURL, "indexer.url", "http://localhost:9982", "the URL of the indexer API")
 	flag.StringVar(&appSecret, "app.secret", "", "a secret used to derive the application key")
@@ -64,19 +79,14 @@ func main() {
 		log.Fatal("failed to load private key", zap.Error(err))
 	}
 
-	client, err := app.NewClient(indexerURL, sk)
-	if err != nil {
-		log.Fatal("failed to create app client", zap.Error(err))
-	}
-
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	if ok, err := client.CheckAppAuth(ctx); err != nil {
-		log.Fatal("failed to check app auth", zap.Error(err))
-	} else if !ok {
-		log.Info("authenticating new application", zap.String("indexerURL", indexerURL))
-		connectResp, err := client.RequestAppConnection(ctx, app.RegisterAppRequest{
+	if connected, err := sdk.Connected(ctx, indexerURL, sk); err != nil {
+		log.Fatal("failed to check app connection", zap.Error(err))
+	} else if !connected {
+		log.Info("app is not connected, requesting connection", zap.String("indexerURL", indexerURL))
+		resp, err := sdk.ConnectApp(ctx, indexerURL, sk, app.RegisterAppRequest{
 			Name:        "junkd Uploader",
 			Description: "A tool to upload junk data to the indexer",
 			LogoURL:     "https://example.com/logo.png",
@@ -85,19 +95,18 @@ func main() {
 		if err != nil {
 			log.Fatal("failed to request app connection", zap.Error(err))
 		}
-		log.Info("waiting for app connection approval", zap.String("approvalURL", connectResp.ResponseURL))
+		log.Info("waiting for app connection approval", zap.String("approvalURL", resp.ResponseURL), zap.Duration("expiration", time.Until(resp.Expiration)))
 
-		authCtx, authCancel := context.WithDeadline(ctx, connectResp.Expiration)
+		authCtx, authCancel := context.WithDeadline(ctx, resp.Expiration)
 		defer authCancel()
 
-		log.Info("waiting for app connection approval", zap.Time("expiration", connectResp.Expiration))
 	top:
 		for {
 			select {
 			case <-authCtx.Done():
 				log.Fatal("timed out waiting for app connection approval", zap.Error(authCtx.Err()))
 			case <-time.After(time.Second):
-				if ok, err := client.CheckAppAuth(authCtx); err != nil {
+				if ok, err := sdk.Connected(authCtx, indexerURL, sk); err != nil {
 					log.Fatal("failed to check app auth", zap.Error(err))
 				} else if ok {
 					break top
@@ -105,6 +114,7 @@ func main() {
 			}
 		}
 	}
+
 	log.Info("junkd connected")
 
 	sdkClient, err := sdk.NewSDK(indexerURL, sk, sdk.WithLogger(log.Named("sdk")))
