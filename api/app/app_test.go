@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"reflect"
 	"strings"
@@ -249,5 +250,70 @@ func TestApplicationAPI(t *testing.T) {
 		slab2.Sectors[1].Root != slab2Params.Sectors[1].Root ||
 		slab2.Sectors[2].Root != slab2Params.Sectors[2].Root {
 		t.Fatal("unexpected sector roots in slab")
+	}
+}
+
+func TestAppConnect(t *testing.T) {
+	ctx := t.Context()
+	// create cluster with three hosts
+	logger := testutils.NewLogger(false)
+	cluster := testutils.NewCluster(t, testutils.WithHosts(3), testutils.WithLogger(logger))
+	indexer := cluster.Indexer
+	admin := indexer.Client
+
+	connectKey, err := admin.AddAppConnectKey(ctx, app.AddConnectKeyRequest{
+		Description:   "hello world",
+		RemainingUses: 1,
+	})
+
+	sk := types.GeneratePrivateKey()
+	appClient := indexer.App(sk)
+
+	connected, err := appClient.CheckAppAuth(ctx)
+	if err != nil {
+		t.Fatal("failed to check app auth:", err)
+	} else if connected {
+		t.Fatal("expected app to not be authenticated yet")
+	}
+
+	resp, err := appClient.RequestAppConnection(ctx, app.RegisterAppRequest{
+		Name:        "test-app",
+		Description: "A test app",
+		ServiceURL:  "http://test-app.com",
+	})
+	if err != nil {
+		t.Fatal("failed to request app connection:", err)
+	}
+
+	if ok, err := appClient.CheckRequestStatus(ctx, resp.StatusURL); err != nil {
+		t.Fatal("failed to check request status:", err)
+	} else if ok {
+		t.Fatal("expected request to not be approved")
+	}
+
+	// reject the request
+	respondToAppConnection(t, resp.ResponseURL, connectKey.Key, false)
+
+	if _, err := appClient.CheckRequestStatus(ctx, resp.StatusURL); !errors.Is(err, app.ErrUserRejected) {
+		t.Fatalf("expected request to be rejected, got: %v", err)
+	}
+
+	// try again
+
+	resp, err = appClient.RequestAppConnection(ctx, app.RegisterAppRequest{
+		Name:        "test-app",
+		Description: "A test app",
+		ServiceURL:  "http://test-app.com",
+	})
+	if err != nil {
+		t.Fatal("failed to request app connection:", err)
+	}
+
+	respondToAppConnection(t, resp.ResponseURL, connectKey.Key, true)
+
+	if ok, err := appClient.CheckRequestStatus(ctx, resp.StatusURL); err != nil {
+		t.Fatal("failed to check request status:", err)
+	} else if !ok {
+		t.Fatal("expected request to be approved")
 	}
 }

@@ -96,24 +96,6 @@ var (
 	ErrNoMoreHosts = errors.New("no more hosts available")
 )
 
-// ConnectApp requests permission to connect an application to the indexer.
-func ConnectApp(ctx context.Context, indexerURL string, appKey types.PrivateKey, meta app.RegisterAppRequest) (app.RegisterAppResponse, error) {
-	client, err := app.NewClient(indexerURL, appKey)
-	if err != nil {
-		return app.RegisterAppResponse{}, err
-	}
-	return client.RequestAppConnection(ctx, meta)
-}
-
-// Connected checks if the app key is connected to the indexer.
-func Connected(ctx context.Context, indexerURL string, appKey types.PrivateKey) (bool, error) {
-	client, err := app.NewClient(indexerURL, appKey)
-	if err != nil {
-		return false, err
-	}
-	return client.CheckAppAuth(ctx)
-}
-
 func (s *SDK) uploadSlab(ctx context.Context, encryptionKey [32]byte, shards [][]byte, dataShards uint8, maxInFlight int, timeout time.Duration) (slabs.SlabPinParams, error) {
 	if len(shards) == 0 {
 		return slabs.SlabPinParams{}, errors.New("no shards to upload")

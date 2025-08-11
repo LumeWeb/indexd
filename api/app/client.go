@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -107,6 +108,35 @@ func (c *Client) SlabIDs(ctx context.Context, opts ...api.URLQueryParameterOptio
 func (c *Client) RequestAppConnection(ctx context.Context, request RegisterAppRequest) (resp RegisterAppResponse, err error) {
 	err = c.c.POST(ctx, c.sign("/auth/connect"), request, &resp)
 	return
+}
+
+// CheckRequestStatus checks if an auth request has been approved.
+// If the auth request is still pending, it returns false.
+func (c *Client) CheckRequestStatus(ctx context.Context, statusURL string) (bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.sign(statusURL), nil)
+	if err != nil {
+		return false, fmt.Errorf("failed to create request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("failed to check app auth: %w", err)
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusNotFound:
+		return false, ErrUserRejected
+	case http.StatusOK:
+		var connectResp AuthConnectStatusResponse
+		err = json.NewDecoder(resp.Body).Decode(&connectResp)
+		return connectResp.Approved, err
+	default:
+		buf, err := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		if err != nil {
+			return false, fmt.Errorf("failed to read response error: %w", err)
+		}
+		return false, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, buf)
+	}
 }
 
 // CheckAppAuth checks if the application is authenticated with the indexer.

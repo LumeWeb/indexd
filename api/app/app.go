@@ -62,6 +62,7 @@ type (
 	// The user must approve the request before the expiration time.
 	RegisterAppResponse struct {
 		ResponseURL string    `json:"responseURL"`
+		StatusURL   string    `json:"statusURL"`
 		Expiration  time.Time `json:"expiration"`
 	}
 
@@ -91,6 +92,10 @@ var (
 	// ErrAlreadyConnected is returned when an application that
 	// is already connected tries to connect again.
 	ErrAlreadyConnected = errors.New("account already connected")
+
+	// ErrUserRejected is returned when a user rejects an application
+	// connection request.
+	ErrUserRejected = errors.New("user rejected connection request")
 )
 
 // WithLogger sets the logger for application API.
@@ -230,6 +235,7 @@ func (a *app) handleAuthRegister(jc jape.Context) {
 	})
 	jc.Encode(RegisterAppResponse{
 		ResponseURL: fmt.Sprintf("%s/auth/connect/%s", a.advertiseURL, requestID),
+		StatusURL:   fmt.Sprintf("%s/auth/connect/%s/status", a.advertiseURL, requestID),
 		Expiration:  expiration,
 	})
 }
@@ -238,6 +244,46 @@ func (a *app) handleGETAuthCheck(jc jape.Context, _ types.PublicKey) {
 	jc.Encode(nil) // if we reached this point, account is already authenticated
 }
 
+type AuthConnectStatusResponse struct {
+	Approved bool `json:"approved"`
+}
+
+func (a *app) handleGETAuthConnectStatus(jc jape.Context) {
+	// check whether the request is properly signed
+	pk, ok := getSignedURLAuth(jc, a.hostname)
+	if !ok {
+		return
+	}
+
+	if ok, err := a.store.HasAccount(jc.Request.Context(), pk); err != nil {
+		jc.Error(ErrInternalError, http.StatusInternalServerError)
+		return
+	} else if ok {
+		jc.Encode(AuthConnectStatusResponse{
+			Approved: true,
+		})
+		return
+	}
+
+	var requestID string
+	jc.DecodeParam("requestID", &requestID)
+
+	a.mu.Lock()
+	authReq, ok := a.authRequests[requestID]
+	a.mu.Unlock()
+	switch {
+	case !ok:
+		jc.Error(fmt.Errorf("unknown request ID %q", requestID), http.StatusNotFound)
+	case authReq.AppKey != pk:
+		jc.Error(fmt.Errorf("invalid app key"), http.StatusBadRequest)
+	case time.Now().After(authReq.Expiration):
+		jc.Error(fmt.Errorf("request expired"), http.StatusGone)
+	default:
+		jc.Encode(AuthConnectStatusResponse{
+			Approved: false,
+		})
+	}
+}
 func (a *app) handleGETAuthConnectUI(jc jape.Context) {
 	var requestID string
 	jc.DecodeParam("requestID", &requestID)
@@ -373,10 +419,11 @@ func NewAPI(advertiseURL string, store Store, opts ...Option) (http.Handler, err
 	}
 
 	return jape.Mux(map[string]jape.Handler{
-		"POST /auth/connect":            a.handleAuthRegister, // register request
-		"GET /auth/connect/:requestID":  a.handleGETAuthConnectUI,
-		"POST /auth/connect/:requestID": wrapBasicAuth(a.handlePOSTAuthConnect),         // accept/reject
-		"GET /auth/check":               wrapCORS(wrapSignedAuth(a.handleGETAuthCheck)), // check auth status
+		"POST /auth/connect":                  a.handleAuthRegister, // register request
+		"GET /auth/connect/:requestID":        a.handleGETAuthConnectUI,
+		"POST /auth/connect/:requestID":       wrapBasicAuth(a.handlePOSTAuthConnect), // accept/reject
+		"GET /auth/connect/:requestID/status": wrapCORS(a.handleGETAuthConnectStatus),
+		"GET /auth/check":                     wrapCORS(wrapSignedAuth(a.handleGETAuthCheck)),
 
 		"GET /hosts":            wrapCORS(wrapSignedAuth(a.handleGETHosts)),
 		"GET /slabs":            wrapCORS(wrapSignedAuth(a.handleGETSlabs)),
