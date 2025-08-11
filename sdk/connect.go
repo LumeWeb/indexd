@@ -24,6 +24,8 @@ func openBrowser(url string) error {
 	}
 }
 
+// A ConnectAppRequest is a request to connect an application
+// to the indexer.
 type ConnectAppRequest struct {
 	app.RegisterAppResponse
 
