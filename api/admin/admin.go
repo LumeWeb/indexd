@@ -89,6 +89,8 @@ type (
 		UpdateAppConnectKey(context.Context, app.UpdateAppConnectKey) (app.ConnectKey, error)
 		DeleteAppConnectKey(context.Context, string) error
 		AppConnectKeys(ctx context.Context, offset, limit int) ([]app.ConnectKey, error)
+
+		SectorStats(ctx context.Context) (SectorsStatsResponse, error)
 	}
 
 	// A Syncer can connect to other peers and synchronize the blockchain.
@@ -201,7 +203,7 @@ func NewAPI(chain ChainManager, contracts ContractManager, hosts HostManager, sy
 		"POST /wallet/send":      a.handlePOSTWalletSend,
 
 		// stats endpoints
-		"GET /stats/sectors": nil,
+		"GET /stats/sectors": a.handleGETStatsSectors,
 	}
 
 	// debug endpoints
@@ -767,4 +769,12 @@ func (a *admin) handlePOSTWalletSend(jc jape.Context) {
 	}
 
 	jc.Encode(txn.ID())
+}
+
+func (a *admin) handleGETStatsSectors(jc jape.Context) {
+	stats, err := a.store.SectorStats(jc.Request.Context())
+	if jc.Check("failed to retrieve sector stats", err) != nil {
+		return
+	}
+	jc.Encode(stats)
 }
