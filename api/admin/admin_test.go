@@ -231,12 +231,14 @@ func TestAlertsAPI(t *testing.T) {
 	indexer := testutils.NewIndexer(t, c, zap.NewNop())
 	alerter := indexer.Alerter()
 
+	// no alerts registered at this point
 	if alerts, err := indexer.Alerts(context.Background()); err != nil {
 		t.Fatal(err)
 	} else if len(alerts) != 0 {
 		t.Fatalf("expected 0 alerts, got %d", len(alerts))
 	}
 
+	// first alert has info severity
 	a1 := alerts.Alert{
 		ID:        types.Hash256{0: 1},
 		Severity:  alerts.SeverityInfo,
@@ -246,6 +248,7 @@ func TestAlertsAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// we should have the 1 alert we just registered
 	if alerts, err := indexer.Alerts(context.Background()); err != nil {
 		t.Fatal(err)
 	} else if len(alerts) != 1 {
@@ -254,12 +257,14 @@ func TestAlertsAPI(t *testing.T) {
 		t.Fatalf("expected alert %v, got %v", a1, alerts[0])
 	}
 
+	// offset = 1 with only 1 alert registered should mean no results
 	if alerts, err := indexer.Alerts(context.Background(), admin.AlertQueryParameterOption(api.WithOffset(1))); err != nil {
 		t.Fatal(err)
 	} else if len(alerts) != 0 {
 		t.Fatalf("expected 0 alerts, got %d", len(alerts))
 	}
 
+	// seocnd alert has error severity
 	a2 := alerts.Alert{
 		ID:        types.Hash256{0: 2},
 		Severity:  alerts.SeverityError,
@@ -269,6 +274,7 @@ func TestAlertsAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// we should only get the second alert if we filter with SeverityError
 	if alerts, err := indexer.Alerts(context.Background(), admin.WithSeverity(alerts.SeverityError)); err != nil {
 		t.Fatal(err)
 	} else if len(alerts) != 1 {
@@ -296,6 +302,7 @@ func TestAlertsAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// we should only have the second alert left after dismissing the first one
 	if alerts, err := indexer.Alerts(context.Background()); err != nil {
 		t.Fatal(err)
 	} else if len(alerts) != 1 {
