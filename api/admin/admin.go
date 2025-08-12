@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/hex"
+	"math"
 	"net/http"
 
 	"errors"
@@ -283,12 +284,13 @@ func (a *admin) handlePOSTAppConnectKeys(jc jape.Context) {
 		return
 	}
 	if req.MaxPinnedData == 0 {
-		req.MaxPinnedData = 1 << 30 // default to 1 TiB
+		req.MaxPinnedData = math.MaxUint64 // default to no limit
 	}
 
 	created, err := a.store.AddAppConnectKey(jc.Request.Context(), app.UpdateAppConnectKey{
 		Key:           hex.EncodeToString(frand.Bytes(16)),
 		Description:   req.Description,
+		MaxPinnedData: req.MaxPinnedData,
 		RemainingUses: req.RemainingUses,
 	})
 	if jc.Check("failed to update app connect key", err) != nil {

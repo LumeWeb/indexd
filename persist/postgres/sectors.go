@@ -156,12 +156,6 @@ func (s *Store) PinSlab(ctx context.Context, account proto.Account, nextIntegrit
 			return err
 		}
 
-		// check if pinning the slab would exceed the account's storage limit
-		newPinnedData := slab.Size()
-		if newPinnedData > maxPinnedData {
-			return accounts.ErrStorageLimitExceeded
-		}
-
 		// insert slab
 		var slabID int64
 		var existingSlab bool
@@ -189,8 +183,16 @@ func (s *Store) PinSlab(ctx context.Context, account proto.Account, nextIntegrit
 			return fmt.Errorf("failed to insert slab into account_slabs: %w", err)
 		}
 
-		// update the account's pinned data
+		// check if pinning the slab would exceed the account's storage limit
+		// and if not, update the account's pinned data NOTE: we perform this
+		// check here since we need to know if the slab is a new slab or whether
+		// it was just repinned.
 		if res.RowsAffected() > 0 {
+			newPinnedData := pinnedData + slab.Size()
+			if newPinnedData > maxPinnedData {
+				return accounts.ErrStorageLimitExceeded
+			}
+
 			_, err := tx.Exec(ctx, `UPDATE accounts SET pinned_data = $1 WHERE id = $2`, newPinnedData, accountID)
 			if err != nil {
 				return fmt.Errorf("failed to update account's pinned data: %w", err)
