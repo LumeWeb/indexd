@@ -54,11 +54,12 @@ type (
 		*admin.Client
 		App func(types.PrivateKey) *app.Client
 
-		cm     *chain.Manager
-		dialer *client.SiamuxDialer
-		store  *postgres.Store
-		syncer *Syncer
-		wallet *wallet.SingleAddressWallet
+		cm      *chain.Manager
+		dialer  *client.SiamuxDialer
+		alerter *alerts.Manager
+		store   *postgres.Store
+		syncer  *Syncer
+		wallet  *wallet.SingleAddressWallet
 	}
 
 	// IndexerOpt is a functional option for configuring an indexer for testing
@@ -152,10 +153,11 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger, opts ...Indexer
 		admin.WithLogger(log.Named("api.admin")),
 		admin.WithExplorer(explorer.New("https://api.siascan.com")),
 	}
+	alerter := alerts.NewManager()
 
 	password := hex.EncodeToString(frand.Bytes(16))
 	adminAPI := http.Server{
-		Handler: jape.BasicAuth(password)(admin.NewAPI(c.cm, contracts, hm, syncer, wm, store, adminAPIOpts...)),
+		Handler: jape.BasicAuth(password)(admin.NewAPI(c.cm, contracts, hm, syncer, wm, store, alerter, adminAPIOpts...)),
 	}
 
 	adminListener, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -234,11 +236,12 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger, opts ...Indexer
 			return client
 		},
 
-		cm:     c.cm,
-		dialer: dialer,
-		store:  store,
-		syncer: syncer,
-		wallet: wm,
+		cm:      c.cm,
+		dialer:  dialer,
+		alerter: alerter,
+		store:   store,
+		syncer:  syncer,
+		wallet:  wm,
 	}
 }
 
@@ -253,6 +256,11 @@ func (idx *Indexer) HostClient(t *testing.T, hk types.PublicKey) *client.HostCli
 		t.Fatalf("failed to dial host %s: %v", hk, err) // developer error
 	}
 	return hc
+}
+
+// Alerter returns the underlying alert manager.
+func (idx *Indexer) Alerter() *alerts.Manager {
+	return idx.alerter
 }
 
 // Store returns the underlying store.

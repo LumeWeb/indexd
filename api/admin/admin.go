@@ -17,6 +17,7 @@ import (
 	"go.sia.tech/coreutils/syncer"
 	"go.sia.tech/coreutils/wallet"
 	"go.sia.tech/indexd/accounts"
+	"go.sia.tech/indexd/alerts"
 	"go.sia.tech/indexd/api"
 	"go.sia.tech/indexd/api/app"
 	"go.sia.tech/indexd/build"
@@ -110,6 +111,11 @@ type (
 		ReleaseInputs(txns []types.Transaction, v2txns []types.V2Transaction)
 		SignV2Inputs(txn *types.V2Transaction, toSign []int)
 	}
+
+	Alerter interface {
+		DismissAlerts(ids ...types.Hash256)
+		Alerts(offset, limit int, opts ...alerts.AlertOpt) ([]alerts.Alert, error)
+	}
 )
 
 type (
@@ -122,6 +128,7 @@ type (
 		store     Store
 		syncer    Syncer
 		wallet    Wallet
+		alerter   Alerter
 		log       *zap.Logger
 	}
 )
@@ -131,7 +138,7 @@ type (
 // API exposes endpoints to manage accounts, hosts, settings and the wallet.
 // This is different from the application API, which users, or rather their
 // applications, can use to pin slabs.
-func NewAPI(chain ChainManager, contracts ContractManager, hosts HostManager, syncer Syncer, wallet Wallet, store Store, opts ...Option) http.Handler {
+func NewAPI(chain ChainManager, contracts ContractManager, hosts HostManager, syncer Syncer, wallet Wallet, store Store, alerter Alerter, opts ...Option) http.Handler {
 	a := &admin{
 		chain:     chain,
 		contracts: contracts,
@@ -139,6 +146,7 @@ func NewAPI(chain ChainManager, contracts ContractManager, hosts HostManager, sy
 		store:     store,
 		syncer:    syncer,
 		wallet:    wallet,
+		alerter:   alerter,
 		log:       zap.NewNop(),
 	}
 	for _, opt := range opts {
@@ -153,6 +161,10 @@ func NewAPI(chain ChainManager, contracts ContractManager, hosts HostManager, sy
 		"POST   /account/:accountkey": a.handlePOSTAccount,
 		"PUT    /account/:accountkey": a.handlePUTAccount,
 		"DELETE /account/:accountkey": a.handleDELETEAccount,
+
+		// alerts endpoints
+		"GET    /alerts":     a.handleGETAlerts,
+		"DELETE /alerts/:id": a.handleDELETEAlerts,
 
 		// contract endpoints
 		"GET /contract/:contractid": a.handleGETContract,
@@ -415,6 +427,38 @@ func (a *admin) handleDELETEAccount(jc jape.Context) {
 	} else if jc.Check("failed to delete account", err) != nil {
 		return
 	}
+}
+
+func (a *admin) handleGETAlerts(jc jape.Context) {
+	offset, limit, ok := api.ParseOffsetLimit(jc)
+	if !ok {
+		return
+	}
+
+	var opts []alerts.AlertOpt
+	if jc.Request.FormValue("severity") != "" {
+		var severity alerts.Severity
+		if jc.DecodeForm("severity", &severity) != nil {
+			return
+		}
+		opts = append(opts, alerts.WithSeverity(severity))
+	}
+
+	alerts, err := a.alerter.Alerts(offset, limit, opts...)
+	if jc.Check("failed to get alerts", err) != nil {
+		return
+	}
+	jc.Encode(alerts)
+}
+
+func (a *admin) handleDELETEAlerts(jc jape.Context) {
+	var id types.Hash256
+	if jc.DecodeParam("id", &id) != nil {
+		return
+	}
+
+	a.alerter.DismissAlerts(id)
+	jc.Encode(nil)
 }
 
 func (a *admin) handleGETState(jc jape.Context) {
