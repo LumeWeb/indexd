@@ -25,7 +25,7 @@ var (
 type (
 	// AddAccountOptions holds optional parameters for account creation.
 	AddAccountOptions struct {
-		MaxPinnedData uint64
+		MaxPinnedData int64
 	}
 
 	// AddAccountOption is a functional option for configuring optional
@@ -34,7 +34,7 @@ type (
 )
 
 // WithMaxPinnedData sets the maximum amount of data that can be pinned
-func WithMaxPinnedData(maxPinnedData uint64) AddAccountOption {
+func WithMaxPinnedData(maxPinnedData int64) AddAccountOption {
 	return func(opts *AddAccountOptions) {
 		opts.MaxPinnedData = maxPinnedData
 	}

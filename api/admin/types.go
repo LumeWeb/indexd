@@ -11,7 +11,7 @@ type (
 	// AddAccountRequest is the request body for the [POST]
 	// /account/:accountkey.
 	AddAccountRequest struct {
-		StorageLimit uint64 `json:"storageLimit"`
+		StorageLimit int64 `json:"storageLimit"`
 	}
 
 	// AccountRotateKeyRequest is the request body for the [PUT]

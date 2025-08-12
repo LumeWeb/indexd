@@ -448,7 +448,7 @@ func TestPinSlabs(t *testing.T) {
 		t.Fatal("expected ErrNotFound, got", err)
 	}
 
-	slabSize := uint64(2 * proto.SectorSize)
+	slabSize := int64(2 * proto.SectorSize)
 
 	// add accounts - account1 can pin 2 slabs and account2 can pin 3 slabs
 	if err := store.AddAccount(context.Background(), types.PublicKey(account), accounts.WithMaxPinnedData(2*slabSize)); err != nil {
@@ -484,9 +484,9 @@ func TestPinSlabs(t *testing.T) {
 		return slabID, slab
 	}
 
-	assertPinnedData := func(acc proto.Account, pinned uint64) {
+	assertPinnedData := func(acc proto.Account, pinned int64) {
 		t.Helper()
-		var pinnedData uint64
+		var pinnedData int64
 		err := store.pool.QueryRow(context.Background(), "SELECT pinned_data FROM accounts WHERE public_key = $1", sqlPublicKey(acc)).Scan(&pinnedData)
 		if err != nil {
 			t.Fatal(err)
