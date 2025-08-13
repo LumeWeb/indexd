@@ -298,7 +298,7 @@ func TestAlertsAPI(t *testing.T) {
 		t.Fatalf("expected alert %v, got %v", a2, alerts[1])
 	}
 
-	if err := indexer.DismissAlert(context.Background(), a1.ID); err != nil {
+	if err := indexer.DismissAlerts(context.Background(), a1.ID); err != nil {
 		t.Fatal(err)
 	}
 
