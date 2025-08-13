@@ -1,11 +1,13 @@
 package admin_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"reflect"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +16,7 @@ import (
 	"go.sia.tech/coreutils/chain"
 	"go.sia.tech/coreutils/testutil"
 	"go.sia.tech/coreutils/wallet"
+	"go.sia.tech/indexd/alerts"
 	"go.sia.tech/indexd/api"
 	"go.sia.tech/indexd/api/admin"
 	"go.sia.tech/indexd/api/app"
@@ -223,6 +226,92 @@ func TestAccountsAPI(t *testing.T) {
 	}
 }
 
+func TestAlertsAPI(t *testing.T) {
+	c := testutils.NewConsensusNode(t, zap.NewNop())
+	indexer := testutils.NewIndexer(t, c, zap.NewNop())
+	alerter := indexer.Alerter()
+
+	// no alerts registered at this point
+	if alerts, err := indexer.Alerts(context.Background()); err != nil {
+		t.Fatal(err)
+	} else if len(alerts) != 0 {
+		t.Fatalf("expected 0 alerts, got %d", len(alerts))
+	}
+
+	// first alert has info severity
+	a1 := alerts.Alert{
+		ID:        types.Hash256{0: 1},
+		Severity:  alerts.SeverityInfo,
+		Timestamp: time.Now().UTC(),
+	}
+	if err := alerter.RegisterAlert(a1); err != nil {
+		t.Fatal(err)
+	}
+
+	// we should have the 1 alert we just registered
+	if alerts, err := indexer.Alerts(context.Background()); err != nil {
+		t.Fatal(err)
+	} else if len(alerts) != 1 {
+		t.Fatalf("expected 1 alerts, got %d", len(alerts))
+	} else if !reflect.DeepEqual(alerts[0], a1) {
+		t.Fatalf("expected alert %v, got %v", a1, alerts[0])
+	}
+
+	// offset = 1 with only 1 alert registered should mean no results
+	if alerts, err := indexer.Alerts(context.Background(), admin.AlertQueryParameterOption(api.WithOffset(1))); err != nil {
+		t.Fatal(err)
+	} else if len(alerts) != 0 {
+		t.Fatalf("expected 0 alerts, got %d", len(alerts))
+	}
+
+	// seocnd alert has error severity
+	a2 := alerts.Alert{
+		ID:        types.Hash256{0: 2},
+		Severity:  alerts.SeverityError,
+		Timestamp: time.Now().UTC(),
+	}
+	if err := alerter.RegisterAlert(a2); err != nil {
+		t.Fatal(err)
+	}
+
+	// we should only get the second alert if we filter with SeverityError
+	if alerts, err := indexer.Alerts(context.Background(), admin.WithSeverity(alerts.SeverityError)); err != nil {
+		t.Fatal(err)
+	} else if len(alerts) != 1 {
+		t.Fatalf("expected 1 alerts, got %d", len(alerts))
+	} else if !reflect.DeepEqual(alerts[0], a2) {
+		t.Fatalf("expected alert %v, got %v", a2, alerts[0])
+	}
+
+	alerts, err := indexer.Alerts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Slice(alerts, func(i, j int) bool {
+		return bytes.Compare(alerts[i].ID[:], alerts[j].ID[:]) < 0
+	})
+	if len(alerts) != 2 {
+		t.Fatalf("expected 2 alerts, got %d", len(alerts))
+	} else if !reflect.DeepEqual(alerts[0], a1) {
+		t.Fatalf("expected alert %v, got %v", a1, alerts[0])
+	} else if !reflect.DeepEqual(alerts[1], a2) {
+		t.Fatalf("expected alert %v, got %v", a2, alerts[1])
+	}
+
+	if err := indexer.DismissAlerts(context.Background(), a1.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// we should only have the second alert left after dismissing the first one
+	if alerts, err := indexer.Alerts(context.Background()); err != nil {
+		t.Fatal(err)
+	} else if len(alerts) != 1 {
+		t.Fatalf("expected 1 alerts, got %d", len(alerts))
+	} else if !reflect.DeepEqual(alerts[0], a2) {
+		t.Fatalf("expected alert %v, got %v", a2, alerts[0])
+	}
+}
+
 func TestContractsAPI(t *testing.T) {
 	// create cluster with one host
 	logger := newTestLogger(false)
@@ -329,6 +418,7 @@ func TestContractsAPI(t *testing.T) {
 		t.Fatal("expected contract to be renewed", contracts[0].RenewedFrom, contract.ID)
 	}
 }
+
 func TestExplorerAPI(t *testing.T) {
 	c := testutils.NewConsensusNode(t, zap.NewNop())
 	indexer := testutils.NewIndexer(t, c, zap.NewNop())
