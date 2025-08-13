@@ -145,6 +145,14 @@ func (m *AccountManager) FundAccounts(ctx context.Context, host hosts.Host, cont
 	return nil
 }
 
+// IsServiceAccount checks if the given account is registered as a service account.
+func (m *AccountManager) IsServiceAccount(account proto.Account) bool {
+	m.serviceAccountsMu.Lock()
+	defer m.serviceAccountsMu.Unlock()
+	_, ok := m.serviceAccounts[account]
+	return ok
+}
+
 func updateFundedAccounts(accounts []HostAccount, n int) {
 	if n > len(accounts) {
 		panic("illegal number of funded accounts") // developer error
