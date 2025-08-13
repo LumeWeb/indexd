@@ -3,6 +3,7 @@ CREATE TABLE accounts (
     public_key BYTEA UNIQUE NOT NULL CHECK (LENGTH(public_key) = 32),
     pinned_data BIGINT NOT NULL DEFAULT 0 CHECK (pinned_data >= 0), -- total pinned data in bytes
     max_pinned_data BIGINT NOT NULL CHECK (max_pinned_data >= 0) -- max pinned data in bytes
+    service_account BOOLEAN NOT NULL DEFAULT FALSE -- true if this is a service account
 );
 
 CREATE TABLE app_connect_keys (
@@ -267,6 +268,11 @@ CREATE TABLE sectors (
     -- data integrity
     next_integrity_check TIMESTAMP WITH TIME ZONE NOT NULL,
     consecutive_failed_checks SMALLINT NOT NULL DEFAULT 0
+);
+
+CREATE TABLE sectors_stats (
+    id INTEGER PRIMARY KEY NOT NULL DEFAULT 0 CHECK (id = 0), -- enforce a single row
+    num_slabs BIGINT NOT NULL DEFAULT 0 CHECK (num_slabs >= 0) -- total number of slabs
 );
 
 -- quick lookup of sectors that failed the integrity checks too many times

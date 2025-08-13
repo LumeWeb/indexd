@@ -135,7 +135,7 @@ func (s *Store) UseAppConnectKey(ctx context.Context, connectKey string, appKey 
 			return app.ErrKeyExhausted
 		}
 
-		if err := addAccount(ctx, tx, appKey, accounts.WithMaxPinnedData(storageLimit)); err != nil {
+		if err := addAccount(ctx, tx, appKey, false, accounts.WithMaxPinnedData(storageLimit)); err != nil {
 			return fmt.Errorf("failed to add app account: %w", err)
 		}
 		return nil

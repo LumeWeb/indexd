@@ -7,6 +7,7 @@ import (
 
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/wallet"
+	"go.sia.tech/indexd/alerts"
 	"go.sia.tech/indexd/api"
 	"go.sia.tech/indexd/api/app"
 	"go.sia.tech/indexd/contracts"
@@ -89,6 +90,22 @@ func (c *Client) AccountsAdd(ctx context.Context, accountKey types.PublicKey, op
 // AccountsDelete deletes the account with the given account key.
 func (c *Client) AccountsDelete(ctx context.Context, accountKey types.PublicKey) (err error) {
 	err = c.c.DELETE(ctx, fmt.Sprintf("/account/%s", accountKey))
+	return
+}
+
+// Alerts returns registered alerts.
+func (c *Client) Alerts(ctx context.Context, opts ...AlertQueryParameterOption) (alerts []alerts.Alert, err error) {
+	values := url.Values{}
+	for _, opt := range opts {
+		opt(values)
+	}
+	err = c.c.GET(ctx, "/alerts?"+values.Encode(), &alerts)
+	return
+}
+
+// DismissAlerts dismisses registered alerts.
+func (c *Client) DismissAlerts(ctx context.Context, ids ...types.Hash256) (err error) {
+	err = c.c.POST(ctx, "/alerts/dismiss", ids, nil)
 	return
 }
 
@@ -268,5 +285,11 @@ func (c *Client) WalletSendSiacoins(ctx context.Context, address types.Address, 
 		SubtractMinerFee: subtractFee,
 		UseUnconfirmed:   useUnconfirmed,
 	}, &id)
+	return
+}
+
+// StatsSectors returns statistics about the sectors managed by the indexer.
+func (c *Client) StatsSectors(ctx context.Context) (resp SectorsStatsResponse, err error) {
+	err = c.c.GET(ctx, "/stats/sectors", &resp)
 	return
 }

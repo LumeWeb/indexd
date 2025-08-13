@@ -46,6 +46,11 @@ func (s *mockStore) AddAccount(ctx context.Context, account types.PublicKey, opt
 	return nil
 }
 
+func (s *mockStore) AddServiceAccount(ctx context.Context, account types.PublicKey) error {
+	s.accounts[proto.Account(account)] = struct{}{}
+	return nil
+}
+
 func (s *mockStore) Contracts(ctx context.Context, offset, limit int, opts ...contracts.ContractQueryOpt) ([]contracts.Contract, error) {
 	opt := contracts.ContractQueryOpts{}
 	for _, o := range opts {

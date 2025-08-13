@@ -18,16 +18,28 @@ import (
 )
 
 // Accounts returns a list of account keys.
-func (s *Store) Accounts(ctx context.Context, offset, limit int) ([]types.PublicKey, error) {
+func (s *Store) Accounts(ctx context.Context, offset, limit int, opts ...accounts.QueryAccountsOpt) ([]types.PublicKey, error) {
 	if err := validateOffsetLimit(offset, limit); err != nil {
 		return nil, err
 	} else if limit == 0 {
 		return nil, nil
 	}
 
+	queryOpts := accounts.QueryAccountsOptions{
+		ServiceAccount: nil, // default to all accounts
+	}
+	for _, opt := range opts {
+		opt(&queryOpts)
+	}
+
 	var accs []types.PublicKey
 	if err := s.transaction(ctx, func(ctx context.Context, tx *txn) (err error) {
-		rows, err := tx.Query(ctx, `SELECT public_key FROM accounts LIMIT $1 OFFSET $2`, limit, offset)
+		rows, err := tx.Query(ctx, `
+			SELECT public_key
+			FROM accounts
+			WHERE ($1::boolean IS NULL OR service_account = $1::boolean)
+			LIMIT $2 OFFSET $3
+		`, queryOpts.ServiceAccount, limit, offset)
 		if err != nil {
 			return fmt.Errorf("failed to query accounts: %w", err)
 		}
@@ -48,10 +60,28 @@ func (s *Store) Accounts(ctx context.Context, offset, limit int) ([]types.Public
 	return accs, nil
 }
 
+// Account returns information about the account with the given public key.
+func (s *Store) Account(ctx context.Context, ak types.PublicKey) (accounts.Account, error) {
+	var account accounts.Account
+	account.AccountKey = proto.Account(ak) // no need to fetch key
+	err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
+		return tx.QueryRow(ctx, `SELECT service_account FROM accounts WHERE public_key = $1`, sqlPublicKey(ak)).Scan(&account.ServiceAccount)
+	})
+	return account, err
+}
+
 // AddAccount adds a new account in the database with given account key.
 func (s *Store) AddAccount(ctx context.Context, ak types.PublicKey, opts ...accounts.AddAccountOption) error {
 	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
-		return addAccount(ctx, tx, ak, opts...)
+		return addAccount(ctx, tx, ak, false, opts...)
+	})
+}
+
+// AddServiceAccount adds a new service account in the database with given
+// account key.
+func (s *Store) AddServiceAccount(ctx context.Context, ak types.PublicKey) error {
+	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
+		return addAccount(ctx, tx, ak, true)
 	})
 }
 
@@ -70,11 +100,14 @@ func (s *Store) HasAccount(ctx context.Context, ak types.PublicKey) (bool, error
 // DeleteAccount deletes the account in the database with given account key.
 func (s *Store) DeleteAccount(ctx context.Context, ak types.PublicKey) error {
 	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
-		res, err := tx.Exec(ctx, `DELETE FROM accounts WHERE public_key = $1`, sqlPublicKey(ak))
-		if err != nil {
-			return fmt.Errorf("failed to delete account: %w", err)
-		} else if res.RowsAffected() != 1 {
+		var serviceAccount bool
+		err := tx.QueryRow(ctx, `DELETE FROM accounts WHERE public_key = $1 RETURNING service_account`, sqlPublicKey(ak)).Scan(&serviceAccount)
+		if errors.Is(err, sql.ErrNoRows) {
 			return accounts.ErrNotFound
+		} else if err != nil {
+			return fmt.Errorf("failed to delete account: %w", err)
+		} else if serviceAccount {
+			return accounts.ErrServiceAccount
 		}
 		return nil
 	})
@@ -249,14 +282,14 @@ func (s *Store) ServiceAccountBalance(ctx context.Context, hostKey types.PublicK
 	return balance, err
 }
 
-func addAccount(ctx context.Context, tx *txn, account types.PublicKey, opts ...accounts.AddAccountOption) error {
+func addAccount(ctx context.Context, tx *txn, account types.PublicKey, serviceAccount bool, opts ...accounts.AddAccountOption) error {
 	aao := accounts.AddAccountOptions{
 		MaxPinnedData: math.MaxInt64, // no limit by default
 	}
 	for _, opt := range opts {
 		opt(&aao)
 	}
-	res, err := tx.Exec(ctx, `INSERT INTO accounts (public_key, max_pinned_data) VALUES ($1, $2) ON CONFLICT DO NOTHING`, sqlPublicKey(account), aao.MaxPinnedData)
+	res, err := tx.Exec(ctx, `INSERT INTO accounts (public_key, service_account, max_pinned_data) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, sqlPublicKey(account), serviceAccount, aao.MaxPinnedData)
 	if err != nil {
 		return fmt.Errorf("failed to add account: %w", err)
 	} else if res.RowsAffected() == 0 {
