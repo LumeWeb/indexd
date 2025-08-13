@@ -164,8 +164,8 @@ func NewAPI(chain ChainManager, contracts ContractManager, hosts HostManager, sy
 		"DELETE /account/:accountkey": a.handleDELETEAccount,
 
 		// alerts endpoints
-		"GET    /alerts":     a.handleGETAlerts,
-		"DELETE /alerts/:id": a.handleDELETEAlerts,
+		"GET    /alerts":         a.handleGETAlerts,
+		"POST   /alerts/dismiss": a.handlePOSTAlertsDismiss,
 
 		// contract endpoints
 		"GET /contract/:contractid": a.handleGETContract,
@@ -452,13 +452,13 @@ func (a *admin) handleGETAlerts(jc jape.Context) {
 	jc.Encode(alerts)
 }
 
-func (a *admin) handleDELETEAlerts(jc jape.Context) {
-	var id types.Hash256
-	if jc.DecodeParam("id", &id) != nil {
+func (a *admin) handlePOSTAlertsDismiss(jc jape.Context) {
+	var ids []types.Hash256
+	if jc.Decode(&ids) != nil {
 		return
 	}
 
-	a.alerter.DismissAlerts(id)
+	a.alerter.DismissAlerts(ids...)
 	jc.Encode(nil)
 }
 
