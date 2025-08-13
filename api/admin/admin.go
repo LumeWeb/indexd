@@ -338,7 +338,7 @@ func (a *admin) handleGETAccount(jc jape.Context) {
 	if errors.Is(err, accounts.ErrNotFound) {
 		jc.Error(err, http.StatusNotFound)
 		return
-	} else if jc.Check("failed to get accounts", err) != nil {
+	} else if jc.Check("failed to get account", err) != nil {
 		return
 	}
 	jc.Encode(acc)
