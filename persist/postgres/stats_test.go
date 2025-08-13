@@ -56,8 +56,8 @@ func TestSectorStatsNumSlabs(t *testing.T) {
 
 	// pin some slabs
 	var slabIDs []slabs.SlabID
-	for i := byte(0); i < 10; i++ {
-		slabID, err := store.PinSlab(context.Background(), account, time.Now(), newSlab(1))
+	for i := range byte(10) {
+		slabID, err := store.PinSlab(context.Background(), account, time.Now(), newSlab(i))
 		if err != nil {
 			t.Fatal(err)
 		}
