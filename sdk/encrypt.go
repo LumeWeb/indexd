@@ -46,7 +46,6 @@ func (rs *rekeyStream) XORKeyStream(dst, src []byte) {
 
 func nonce(offset uint64) (nonce [24]byte, nonce64 uint64) {
 	nonce64 = offset / (maxBytesPerNonce)
-	offset %= maxBytesPerNonce
 	binary.LittleEndian.PutUint64(nonce[16:], nonce64)
 	return
 }
@@ -59,6 +58,8 @@ func encrypt(key *[32]byte, r io.Reader, offset uint64) (cipher.StreamReader, er
 	}
 
 	n, _ := nonce(offset)
+	offset %= maxBytesPerNonce
+
 	c, _ := chacha20.NewUnauthenticatedCipher(key[:], n[:])
 	c.SetCounter(uint32(offset / 64))
 	rs := &rekeyStream{key: key[:], c: c}
@@ -69,6 +70,8 @@ func encrypt(key *[32]byte, r io.Reader, offset uint64) (cipher.StreamReader, er
 // specified offset.
 func decrypt(key *[32]byte, w io.Writer, offset uint64) cipher.StreamWriter {
 	n, n64 := nonce(offset)
+	offset %= maxBytesPerNonce
+
 	c, _ := chacha20.NewUnauthenticatedCipher(key[:], n[:])
 	c.SetCounter(uint32(offset / 64))
 
