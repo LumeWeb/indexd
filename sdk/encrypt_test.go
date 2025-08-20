@@ -41,9 +41,9 @@ func TestEncryptRoundtrip(t *testing.T) {
 		})
 	}
 
+	// test offset beyond max bytes
 	for _, offset := range []uint64{maxBytesPerNonce, 2 * maxBytesPerNonce} {
 		t.Run(fmt.Sprint(offset), func(t *testing.T) {
-			// test offset beyond max bytes
 			expected := data[:]
 			r, err := encrypt(&key, bytes.NewReader(expected), offset)
 			if err != nil {
