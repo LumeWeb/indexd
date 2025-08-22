@@ -9,15 +9,16 @@ import (
 // EncodeTo implements types.EncoderTo.
 func (s Slab) EncodeTo(e *types.Encoder) {
 	e.Write(s.ID[:])
-	e.WriteUint64(uint64(s.Offset))
-	e.WriteUint64(uint64(s.Length))
+	e.WriteUint64(uint64(s.Offset)<<32 | uint64(s.Length))
 }
 
 // DecodeFrom implements types.DecoderFrom.
 func (s *Slab) DecodeFrom(d *types.Decoder) {
 	d.Read(s.ID[:])
-	s.Offset = uint32(d.ReadUint64())
-	s.Length = uint32(d.ReadUint64())
+
+	combined := d.ReadUint64()
+	s.Offset = uint32(combined >> 32)
+	s.Length = uint32(combined)
 }
 
 // EncodeTo implements types.EncoderTo.
@@ -53,7 +54,7 @@ func (obj *Object) MarshalSia() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// This is a convenience method to decode the Sia-encoded bytes into an Object
+// This is a convenience method to decode the Sia-encoded bytes into an object
 // metadata type. This is equivalent to:
 // d := types.NewBufDecoder(bv)
 // obj.DecodeFrom(d)
