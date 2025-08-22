@@ -13,6 +13,7 @@ import (
 
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
+	"go.sia.tech/coreutils/chain"
 	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/api"
 	"go.sia.tech/indexd/hosts"
@@ -34,7 +35,7 @@ type (
 		PinnedSlab(context.Context, slabs.SlabID) (slabs.PinnedSlab, error)
 		SlabIDs(ctx context.Context, accountID proto.Account, offset, limit int) ([]slabs.SlabID, error)
 		UnpinSlab(context.Context, proto.Account, slabs.SlabID) error
-		UsableHosts(ctx context.Context, offset, limit int) ([]hosts.HostInfo, error)
+		UsableHosts(ctx context.Context, protocol *chain.Protocol, offset, limit int) ([]hosts.HostInfo, error)
 	}
 
 	// Accounts defines the account management interface for the application API.
@@ -128,7 +129,7 @@ func (a *app) handleGETHosts(jc jape.Context, _ types.PublicKey) {
 		return
 	}
 
-	hosts, err := a.store.UsableHosts(jc.Request.Context(), offset, limit)
+	hosts, err := a.store.UsableHosts(jc.Request.Context(), nil, offset, limit)
 	if jc.Check("failed to get hosts", err) != nil {
 		return
 	}

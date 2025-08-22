@@ -524,7 +524,7 @@ WHERE hosts.id = computed.id RETURNING hosts.id`,
 
 // UsableHosts returns a list of hosts that are not blocked, usable and have an
 // active contract. It returns only the host's public key and addresses.
-func (s *Store) UsableHosts(ctx context.Context, offset, limit int) ([]hosts.HostInfo, error) {
+func (s *Store) UsableHosts(ctx context.Context, protocol *chain.Protocol, offset, limit int) ([]hosts.HostInfo, error) {
 	if err := validateOffsetLimit(offset, limit); err != nil {
 		return nil, err
 	} else if limit == 0 {
@@ -595,8 +595,10 @@ WHERE
 	settings_egress_price <= globals.hosts_max_egress_price AND
 	settings_free_sector_price <= globals.one_sc / globals.sectors_per_tb AND
 	-- active contracts
-	EXISTS (SELECT 1 FROM contracts WHERE host_id = hosts.id AND state <= 1)
-LIMIT $1 OFFSET $2;`, limit, offset)
+	EXISTS (SELECT 1 FROM contracts WHERE host_id = hosts.id AND state <= 1) AND
+	-- protocol filter
+	($3::smallint IS NULL OR EXISTS (SELECT 1 FROM host_addresses WHERE host_id = hosts.id AND protocol = $3::smallint))
+LIMIT $1 OFFSET $2;`, limit, offset, (*sqlNetworkProtocol)(protocol))
 		if err != nil {
 			return fmt.Errorf("failed to query hosts: %w", err)
 		}
