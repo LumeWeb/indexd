@@ -129,7 +129,19 @@ func (a *app) handleGETHosts(jc jape.Context, _ types.PublicKey) {
 		return
 	}
 
-	hosts, err := a.store.UsableHosts(jc.Request.Context(), nil, offset, limit)
+	var p string
+	if err := jc.DecodeForm("protocol", &p); err != nil {
+		jc.Error(err, http.StatusBadRequest)
+		return
+	}
+
+	var protocol *chain.Protocol
+	if p != "" {
+		protocol = new(chain.Protocol)
+		*protocol = chain.Protocol(p)
+	}
+
+	hosts, err := a.store.UsableHosts(jc.Request.Context(), protocol, offset, limit)
 	if jc.Check("failed to get hosts", err) != nil {
 		return
 	}
