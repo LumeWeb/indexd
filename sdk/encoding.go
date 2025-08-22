@@ -60,7 +60,7 @@ func (obj *Object) MarshalSia() ([]byte, error) {
 // obj.DecodeFrom(d)
 // return d.Err()
 func (obj *Object) UnmarshalSia(b []byte) error {
-	d := types.NewBufDecoder(bv)
+	d := types.NewBufDecoder(b)
 	obj.DecodeFrom(d)
 	return d.Err()
 }
