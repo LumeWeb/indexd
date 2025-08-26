@@ -2,9 +2,9 @@ openapi: "3.0.0"
 info:
   title: Indexd Application API
   description: >
-    The Application API allows developers to pin and unpin slabs—collections of erasure-coded data shards—on the Sia network using Indexd. 
+    The Application API allows developers to pin and unpin slabs—collections of erasure-coded data shards—on the Sia network using Indexd.
     Once pinned, Indexd ensures the data remains healthy and available by monitoring and maintaining the underlying storage.
-  version: 2.0.0
+  version: 1.0.0
 
 servers:
   - url: http://localhost:9982/api
@@ -22,24 +22,24 @@ paths:
         - hosts
       summary: List usable hosts
       parameters:
-          - name: limit
-            in: query
-            description: The maximum number of hosts to return
-            schema:
-              type: integer
-              minimum: 1
-              maximum: 500
-              default: 100
-          - name: offset
-            in: query
-            description: The number of hosts to skip
-            schema:
-              type: integer
-              minimum: 0
-              default: 0
+        - name: limit
+          in: query
+          description: The maximum number of hosts to return
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+        - name: offset
+          in: query
+          description: The number of hosts to skip
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
       operationId: listHosts
       responses:
-        '200':
+        "200":
           description: A list of usable hosts
           content:
             application/json:
@@ -76,24 +76,24 @@ paths:
         - slabs
       summary: List all pinned slabs
       parameters:
-          - name: limit
-            in: query
-            description: The maximum number of slab IDs to return
-            schema:
-              type: integer
-              minimum: 1
-              maximum: 500
-              default: 100
-          - name: offset
-            in: query
-            description: The number of slab IDs to skip
-            schema:
-              type: integer
-              minimum: 0
-              default: 0
+        - name: limit
+          in: query
+          description: The maximum number of slab IDs to return
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+        - name: offset
+          in: query
+          description: The number of slab IDs to skip
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
       operationId: listSlabs
       responses:
-        '200':
+        "200":
           description: A list of pinned slabs
           content:
             application/json:
@@ -149,7 +149,7 @@ paths:
                   items:
                     type: object
                     properties:
-                      root: 
+                      root:
                         allOf:
                           - $ref: "#/components/schemas/Hash256"
                           - description: The root of the sector
@@ -158,7 +158,7 @@ paths:
                           - $ref: "#/components/schemas/PublicKey"
                           - description: The public key of the host that stores the sector
       responses:
-        '201':
+        "201":
           description: Slab pinned successfully
           content:
             application/json:
@@ -204,7 +204,7 @@ paths:
           schema:
             type: string
       responses:
-        '200':
+        "200":
           description: Details of the pinned slab
           content:
             application/json:
@@ -235,7 +235,7 @@ paths:
                           allOf:
                             - $ref: "#/components/schemas/PublicKey"
                             - description: The public key of the host storing the sector
-        '404':
+        "404":
           description: Slab not found
 
       x-codeSamples:
@@ -270,7 +270,7 @@ paths:
           schema:
             type: string
       responses:
-        '204':
+        "204":
           description: Slab unpinned successfully
 
       x-codeSamples:
@@ -294,16 +294,15 @@ paths:
               // ...
             }
 
-
 components:
   schemas:
     EncryptionKey:
-      $ref: './components.yml#/components/schemas/EncryptionKey'
+      $ref: "./components.yml#/components/schemas/EncryptionKey"
     Hash256:
-      $ref: './components.yml#/components/schemas/Hash256'
+      $ref: "./components.yml#/components/schemas/Hash256"
     HostInfo:
-      $ref: './components.yml#/components/schemas/HostInfo'
+      $ref: "./components.yml#/components/schemas/HostInfo"
     PublicKey:
-      $ref: './components.yml#/components/schemas/PublicKey'
+      $ref: "./components.yml#/components/schemas/PublicKey"
     SlabID:
-      $ref: './components.yml#/components/schemas/SlabID'
+      $ref: "./components.yml#/components/schemas/SlabID"
