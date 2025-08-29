@@ -40,31 +40,10 @@ type (
 	AddAccountOption func(*AddAccountOptions)
 )
 
-// WithDescription sets the description for the account
-func WithDescription(description string) AddAccountOption {
-	return func(opts *AddAccountOptions) {
-		opts.Description = description
-	}
-}
-
-// WithLogoURL sets the logo URL for the account
-func WithLogoURL(logoURL string) AddAccountOption {
-	return func(opts *AddAccountOptions) {
-		opts.LogoURL = logoURL
-	}
-}
-
 // WithMaxPinnedData sets the maximum amount of data that can be pinned
 func WithMaxPinnedData(maxPinnedData uint64) AddAccountOption {
 	return func(opts *AddAccountOptions) {
 		opts.MaxPinnedData = maxPinnedData
-	}
-}
-
-// WithServiceURL sets the service URL for the account
-func WithServiceURL(serviceURL string) AddAccountOption {
-	return func(opts *AddAccountOptions) {
-		opts.ServiceURL = serviceURL
 	}
 }
 

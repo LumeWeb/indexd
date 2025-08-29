@@ -55,7 +55,12 @@ func TestAppConnectKeys(t *testing.T) {
 	}
 
 	acc := types.GeneratePrivateKey().PublicKey()
-	if err := store.UseAppConnectKey(ctx, "foobar", "desc", "logo", "service", acc); err != nil {
+	meta := accounts.AccountMeta{
+		Description: "desc",
+		LogoURL:     "logo",
+		ServiceURL:  "service",
+	}
+	if err := store.UseAppConnectKey(ctx, "foobar", acc, meta); err != nil {
 		t.Fatal("failed to use app connect key:", err)
 	}
 	assertAccount(acc, 0, 10, "desc", "logo", "service")
@@ -73,7 +78,7 @@ func TestAppConnectKeys(t *testing.T) {
 	}
 
 	// try again on an exhausted key
-	if err := store.UseAppConnectKey(ctx, "foobar", "description", "logo", "service", types.GeneratePrivateKey().PublicKey()); !errors.Is(err, accounts.ErrKeyExhausted) {
+	if err := store.UseAppConnectKey(ctx, "foobar", types.GeneratePrivateKey().PublicKey(), meta); !errors.Is(err, accounts.ErrKeyExhausted) {
 		t.Fatalf("expected err %q, got %q", accounts.ErrKeyExhausted, err)
 	}
 

@@ -132,7 +132,7 @@ func (s *Store) DeleteAppConnectKey(ctx context.Context, connectKey string) erro
 
 // UseAppConnectKey decrements the remaining uses of a connect key
 // and adds the app account.
-func (s *Store) UseAppConnectKey(ctx context.Context, connectKey, description, logoURL, serviceURL string, appKey types.PublicKey) error {
+func (s *Store) UseAppConnectKey(ctx context.Context, connectKey string, appKey types.PublicKey, meta accounts.AccountMeta) error {
 	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
 		var uses int
 		var storageLimit uint64
@@ -149,11 +149,12 @@ func (s *Store) UseAppConnectKey(ctx context.Context, connectKey, description, l
 			return accounts.ErrKeyExhausted
 		}
 
-		if err := addAccount(ctx, tx, appKey, false,
-			accounts.WithDescription(description),
-			accounts.WithLogoURL(logoURL),
+		if err := addAccount(ctx, tx, appKey, false, accounts.AccountMeta{
+			Description: meta.Description,
+			LogoURL:     meta.LogoURL,
+			ServiceURL:  meta.ServiceURL,
+		},
 			accounts.WithMaxPinnedData(storageLimit),
-			accounts.WithServiceURL(serviceURL),
 		); err != nil {
 			return fmt.Errorf("failed to add app account: %w", err)
 		}

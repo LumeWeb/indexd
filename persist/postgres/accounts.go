@@ -71,17 +71,17 @@ func (s *Store) Account(ctx context.Context, ak types.PublicKey) (accounts.Accou
 }
 
 // AddAccount adds a new account in the database with given account key.
-func (s *Store) AddAccount(ctx context.Context, ak types.PublicKey, opts ...accounts.AddAccountOption) error {
+func (s *Store) AddAccount(ctx context.Context, ak types.PublicKey, meta accounts.AccountMeta, opts ...accounts.AddAccountOption) error {
 	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
-		return addAccount(ctx, tx, ak, false, opts...)
+		return addAccount(ctx, tx, ak, false, meta, opts...)
 	})
 }
 
 // AddServiceAccount adds a new service account in the database with given
 // account key.
-func (s *Store) AddServiceAccount(ctx context.Context, ak types.PublicKey, opts ...accounts.AddAccountOption) error {
+func (s *Store) AddServiceAccount(ctx context.Context, ak types.PublicKey, meta accounts.AccountMeta, opts ...accounts.AddAccountOption) error {
 	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
-		return addAccount(ctx, tx, ak, true, opts...)
+		return addAccount(ctx, tx, ak, true, meta, opts...)
 	})
 }
 
@@ -282,7 +282,7 @@ func (s *Store) ServiceAccountBalance(ctx context.Context, hostKey types.PublicK
 	return balance, err
 }
 
-func addAccount(ctx context.Context, tx *txn, account types.PublicKey, serviceAccount bool, opts ...accounts.AddAccountOption) error {
+func addAccount(ctx context.Context, tx *txn, account types.PublicKey, serviceAccount bool, meta accounts.AccountMeta, opts ...accounts.AddAccountOption) error {
 	aao := accounts.AddAccountOptions{
 		MaxPinnedData: math.MaxInt64, // no limit by default
 	}

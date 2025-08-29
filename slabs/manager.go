@@ -84,8 +84,8 @@ type (
 	// Store defines an interface to store and update slab related information
 	// in the database.
 	Store interface {
-		AddAccount(ctx context.Context, ak types.PublicKey, opts ...accounts.AddAccountOption) error
-		AddServiceAccount(ctx context.Context, ak types.PublicKey, opts ...accounts.AddAccountOption) error
+		AddAccount(ctx context.Context, ak types.PublicKey, meta accounts.AccountMeta, opts ...accounts.AddAccountOption) error
+		AddServiceAccount(ctx context.Context, ak types.PublicKey, meta accounts.AccountMeta, opts ...accounts.AddAccountOption) error
 		Contracts(ctx context.Context, offset, limit int, queryOpts ...contracts.ContractQueryOpt) ([]contracts.Contract, error)
 		Hosts(ctx context.Context, offset, limit int, queryOpts ...hosts.HostQueryOpt) ([]hosts.Host, error)
 		HostsForIntegrityChecks(ctx context.Context, maxLastCheck time.Time, limit int) ([]types.PublicKey, error)
@@ -231,7 +231,11 @@ func (m *SlabManager) initServiceAccounts(migrationAccount, integrityAccount typ
 		{"data integrity checks", integrityAccount},
 	} {
 		// ensure account is added to the store
-		err := m.store.AddServiceAccount(ctx, acc.key, accounts.WithDescription(acc.description))
+		err := m.store.AddServiceAccount(ctx, acc.key, accounts.AccountMeta{
+			Description: acc.description,
+			LogoURL:     "", // service accounts don't need a logo
+			ServiceURL:  "", // service accounts don't need a service URL
+		})
 		if err != nil && !errors.Is(err, accounts.ErrExists) {
 			return fmt.Errorf("failed to add service account: %w", err)
 		}
