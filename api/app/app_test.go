@@ -17,6 +17,7 @@ import (
 	"go.sia.tech/indexd/api"
 	"go.sia.tech/indexd/api/admin"
 	"go.sia.tech/indexd/api/app"
+	"go.sia.tech/indexd/geoip"
 	"go.sia.tech/indexd/internal/testutils"
 	"go.sia.tech/indexd/slabs"
 	"go.sia.tech/indexd/subscriber"
@@ -186,6 +187,26 @@ func TestApplicationAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	locationUS := geoip.Location{
+		CountryCode: "US",
+		Longitude:   -10,
+		Latitude:    20,
+	}
+	locationAU := geoip.Location{
+		CountryCode: "AU",
+		Longitude:   -10,
+		Latitude:    20,
+	}
+
+	// set h1 to US
+	if err := indexer.Store().UpdateHost(context.Background(), h1.PublicKey, h1.Networks, h1.Settings, locationUS, true, h1.LastSuccessfulScan); err != nil {
+		t.Fatal(err)
+	}
+	// set h2 to AU
+	if err := indexer.Store().UpdateHost(context.Background(), h2.PublicKey, h2.Networks, h2.Settings, locationAU, true, h2.LastSuccessfulScan); err != nil {
+		t.Fatal(err)
+	}
+
 	// assert filtering for quic only returns h1
 	usableHosts, err = client.Hosts(ctx, api.WithProtocol(quic.Protocol))
 	if err != nil {
@@ -193,6 +214,26 @@ func TestApplicationAPI(t *testing.T) {
 	} else if len(usableHosts) != 1 {
 		t.Fatal("expected 1 host, got", len(usableHosts))
 	} else if usableHosts[0].PublicKey != h1.PublicKey {
+		t.Fatal("got wrong quic host")
+	}
+
+	// filtering for US should only return h1
+	usableHosts, err = client.Hosts(ctx, api.WithCountry(locationUS.CountryCode))
+	if err != nil {
+		t.Fatal("failed to get hosts:", err)
+	} else if len(usableHosts) != 1 {
+		t.Fatal("expected 1 host, got", len(usableHosts))
+	} else if usableHosts[0].PublicKey != h1.PublicKey {
+		t.Fatal("got wrong quic host")
+	}
+
+	// filtering for AU should only return h1
+	usableHosts, err = client.Hosts(ctx, api.WithCountry(locationAU.CountryCode))
+	if err != nil {
+		t.Fatal("failed to get hosts:", err)
+	} else if len(usableHosts) != 1 {
+		t.Fatal("expected 1 host, got", len(usableHosts))
+	} else if usableHosts[0].PublicKey != h2.PublicKey {
 		t.Fatal("got wrong quic host")
 	}
 
