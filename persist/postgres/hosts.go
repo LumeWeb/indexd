@@ -617,11 +617,13 @@ WHERE
 	settings_ingress_price <= globals.hosts_max_ingress_price AND
 	settings_egress_price <= globals.hosts_max_egress_price AND
 	settings_free_sector_price <= globals.one_sc / globals.sectors_per_tb AND
+	-- country filter
+	($3::text IS NULL OR country_code = $3::text) AND
 	-- active contracts
 	EXISTS (SELECT 1 FROM contracts WHERE host_id = hosts.id AND state <= 1) AND
 	-- protocol filter
-	($3::smallint IS NULL OR EXISTS (SELECT 1 FROM host_addresses WHERE host_id = hosts.id AND protocol = $3::smallint))
-LIMIT $1 OFFSET $2;`, limit, offset, (*sqlNetworkProtocol)(queryOpts.Protocol))
+	($4::smallint IS NULL OR EXISTS (SELECT 1 FROM host_addresses WHERE host_id = hosts.id AND protocol = $4::smallint))
+LIMIT $1 OFFSET $2;`, limit, offset, queryOpts.CountryCode, (*sqlNetworkProtocol)(queryOpts.Protocol))
 		if err != nil {
 			return fmt.Errorf("failed to query hosts: %w", err)
 		}

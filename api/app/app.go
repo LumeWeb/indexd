@@ -146,9 +146,18 @@ func (a *app) handleGETHosts(jc jape.Context, _ types.PublicKey) {
 		jc.Error(fmt.Errorf("invalid protocol %s", p), http.StatusBadRequest)
 	}
 
+	var countryCode string
+	if err := jc.DecodeForm("country", &countryCode); err != nil {
+		jc.Error(err, http.StatusBadRequest)
+		return
+	}
+
 	var opts []hosts.UsableHostQueryOpt
 	if p != "" {
 		opts = append(opts, hosts.WithProtocol(chain.Protocol(p)))
+	}
+	if countryCode != "" {
+		opts = append(opts, hosts.WithCountry(countryCode))
 	}
 
 	hosts, err := a.store.UsableHosts(jc.Request.Context(), offset, limit, opts...)
