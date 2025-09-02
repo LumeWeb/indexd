@@ -567,7 +567,7 @@ func TestUsableHosts(t *testing.T) {
 	}
 
 	// helper to add hosts
-	addHost := func(i byte, protocols []chain.Protocol, usable, blocked bool, contract bool) types.PublicKey {
+	addHost := func(i byte, countryCode string, protocols []chain.Protocol, usable, blocked bool, contract bool) types.PublicKey {
 		t.Helper()
 
 		hk := types.PublicKey{i}
@@ -588,7 +588,9 @@ func TestUsableHosts(t *testing.T) {
 		if !usable {
 			settings.AcceptingContracts = false
 		}
-		if err := db.UpdateHost(context.Background(), hk, []net.IPNet{*network}, settings, geoip.Location{}, true, time.Now().Add(time.Hour)); err != nil {
+		if err := db.UpdateHost(context.Background(), hk, []net.IPNet{*network}, settings, geoip.Location{
+			CountryCode: countryCode,
+		}, true, time.Now().Add(time.Hour)); err != nil {
 			t.Fatal(err)
 		}
 
@@ -607,18 +609,20 @@ func TestUsableHosts(t *testing.T) {
 		return hk
 	}
 
+	countryUS := "US"
+	countryAU := "AU"
 	bothProtocols := []chain.Protocol{siamux.Protocol, quic.Protocol}
 	siamuxProtocol := []chain.Protocol{siamux.Protocol}
 	// add hosts in all possible configurations
-	_ = addHost(1, siamuxProtocol, false, false, false)
-	_ = addHost(2, siamuxProtocol, false, false, true)
-	_ = addHost(3, siamuxProtocol, false, true, false)
-	_ = addHost(4, siamuxProtocol, false, true, true)
-	_ = addHost(5, siamuxProtocol, true, false, false)
-	uh1 := addHost(6, siamuxProtocol, true, false, true)
-	_ = addHost(7, siamuxProtocol, true, true, false)
-	_ = addHost(8, bothProtocols, true, true, true)
-	uh2 := addHost(9, bothProtocols, true, false, true) // second usable host
+	_ = addHost(1, countryUS, siamuxProtocol, false, false, false)
+	_ = addHost(2, countryUS, siamuxProtocol, false, false, true)
+	_ = addHost(3, countryUS, siamuxProtocol, false, true, false)
+	_ = addHost(4, countryUS, siamuxProtocol, false, true, true)
+	_ = addHost(5, countryAU, siamuxProtocol, true, false, false)
+	uh1 := addHost(6, countryUS, siamuxProtocol, true, false, true)
+	_ = addHost(7, countryUS, siamuxProtocol, true, true, false)
+	_ = addHost(8, countryUS, bothProtocols, true, true, true)
+	uh2 := addHost(9, countryAU, bothProtocols, true, false, true) // second usable host
 
 	// assert only h6 and h9 are returned
 	if hosts, err := db.UsableHosts(context.Background(), 0, 10); err != nil {
@@ -669,6 +673,23 @@ func TestUsableHosts(t *testing.T) {
 		t.Fatal("unexpected host", hosts[0])
 	} else if hosts[0].Addresses == nil {
 		t.Fatal("expected host to have address")
+	}
+
+	// filter by country
+	if hosts, err := db.UsableHosts(context.Background(), 0, 10, hosts.WithCountry(countryUS)); err != nil {
+		t.Fatal("unexpected", err)
+	} else if len(hosts) != 1 {
+		t.Fatal("unexpected", len(hosts))
+	} else if hosts[0].PublicKey != uh1 {
+		t.Fatal("unexpected host", hosts[0])
+	}
+
+	if hosts, err := db.UsableHosts(context.Background(), 0, 10, hosts.WithCountry(countryAU)); err != nil {
+		t.Fatal("unexpected", err)
+	} else if len(hosts) != 1 {
+		t.Fatal("unexpected", len(hosts))
+	} else if hosts[0].PublicKey != uh2 {
+		t.Fatal("unexpected host", hosts[0])
 	}
 }
 

@@ -1,6 +1,7 @@
 package hosts
 
 import (
+	"strings"
 	"time"
 
 	"go.sia.tech/coreutils/chain"
@@ -48,7 +49,8 @@ type (
 	// UsableHostsQueryOpts holds optional parameters for querying usable
 	// hosts.
 	UsableHostsQueryOpts struct {
-		Protocol *chain.Protocol
+		Protocol    *chain.Protocol
+		CountryCode *string
 	}
 )
 
@@ -56,5 +58,14 @@ type (
 func WithProtocol(protocol chain.Protocol) UsableHostQueryOpt {
 	return func(opts *UsableHostsQueryOpts) {
 		opts.Protocol = &protocol
+	}
+}
+
+// WithCountry causes UsableHosts to only return hosts located in the given
+// country.
+func WithCountry(countryCode string) UsableHostQueryOpt {
+	return func(opts *UsableHostsQueryOpts) {
+		countryCode = strings.ToUpper(countryCode)
+		opts.CountryCode = &countryCode
 	}
 }

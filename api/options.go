@@ -55,6 +55,13 @@ func WithProtocol(protocol chain.Protocol) URLQueryParameterOption {
 	}
 }
 
+// WithCountry sets the 'country' parameter in Hosts
+func WithCountry(countryCode string) URLQueryParameterOption {
+	return func(q url.Values) {
+		q.Set("country", countryCode)
+	}
+}
+
 // ParseOffsetLimit parses the 'offset' and 'limit' query parameters from the
 // request context. It returns the offset and limit values, and a boolean
 // indicating whether the parsing was successful. If the parameters are not
