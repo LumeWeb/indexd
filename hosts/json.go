@@ -25,11 +25,9 @@ func (n *IPNet) UnmarshalText(text []byte) error {
 	if err != nil {
 		return err
 	}
-	if ip != nil {
-		subnet.IP = ip
-		if ip4 := subnet.IP.To4(); ip4 != nil {
-			subnet.IP = ip4
-		}
+	subnet.IP = ip
+	if ip4 := subnet.IP.To4(); ip4 != nil {
+		subnet.IP = ip4
 	}
 	*n = IPNet(*subnet)
 	return nil
