@@ -9,6 +9,7 @@ import (
 	proto4 "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/accounts"
+	"go.sia.tech/indexd/objects"
 	"go.sia.tech/indexd/slabs"
 	"go.uber.org/zap"
 	"lukechampine.com/frand"
@@ -35,7 +36,7 @@ func TestObjects(t *testing.T) {
 		}
 	}
 
-	assertObjects := func(acc proto4.Account, n int) []Object {
+	assertObjects := func(acc proto4.Account, n int) []objects.Object {
 		t.Helper()
 		objects, err := store.ListObjects(context.Background(), acc, time.Time{}, 10)
 		if err != nil {
@@ -53,9 +54,9 @@ func TestObjects(t *testing.T) {
 	// add objects for both accounts
 	objKey := frand.Entropy256()
 	slabID, _ := slab.Digest()
-	obj := Object{
+	obj := objects.Object{
 		Key: objKey,
-		Slabs: []SlabSlice{
+		Slabs: []objects.SlabSlice{
 			{
 				SlabID: slabID,
 				Offset: 10,
@@ -76,7 +77,7 @@ func TestObjects(t *testing.T) {
 		}
 	}
 
-	assertObj := func(obj, other Object) {
+	assertObj := func(obj, other objects.Object) {
 		t.Helper()
 		if other.CreatedAt.IsZero() || other.UpdatedAt.IsZero() {
 			t.Fatalf("expected non-zero timestamps, got %v and %v", other.CreatedAt, other.UpdatedAt)

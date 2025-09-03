@@ -11,33 +11,12 @@ import (
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/accounts"
-	"go.sia.tech/indexd/slabs"
-)
-
-type (
-	Object struct {
-		Key       types.Hash256
-		Slabs     []SlabSlice
-		Meta      []byte
-		CreatedAt time.Time
-		UpdatedAt time.Time
-	}
-
-	SlabSlice struct {
-		SlabID slabs.SlabID
-		Offset uint32
-		Length uint32
-	}
-)
-
-var (
-	ErrObjectNotFound = errors.New("object not found")
+	"go.sia.tech/indexd/objects"
 )
 
 // ListObjects lists objects for the given account that were updated after the
 // the given 'after' time.
-func (s *Store) ListObjects(ctx context.Context, account proto.Account, after time.Time, limit int64) ([]Object, error) {
-	var objects []Object
+func (s *Store) ListObjects(ctx context.Context, account proto.Account, after time.Time, limit int64) (objs []objects.Object, _ error) {
 	err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
 		var accountID int64
 		err := tx.QueryRow(ctx, "SELECT id FROM accounts WHERE accounts.public_key = $1", sqlPublicKey(account)).Scan(&accountID)
@@ -61,13 +40,13 @@ func (s *Store) ListObjects(ctx context.Context, account proto.Account, after ti
 		// read objects
 		var objectIDs []int64
 		for rows.Next() {
-			var obj Object
+			var obj objects.Object
 			var objID int64
 			err := rows.Scan(&objID, (*sqlHash256)(&obj.Key), &obj.CreatedAt, &obj.UpdatedAt, &obj.Meta)
 			if err != nil {
 				return fmt.Errorf("failed to scan object: %w", err)
 			}
-			objects = append(objects, obj)
+			objs = append(objs, obj)
 			objectIDs = append(objectIDs, objID)
 		}
 		if rows.Err() != nil {
@@ -75,7 +54,7 @@ func (s *Store) ListObjects(ctx context.Context, account proto.Account, after ti
 		}
 
 		// populate slabs
-		for i := range objects {
+		for i := range objs {
 			rows, err = tx.Query(ctx, `
 				SELECT slab_digest, slab_offset, slab_length
 				FROM object_slabs
@@ -86,12 +65,12 @@ func (s *Store) ListObjects(ctx context.Context, account proto.Account, after ti
 				return fmt.Errorf("failed to query slabs: %w", err)
 			}
 			for rows.Next() {
-				var slab SlabSlice
+				var slab objects.SlabSlice
 				err := rows.Scan((*sqlHash256)(&slab.SlabID), &slab.Offset, &slab.Length)
 				if err != nil {
 					return fmt.Errorf("failed to scan slab: %w", err)
 				}
-				objects[i].Slabs = append(objects[i].Slabs, slab)
+				objs[i].Slabs = append(objs[i].Slabs, slab)
 			}
 			if err := rows.Err(); err != nil {
 				return err
@@ -99,7 +78,7 @@ func (s *Store) ListObjects(ctx context.Context, account proto.Account, after ti
 		}
 		return nil
 	})
-	return objects, err
+	return objs, err
 }
 
 // DeleteObject deletes the object with the given key for the given account.
@@ -109,7 +88,7 @@ func (s *Store) DeleteObject(ctx context.Context, account proto.Account, objectK
 		err := tx.QueryRow(ctx, `SELECT id FROM objects WHERE object_key = $1`, sqlHash256(objectKey)).
 			Scan(&objectID)
 		if errors.Is(err, sql.ErrNoRows) {
-			return ErrObjectNotFound
+			return objects.ErrObjectNotFound
 		} else if err != nil {
 			return fmt.Errorf("failed to get object id: %w", err)
 		}
@@ -127,7 +106,7 @@ func (s *Store) DeleteObject(ctx context.Context, account proto.Account, objectK
 
 // SaveObject saves the given object for the given account. If an object with
 // the given key exists for an account, it is overwritten.
-func (s *Store) SaveObject(ctx context.Context, account proto.Account, obj Object) error {
+func (s *Store) SaveObject(ctx context.Context, account proto.Account, obj objects.Object) error {
 	if len(obj.Slabs) == 0 {
 		return errors.New("object must have at least one slab")
 	}
