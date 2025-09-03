@@ -135,7 +135,10 @@ func (s *Store) SaveObject(ctx context.Context, account proto.Account, obj Objec
 		}
 
 		var objectID int64
-		err = tx.QueryRow(ctx, `INSERT INTO objects (object_key, account_id, meta) VALUES ($1, $2, $3) RETURNING id`,
+		err = tx.QueryRow(ctx, `
+			INSERT INTO objects (object_key, account_id, meta) VALUES ($1, $2, $3)
+			ON CONFLICT (account_id, object_key) DO UPDATE SET meta = EXCLUDED.meta, updated_at = NOW()
+			RETURNING id`,
 			sqlHash256(obj.Key), accountID, obj.Meta).Scan(&objectID)
 		if err != nil {
 			return fmt.Errorf("failed to insert object: %w", err)
@@ -143,8 +146,16 @@ func (s *Store) SaveObject(ctx context.Context, account proto.Account, obj Objec
 
 		// TODO: what about objects linking slabs that aren't pinned? Pin them here?
 
+		// delete existing slabs
+		_, err = tx.Exec(context.Background(), `DELETE FROM object_slabs WHERE object_id = $1`, objectID)
+		if err != nil {
+			return fmt.Errorf("failed to delete existing slabs for object: %w", err)
+		}
+
 		for i, slab := range obj.Slabs {
-			_, err := tx.Exec(ctx, `INSERT INTO object_slabs (object_id, slab_digest, slab_index, slab_offset, slab_length) VALUES ($1, $2, $3, $4, $5)`,
+			_, err := tx.Exec(ctx, `
+				INSERT INTO object_slabs (object_id, slab_digest, slab_index, slab_offset, slab_length) VALUES ($1, $2, $3, $4, $5)
+			`,
 				objectID, sqlHash256(slab.SlabID), i, slab.Offset, slab.Length)
 			if err != nil {
 				return fmt.Errorf("failed to insert slab %d for object: %w", i, err)
