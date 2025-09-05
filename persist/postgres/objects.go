@@ -17,11 +17,8 @@ import (
 // the given 'after' time.
 func (s *Store) ListObjects(ctx context.Context, account proto.Account, cursor objects.Cursor, limit int64) (objs []objects.Object, _ error) {
 	err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
-		var accountID int64
-		err := tx.QueryRow(ctx, "SELECT id FROM accounts WHERE accounts.public_key = $1", sqlPublicKey(account)).Scan(&accountID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return accounts.ErrNotFound
-		} else if err != nil {
+		accountID, err := accountID(ctx, tx, account)
+		if err != nil {
 			return err
 		}
 
@@ -48,7 +45,7 @@ func (s *Store) ListObjects(ctx context.Context, account proto.Account, cursor o
 			objs = append(objs, obj)
 			objectIDs = append(objectIDs, objID)
 		}
-		if rows.Err() != nil {
+		if err := rows.Err(); err != nil {
 			return err
 		}
 
@@ -83,8 +80,12 @@ func (s *Store) ListObjects(ctx context.Context, account proto.Account, cursor o
 // DeleteObject deletes the object with the given key for the given account.
 func (s *Store) DeleteObject(ctx context.Context, account proto.Account, objectKey types.Hash256) error {
 	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
+		accountID, err := accountID(ctx, tx, account)
+		if err != nil {
+			return err
+		}
 		var objectID int64
-		err := tx.QueryRow(ctx, `SELECT id FROM objects WHERE object_key = $1`, sqlHash256(objectKey)).
+		err = tx.QueryRow(ctx, `SELECT id FROM objects WHERE object_key = $1 AND account_id = $2`, sqlHash256(objectKey), accountID).
 			Scan(&objectID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return objects.ErrObjectNotFound
@@ -110,12 +111,9 @@ func (s *Store) SaveObject(ctx context.Context, account proto.Account, obj objec
 		return errors.New("object must have at least one slab")
 	}
 	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
-		var accountID int64
-		err := tx.QueryRow(ctx, "SELECT id FROM accounts WHERE accounts.public_key = $1", sqlPublicKey(account)).Scan(&accountID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return accounts.ErrNotFound
-		} else if err != nil {
-			return fmt.Errorf("failed to get account id: %w", err)
+		accountID, err := accountID(ctx, tx, account)
+		if err != nil {
+			return err
 		}
 
 		var objectID int64
@@ -147,4 +145,15 @@ func (s *Store) SaveObject(ctx context.Context, account proto.Account, obj objec
 		}
 		return nil
 	})
+}
+
+func accountID(ctx context.Context, tx *txn, account proto.Account) (int64, error) {
+	var accountID int64
+	err := tx.QueryRow(ctx, "SELECT id FROM accounts WHERE accounts.public_key = $1", sqlPublicKey(account)).Scan(&accountID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, accounts.ErrNotFound
+	} else if err != nil {
+		return 0, fmt.Errorf("failed to get account id: %w", err)
+	}
+	return accountID, nil
 }
