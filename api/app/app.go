@@ -232,7 +232,7 @@ func (a *app) handlePOSTObjects(jc jape.Context, pk types.PublicKey) {
 
 	err := a.store.SaveObject(jc.Request.Context(), proto.Account(pk), obj)
 	if err != nil {
-		jc.Error(err, http.StatusBadRequest)
+		jc.Error(err, http.StatusInternalServerError)
 		return
 	}
 	jc.Encode(nil)
