@@ -15,7 +15,7 @@ import (
 
 // ListObjects lists objects for the given account that were updated after the
 // the given 'after' time.
-func (s *Store) ListObjects(ctx context.Context, account proto.Account, cursor objects.Cursor, limit int64) (objs []objects.Object, _ error) {
+func (s *Store) ListObjects(ctx context.Context, account proto.Account, cursor objects.Cursor, limit int) (objs []objects.Object, _ error) {
 	err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
 		accountID, err := accountID(ctx, tx, account)
 		if err != nil {

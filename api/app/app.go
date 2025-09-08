@@ -19,6 +19,7 @@ import (
 	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/api"
 	"go.sia.tech/indexd/hosts"
+	"go.sia.tech/indexd/objects"
 	"go.sia.tech/indexd/slabs"
 	"go.sia.tech/jape"
 	"go.uber.org/zap"
@@ -33,6 +34,10 @@ type (
 
 	// Store defines the store interface for the application API.
 	Store interface {
+		DeleteObject(ctx context.Context, account proto.Account, objectKey types.Hash256) error
+		SaveObject(ctx context.Context, account proto.Account, obj objects.Object) error
+		ListObjects(ctx context.Context, account proto.Account, cursor objects.Cursor, limit int) (objs []objects.Object, _ error)
+
 		PinSlab(context.Context, proto.Account, time.Time, slabs.SlabPinParams) (slabs.SlabID, error)
 		PinnedSlab(context.Context, slabs.SlabID) (slabs.PinnedSlab, error)
 		SlabIDs(ctx context.Context, accountID proto.Account, offset, limit int) ([]slabs.SlabID, error)
@@ -165,6 +170,70 @@ func (a *app) handleGETHosts(jc jape.Context, _ types.PublicKey) {
 		return
 	}
 	jc.Encode(hosts)
+}
+
+func (a *app) handleGETObjects(jc jape.Context, pk types.PublicKey) {
+	_, limit, ok := api.ParseOffsetLimit(jc)
+	if !ok {
+		return
+	}
+
+	var key types.Hash256
+	if jc.DecodeForm("key", &key) != nil {
+		return
+	}
+
+	var after time.Time
+	if jc.DecodeForm("after", &after) != nil {
+		return
+	}
+
+	objs, err := a.store.ListObjects(jc.Request.Context(), proto.Account(pk), objects.Cursor{
+		After: after,
+		Key:   key,
+	}, limit)
+	if err != nil {
+		jc.Error(err, http.StatusInternalServerError)
+		return
+	}
+
+	jc.Encode(objs)
+}
+
+func (a *app) handlePOSTObjects(jc jape.Context, pk types.PublicKey) {
+	var obj objects.Object
+	if jc.Decode(&obj) != nil {
+		return
+	}
+
+	if len(obj.Slabs) == 0 {
+		jc.Error(errors.New("object must have at least one slab"), http.StatusBadRequest)
+		return
+	}
+
+	err := a.store.SaveObject(jc.Request.Context(), proto.Account(pk), obj)
+	if err != nil {
+		jc.Error(err, http.StatusBadRequest)
+		return
+	}
+	jc.Encode(nil)
+}
+
+func (a *app) handleDELETEObjects(jc jape.Context, pk types.PublicKey) {
+	var key types.Hash256
+	if jc.DecodeParam("key", &key) != nil {
+		return
+	}
+
+	err := a.store.DeleteObject(jc.Request.Context(), proto.Account(pk), key)
+	if errors.Is(err, objects.ErrObjectNotFound) {
+		jc.Error(err, http.StatusNotFound)
+		return
+	} else if err != nil {
+		jc.Error(err, http.StatusInternalServerError)
+		return
+	}
+	jc.Encode(nil)
 }
 
 func (a *app) handlePOSTSlabs(jc jape.Context, pk types.PublicKey) {
@@ -499,7 +568,12 @@ func NewAPI(advertiseURL string, store Store, am Accounts, contracts Contracts, 
 		"GET /auth/connect/:requestID/status": wrapCORS(a.handleGETAuthConnectStatus),
 		"GET /auth/check":                     wrapCORS(wrapSignedAuth(a.handleGETAuthCheck)),
 
-		"GET /hosts":            wrapCORS(wrapSignedAuth(a.handleGETHosts)),
+		"GET /hosts": wrapCORS(wrapSignedAuth(a.handleGETHosts)),
+
+		"GET /objects":         wrapCORS(wrapSignedAuth(a.handleGETObjects)),
+		"POST /objects":        wrapCORS(wrapSignedAuth(a.handlePOSTObjects)),
+		"DELETE /objects/:key": wrapCORS(wrapSignedAuth(a.handleDELETEObjects)),
+
 		"GET /slabs":            wrapCORS(wrapSignedAuth(a.handleGETSlabs)),
 		"POST /slabs":           wrapCORS(wrapSignedAuth(a.handlePOSTSlabs)),
 		"GET /slabs/:slabid":    wrapCORS(wrapSignedAuth(a.handleGETSlab)),
