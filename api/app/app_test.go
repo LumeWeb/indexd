@@ -369,6 +369,10 @@ func TestApplicationAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if err := client.DeleteObject(context.Background(), obj1.Key); err != nil && err.Error() != objects.ErrObjectNotFound.Error() {
+		t.Fatalf("expected %v, got %v", objects.ErrObjectNotFound, err)
+	}
+
 	objs, err = client.ListObjects(context.Background(), objects.Cursor{}, 100)
 	if err != nil {
 		t.Fatal(err)
