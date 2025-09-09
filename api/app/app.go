@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"strconv"
 	"sync"
 	"time"
 
@@ -185,6 +187,17 @@ func (a *app) handlePOSTSlabs(jc jape.Context, pk types.PublicKey) {
 	jc.Encode(slabID)
 }
 
+func encodeBinary(jc jape.Context, resp types.EncoderTo) {
+	var buf bytes.Buffer
+	e := types.NewEncoder(&buf)
+	resp.EncodeTo(e)
+	e.Flush()
+
+	jc.ResponseWriter.Header().Set("Content-Type", applicationOctetStream)
+	jc.ResponseWriter.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
+	buf.WriteTo(jc.ResponseWriter)
+}
+
 func (a *app) handleGETSlab(jc jape.Context, pk types.PublicKey) {
 	var slabID slabs.SlabID
 	if err := jc.DecodeParam("slabid", &slabID); err != nil {
@@ -201,9 +214,7 @@ func (a *app) handleGETSlab(jc jape.Context, pk types.PublicKey) {
 	}
 
 	if accept := jc.Request.Header.Get(acceptHeader); accept == applicationOctetStream {
-		e := types.NewEncoder(jc.ResponseWriter)
-		slab.EncodeTo(e)
-		jc.Check("failed to flush", e.Flush())
+		encodeBinary(jc, slab)
 		return
 	}
 	jc.Encode(slab)
