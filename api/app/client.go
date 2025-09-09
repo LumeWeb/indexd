@@ -16,11 +16,12 @@ import (
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/api"
 	"go.sia.tech/indexd/hosts"
+	"go.sia.tech/indexd/objects"
 	"go.sia.tech/indexd/slabs"
 )
 
 const (
-	defaultValidity = time.Hour
+	defaultValidity = 10 * time.Minute
 )
 
 // Client is an HTTP client for the application API of the indexer.
@@ -28,12 +29,13 @@ type Client struct {
 	baseURL string
 
 	// the following fields are used to sign requests
-	appkey types.PrivateKey
+	appkey   types.PrivateKey
+	validity time.Duration
 }
 
-// sign signs the request with the appropriate headers and returns the signed URL
+// Sign signs the request with the appropriate headers and returns the signed URL
 // and request body.
-func sign(appKey types.PrivateKey, method, endpointURL string, req any) (string, io.Reader, error) {
+func Sign(appKey types.PrivateKey, validity time.Duration, method, endpointURL string, req any) (string, io.Reader, error) {
 	u, err := url.Parse(endpointURL)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to parse URL: %w", err)
@@ -48,7 +50,7 @@ func sign(appKey types.PrivateKey, method, endpointURL string, req any) (string,
 		}
 	}
 	// prepare request hash
-	validUntil := time.Now().Add(defaultValidity)
+	validUntil := time.Now().Add(validity)
 	sigHash := requestHash(method, u.Host, validUntil, buf)
 
 	// prepare query parameters
@@ -73,7 +75,7 @@ func sign(appKey types.PrivateKey, method, endpointURL string, req any) (string,
 }
 
 func (c *Client) signedRequestCustom(ctx context.Context, accept, method, route string, data any) (io.ReadCloser, error) {
-	u, body, err := sign(c.appkey, method, fmt.Sprintf("%s%s", c.baseURL, route), data)
+	u, body, err := Sign(c.appkey, c.validity, method, fmt.Sprintf("%s%s", c.baseURL, route), data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to sign request: %w", err)
 	}
@@ -167,6 +169,37 @@ func (c *Client) SlabIDs(ctx context.Context, opts ...api.URLQueryParameterOptio
 	return
 }
 
+// Object retrieves the object with the given key for the given account.
+func (c *Client) Object(ctx context.Context, key types.Hash256) (resp objects.Object, err error) {
+	err = c.signedRequestJSON(ctx, http.MethodGet, fmt.Sprintf("/objects/%s", key), nil, &resp)
+	return
+}
+
+// ListObjects lists objects for the given account that were updated after the
+// the given 'after' time.
+func (c *Client) ListObjects(ctx context.Context, cursor objects.Cursor, limit int) (resp []objects.Object, err error) {
+	values := url.Values{}
+	values.Set("limit", fmt.Sprintf("%d", limit))
+	values.Set("after", cursor.After.Format(time.RFC3339Nano))
+	values.Set("key", cursor.Key.String())
+
+	err = c.signedRequestJSON(ctx, http.MethodGet, "/objects?"+values.Encode(), nil, &resp)
+	return
+}
+
+// SaveObject saves the given object for the given account. If an object with
+// the given key exists for an account, it is overwritten.
+func (c *Client) SaveObject(ctx context.Context, obj objects.Object) (err error) {
+	err = c.signedRequestJSON(ctx, http.MethodPost, "/objects", obj, nil)
+	return
+}
+
+// DeleteObject deletes the object with the given key for the given account.
+func (c *Client) DeleteObject(ctx context.Context, key types.Hash256) (err error) {
+	err = c.signedRequestJSON(ctx, http.MethodDelete, fmt.Sprintf("/objects/%s", key), nil, nil)
+	return
+}
+
 // RequestAppConnection requests an application connection to the indexer.
 func (c *Client) RequestAppConnection(ctx context.Context, request RegisterAppRequest) (resp RegisterAppResponse, err error) {
 	err = c.signedRequestJSON(ctx, http.MethodPost, "/auth/connect", request, &resp)
@@ -176,7 +209,7 @@ func (c *Client) RequestAppConnection(ctx context.Context, request RegisterAppRe
 // CheckRequestStatus checks if an auth request has been approved.
 // If the auth request is still pending, it returns false.
 func (c *Client) CheckRequestStatus(ctx context.Context, statusURL string) (bool, error) {
-	requestURL, body, err := sign(c.appkey, http.MethodGet, statusURL, nil)
+	requestURL, body, err := Sign(c.appkey, c.validity, http.MethodGet, statusURL, nil)
 	if err != nil {
 		return false, fmt.Errorf("failed to sign request: %w", err)
 	}
@@ -209,7 +242,7 @@ func (c *Client) CheckRequestStatus(ctx context.Context, statusURL string) (bool
 // CheckAppAuth checks if the application is authenticated with the indexer.
 // It returns true if authenticated, false if not, and an error if the request fails.
 func (c *Client) CheckAppAuth(ctx context.Context) (bool, error) {
-	u, body, err := sign(c.appkey, http.MethodGet, fmt.Sprintf("%s/auth/check", c.baseURL), nil)
+	u, body, err := Sign(c.appkey, c.validity, http.MethodGet, fmt.Sprintf("%s/auth/check", c.baseURL), nil)
 	if err != nil {
 		return false, fmt.Errorf("failed to sign request: %w", err)
 	}
@@ -237,13 +270,31 @@ func (c *Client) CheckAppAuth(ctx context.Context) (bool, error) {
 	}
 }
 
+// ClientOption is a function that applies an option to the application API
+// client.
+type ClientOption func(client *Client)
+
+// WithValidity sets the validity period for the URLs signed by the application
+// API client.
+func WithValidity(validity time.Duration) ClientOption {
+	return func(client *Client) {
+		client.validity = validity
+	}
+}
+
 // NewClient creates a new AppClient that can be used to interact with the
 // application API of the indexer. The address should be the full URL to the
 // application API, including the scheme (e.g., "http://indexer.sia.tech").
-func NewClient(address string, appKey types.PrivateKey) *Client {
-	return &Client{
+func NewClient(address string, appKey types.PrivateKey, opts ...ClientOption) *Client {
+	c := &Client{
 		baseURL: address,
 
-		appkey: appKey,
+		appkey:   appKey,
+		validity: defaultValidity,
 	}
+
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
