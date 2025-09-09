@@ -527,7 +527,12 @@ WHERE hosts.id = computed.id RETURNING hosts.id`,
 			}
 
 			for _, cidr := range networks {
-				_, err = tx.Exec(ctx, `INSERT INTO host_resolved_cidrs (host_id, cidr) VALUES ($1, $2)`, hostID, cidr)
+				_, ipnet, err := net.ParseCIDR(cidr)
+				if err != nil {
+					return fmt.Errorf("failed to parse CIDR: %w", err)
+				}
+
+				_, err = tx.Exec(ctx, `INSERT INTO host_resolved_cidrs (host_id, cidr) VALUES ($1, $2)`, hostID, ipnet)
 				if err != nil {
 					return fmt.Errorf("failed to insert host resolved CIDR: %w", err)
 				}
