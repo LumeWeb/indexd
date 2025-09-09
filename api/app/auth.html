@@ -362,7 +362,9 @@
         `;
 
         document.getElementById("resultBtn").addEventListener("click", () => {
-          window.close();
+          const callbackUrl = "{{.Request.CallbackURL}}";
+          if (callbackUrl) window.location.href = callbackUrl;
+          else window.close();
         });
       }
 
