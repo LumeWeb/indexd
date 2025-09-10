@@ -342,10 +342,11 @@ paths:
       tags:
         - alerts
       operationId: getAlerts
+      summary: Get all alerts within the offset and limit
       parameters:
         - name: limit
           in: query
-          description: The maximum number of accounts to return
+          description: The maximum number of alerts to return
           schema:
             type: integer
             minimum: 1
@@ -353,7 +354,7 @@ paths:
             default: 100
         - name: offset
           in: query
-          description: The number of accounts to skip
+          description: The number of alerts to skip
           schema:
             type: integer
             minimum: 0
@@ -378,6 +379,7 @@ paths:
     post:
       tags:
         - alerts
+      summary: Dismiss a list of alert IDs
       operationId: dismissAlerts
       requestBody:
         required: true
@@ -395,6 +397,7 @@ paths:
     get:
       tags:
         - alerts
+      summary: Get an individual alert by ID
       operationId: getAlert
       parameters:
         - name: alertid
