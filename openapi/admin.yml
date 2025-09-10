@@ -1539,7 +1539,7 @@ components:
     PinnedSettings:
       $ref: "./components.yml#/components/schemas/PinnedSettings"
     SyncerAddress:
-      $ref: "./components.yml/#/components/schemas/SyncerAddress"
+      $ref: "./components.yml#/components/schemas/SyncerAddress"
     UsabilitySettings:
       $ref: "./components.yml#/components/schemas/UsabilitySettings"
     ConnectKey:
