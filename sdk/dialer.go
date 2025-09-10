@@ -206,15 +206,12 @@ func (d *Dialer) Hosts() (hks []types.PublicKey) {
 			seen[hk] = struct{}{}
 		}
 	}
-	shuffle(hks)
-	length := len(hks)
 
 	for hk := range d.addrs {
 		if _, ok := seen[hk]; !ok {
 			hks = append(hks, hk)
 		}
 	}
-	shuffle(hks[length:])
 
 	return
 }
