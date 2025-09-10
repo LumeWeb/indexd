@@ -193,25 +193,30 @@ func (d *Dialer) clearHostConnection(hostKey types.PublicKey) {
 	entry.clear()
 }
 
-// ActiveHosts implements the [HostDialer] interface.
-func (d *Dialer) ActiveHosts() (hks []types.PublicKey) {
+// Hosts implements the [HostDialer] interface.
+func (d *Dialer) Hosts() (hks []types.PublicKey) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	// prioritize hosts we already have a connection with
+	seen := make(map[types.PublicKey]struct{})
 	for hk, entry := range d.conns {
 		if entry.tc != nil {
 			hks = append(hks, hk)
+			seen[hk] = struct{}{}
 		}
 	}
+	shuffle(hks)
+	length := len(hks)
+
+	for hk := range d.addrs {
+		if _, ok := seen[hk]; !ok {
+			hks = append(hks, hk)
+		}
+	}
+	shuffle(hks[length:])
+
 	return
-}
-
-// Hosts implements the [HostDialer] interface.
-func (d *Dialer) Hosts() []types.PublicKey {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	return slices.Collect(maps.Keys(d.addrs))
 }
 
 func (d *Dialer) dialHost(ctx context.Context, hostKey types.PublicKey) (rhp.TransportClient, error) {
