@@ -601,7 +601,7 @@ SELECT
 	hosts.id,
 	hosts.public_key,
 	hosts.country_code,
-	hosts.location,
+	hosts.location
 FROM hosts
 CROSS JOIN globals
 WHERE
