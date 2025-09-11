@@ -654,7 +654,7 @@ func TestSharedObjects(t *testing.T) {
 
 	time.Sleep(time.Second * 2)
 	// try to retrieve the object again, should be expired
-	_, err = client1.CreateSharedObjectURL(ctx, obj.Key, [32]byte{}, time.Now().Add(time.Second))
+	_, err = client1.RetrieveSharedObject(ctx, shareURL)
 	if err == nil {
 		t.Fatal("expected error when creating shared URL with past expiry")
 	}
