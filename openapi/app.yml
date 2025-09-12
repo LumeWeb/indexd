@@ -20,7 +20,7 @@ tags:
     description: Retrieve current account
 
 paths:
-  /accounts:
+  /account:
     get:
       tags:
         - accounts
