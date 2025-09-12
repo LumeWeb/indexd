@@ -37,8 +37,9 @@ type (
 
 	// SectorsStatsResponse is the response body for the [GET] /stats/sectors
 	SectorsStatsResponse struct {
-		NumSlabs         int64 `json:"numSlabs"`
-		NumPinnedSectors int64 `json:"numPinnedSectors"`
+		NumPinnedSectors   int64 `json:"numPinnedSectors"`
+		NumUnpinnedSectors int64 `json:"numUnpinnedSectors"`
+		NumSlabs           int64 `json:"numSlabs"`
 	}
 
 	// State is the response body for the [GET] /state endpoint.
