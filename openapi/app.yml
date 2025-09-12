@@ -636,6 +636,8 @@ components:
       $ref: "./components.yml#/components/schemas/Hash256"
     HostInfo:
       $ref: "./components.yml#/components/schemas/HostInfo"
+    Account:
+      $ref: "./components.yml#/components/schemas/Account"
     Object:
       $ref: "./components.yml#/components/schemas/Object"
     PublicKey:
