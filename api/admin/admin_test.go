@@ -49,7 +49,7 @@ func TestAppConnectKeys(t *testing.T) {
 	for i := range 100 {
 		description := fmt.Sprintf("key %d", i)
 		uses := frand.Intn(1000) + 1
-		created, err := adminClient.AddAppConnectKey(context.Background(), admin.AddConnectKeyRequest{
+		created, err := adminClient.AddAppConnectKey(context.Background(), accounts.AddConnectKeyRequest{
 			Description:   description,
 			RemainingUses: uses,
 		})
