@@ -769,6 +769,10 @@ components:
           type: integer
           format: int64
           description: Number of slabs currently pinned by this instance
+        numUnpinnableSectors:
+          type: integer
+          format: int64
+          description: Number of unpinnable sectors that were pruned because they could not be pinned to a contract in due time
 
     ConnectKey:
       type: object
