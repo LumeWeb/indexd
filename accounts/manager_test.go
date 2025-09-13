@@ -401,7 +401,7 @@ func TestAccountManager(t *testing.T) {
 	} else if !f.calls[0].target.Equals(target) {
 		t.Fatalf("expected target to be %v, got %v", target, f.calls[0].target)
 	} else if !f.calls[1].target.Equals(target) {
-		t.Fatalf("expected target to be %v, got %v", target, f.calls[0].target)
+		t.Fatalf("expected target to be %v, got %v", target, f.calls[1].target)
 	}
 
 	// assert all accounts next fund was updated and consecutive failed funds was reset
