@@ -97,6 +97,15 @@ func (s *Store) HasAccount(ctx context.Context, ak types.PublicKey) (bool, error
 	return exists, nil
 }
 
+// ActiveAccounts returns the number of accounts active since the threshold
+// time.
+func (s *Store) ActiveAccounts(ctx context.Context, threshold time.Time) (count uint64, err error) {
+	err = s.transaction(ctx, func(ctx context.Context, tx *txn) error {
+		return tx.QueryRow(ctx, `SELECT COUNT(*) FROM accounts;`).Scan(&count)
+	})
+	return
+}
+
 // DeleteAccount deletes the account in the database with given account key.
 func (s *Store) DeleteAccount(ctx context.Context, ak types.PublicKey) error {
 	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {

@@ -17,6 +17,17 @@ const (
 	accountFundBatch            = proto.MaxAccountBatchSize // equals max batch size used in replenish RPC
 	accountFundInterval         = time.Hour
 	accountExpBackoffMaxMinutes = 128
+
+	// We multiply the target amount of funds per host by the number of active
+	// accounts up to a certain point.  clampAccounts is the highest number of
+	// active accounts we will use for the purposes of giving hosts extra funding.
+	clampAccounts = 1000
+)
+
+var (
+	// defaultFundTarget is the target amount of funds per host per active
+	// account.
+	defaultFundTarget = types.Siacoins(1).Div64(10)
 )
 
 type (
@@ -40,6 +51,7 @@ type (
 		AppConnectKey(ctx context.Context, key string) (ConnectKey, error)
 		AppConnectKeys(ctx context.Context, offset, limit int) ([]ConnectKey, error)
 
+		ActiveAccounts(ctx context.Context, threshold time.Time) (uint64, error)
 		Account(context.Context, types.PublicKey) (Account, error)
 		AddAccount(context.Context, types.PublicKey, AccountMeta, ...AddAccountOption) error
 		Accounts(ctx context.Context, offset, limit int, opts ...QueryAccountsOpt) ([]Account, error)
@@ -94,6 +106,17 @@ func (m *AccountManager) FundAccounts(ctx context.Context, host hosts.Host, cont
 		return nil
 	}
 
+	// target m.fundTarget, per account, per host
+	count, err := m.store.ActiveAccounts(ctx, time.Now().Add(-7*24*time.Hour))
+	if err != nil {
+		return fmt.Errorf("failed to get number of active accounts: %w", err)
+	} else if count == 0 {
+		count = 1
+	} else if count > clampAccounts {
+		count = clampAccounts
+	}
+	fundTarget := m.fundTarget.Mul64(count)
+
 	// if we want to force a refill on all accounts, we need to manually set the
 	// next fund time, we do this to avoid having to fetch (and update) all
 	// accounts at once
@@ -116,7 +139,7 @@ func (m *AccountManager) FundAccounts(ctx context.Context, host hosts.Host, cont
 		}
 
 		// fund accounts
-		funded, drained, err := m.funder.FundAccounts(ctx, host, contractIDs, accounts, m.fundTarget, log)
+		funded, drained, err := m.funder.FundAccounts(ctx, host, contractIDs, accounts, fundTarget, log)
 		if err != nil {
 			return fmt.Errorf("failed to fund accounts: %w", err)
 		}
@@ -184,7 +207,7 @@ func NewManager(store Store, funder AccountFunder, opts ...Option) *AccountManag
 		serviceAccounts: make(map[proto.Account]struct{}),
 		store:           store,
 		funder:          funder,
-		fundTarget:      types.Siacoins(1),
+		fundTarget:      defaultFundTarget,
 		log:             zap.NewNop(),
 	}
 	for _, opt := range opts {
