@@ -37,8 +37,8 @@ func (s *Store) MarkSectorsLost(ctx context.Context, hostKey types.PublicKey, ro
 		}
 
 		rows, err := tx.Query(ctx, `
-			SELECT id, contract_sectors_map_id 
-			FROM sectors 
+			SELECT id, contract_sectors_map_id
+			FROM sectors
 			WHERE host_id = $1 AND sector_root = ANY($2)`, hostID, sqlRoots)
 		if err != nil {
 			return fmt.Errorf("failed to query sectors: %w", err)
@@ -533,15 +533,37 @@ func (s *Store) PinSectors(ctx context.Context, contractID types.FileContractID,
 			return fmt.Errorf("failed to get contract's host: %w", err)
 		}
 
-		resp, err := tx.Exec(ctx, `
-			UPDATE sectors
-			SET host_id = $1, contract_sectors_map_id = $2
-			WHERE sector_root = ANY($3) AND (contract_sectors_map_id IS NULL OR contract_sectors_map_id != $2)
-		`, hostID, contractMapID, sqlRoots)
+		rows, err := tx.Query(ctx, `
+			SELECT id, contract_sectors_map_id
+			FROM sectors
+			WHERE sector_root = ANY($1) AND (contract_sectors_map_id IS NULL OR contract_sectors_map_id != $2)`, sqlRoots, contractMapID)
 		if err != nil {
-			return err
-		} else if resp.RowsAffected() > 0 {
-			if err := s.incrementPinnedSectors(ctx, tx, resp.RowsAffected()); err != nil {
+			return fmt.Errorf("failed to query sectors: %w", err)
+		}
+		defer rows.Close()
+
+		var sectorIDs []int64
+		var pinned int64
+		for rows.Next() {
+			var sectorID int64
+			var contractMapID sql.NullInt64
+			if err := rows.Scan(&sectorID, &contractMapID); err != nil {
+				return fmt.Errorf("failed to scan sector row: %w", err)
+			} else if !contractMapID.Valid {
+				pinned++
+			}
+			sectorIDs = append(sectorIDs, sectorID)
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("failed to iterate over sector rows: %w", err)
+		} else if len(sectorIDs) == 0 {
+			return nil
+		}
+
+		if _, err := tx.Exec(ctx, `UPDATE sectors SET host_id = $1, contract_sectors_map_id = $2 WHERE id = ANY($3)`, hostID, contractMapID, sectorIDs); err != nil {
+			return fmt.Errorf("failed to pin sectors: %w", err)
+		} else if pinned > 0 {
+			if err := s.incrementPinnedSectors(ctx, tx, pinned); err != nil {
 				return fmt.Errorf("failed to update number of pinned sectors: %w", err)
 			}
 		}
