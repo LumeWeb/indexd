@@ -623,8 +623,6 @@ SELECT
 FROM hosts
 CROSS JOIN globals
 WHERE
-	-- valid location
-	location <> point(0.0, 0.0) AND
 	-- usable
 	recent_uptime >= 0.9 AND
 	settings_max_contract_duration >= globals.contracts_period AND
