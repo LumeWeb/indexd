@@ -414,12 +414,12 @@ func TestContractsAPI(t *testing.T) {
 		t.Fatal("expected contract to be renewed", contracts[0].RenewedFrom, contract.ID)
 	}
 
-	// assert funds spent is being tracked
+	// assert usage is being tracked
 	host, err := adminClient.Host(context.Background(), h.PublicKey())
 	if err != nil {
 		t.Fatal(err)
-	} else if host.FundsSpent.IsZero() {
-		t.Fatal("expected host funds spent to be non-zero")
+	} else if host.TotalSpent.IsZero() {
+		t.Fatal("expected host total spent to be non-zero")
 	}
 }
 

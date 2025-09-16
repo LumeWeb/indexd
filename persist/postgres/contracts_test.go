@@ -1281,13 +1281,14 @@ func TestUpdateHostUsage(t *testing.T) {
 	host, err := store.Host(context.Background(), hk)
 	if err != nil {
 		t.Fatal(err)
-	} else if !host.FundsSpent.IsZero() {
-		t.Fatalf("unexpected usage: %+v", host.FundsSpent)
+	} else if !host.TotalSpent.IsZero() {
+		t.Fatalf("unexpected usage: %+v", host.TotalSpent)
 	}
 
 	// update usage
-	cost := types.NewCurrency64(frand.Uint64n(math.MaxUint64))
-	if err := store.UpdateHostUsage(context.Background(), hk, proto.Usage{RPC: cost}); err != nil {
+	funding := types.NewCurrency64(frand.Uint64n(math.MaxUint64))
+	egress := types.NewCurrency64(frand.Uint64n(funding.Big().Uint64()))
+	if err := store.UpdateHostUsage(context.Background(), hk, proto.Usage{AccountFunding: funding, Egress: egress}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1295,8 +1296,10 @@ func TestUpdateHostUsage(t *testing.T) {
 	host, err = store.Host(context.Background(), hk)
 	if err != nil {
 		t.Fatal(err)
-	} else if !host.FundsSpent.Equals((cost)) {
-		t.Fatalf("unexpected usage: %+v", host.FundsSpent)
+	} else if !host.AccountFunding.Equals(funding) {
+		t.Fatalf("unexpected usage: %+v", host.AccountFunding)
+	} else if !host.TotalSpent.Equals((funding.Add(egress))) {
+		t.Fatalf("unexpected usage: %+v", host.TotalSpent)
 	}
 
 	// assert it returns [hosts.ErrHostNotFound] for non-existing host

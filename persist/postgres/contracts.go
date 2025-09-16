@@ -50,8 +50,8 @@ func (s *Store) UpdateContractRevision(ctx context.Context, contract rhp.Contrac
 // funds spent, thereby tracking how much funds have been spent on a host.
 func (s *Store) UpdateHostUsage(ctx context.Context, hostKey types.PublicKey, usage proto.Usage) error {
 	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
-		query := `UPDATE hosts SET funds_spent = funds_spent + $1 WHERE public_key = $2`
-		res, err := tx.Exec(ctx, query, sqlCurrency(usage.RenterCost()), sqlPublicKey(hostKey))
+		query := `UPDATE hosts SET usage_account_funding = usage_account_funding + $1, usage_total_spent = usage_total_spent + $2 WHERE public_key = $3`
+		res, err := tx.Exec(ctx, query, sqlCurrency(usage.AccountFunding), sqlCurrency(usage.RenterCost()), sqlPublicKey(hostKey))
 		if err != nil {
 			return fmt.Errorf("failed to update host usage: %w", err)
 		} else if res.RowsAffected() != 1 {
