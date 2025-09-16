@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -233,37 +234,50 @@ func TestSlabPruning(t *testing.T) {
 		}
 	}
 
-	assertObjects := func(acc proto4.Account, n int) []slabs.Object {
+	assertSlabs := func(acc proto4.Account, expected ...slabs.SlabID) {
 		t.Helper()
-		objects, err := store.ListObjects(context.Background(), acc, slabs.Cursor{}, 10)
+
+		got, err := store.SlabIDs(context.Background(), acc, 0, math.MaxInt64)
 		if err != nil {
 			t.Fatal(err)
-		} else if len(objects) != n {
-			t.Fatalf("expected %d objects, got %d", n, len(objects))
 		}
-		return objects
-	}
-	assertObj := func(obj, other slabs.Object) {
-		t.Helper()
-		if other.CreatedAt.IsZero() || other.UpdatedAt.IsZero() {
-			t.Fatalf("expected non-zero timestamps, got %v and %v", other.CreatedAt, other.UpdatedAt)
-		}
-		other.CreatedAt = time.Time{}
-		other.UpdatedAt = time.Time{}
-		if !reflect.DeepEqual(obj, other) {
-			t.Fatalf("objects not equal: expected %+v, got %+v", obj, other)
+		if !reflect.DeepEqual(expected, got) {
+			t.Fatal("mismatched slab IDs")
 		}
 	}
 
-	// 1 object should exist for both accounts
-	objs := assertObjects(acc1, 1)
-	assertObj(obj, objs[0])
-
-	objs = assertObjects(acc2, 1)
-	assertObj(obj, objs[0])
+	assertSlabs(acc1, slabID)
+	assertSlabs(acc2, slabID)
 
 	// delete object for acc1
 	if err := store.DeleteObject(context.Background(), acc1, objKey); err != nil {
 		t.Fatal(err)
 	}
+
+	assertSlabs(acc1, slabID)
+	assertSlabs(acc2, slabID)
+
+	// prune slabs for acc1
+	if err := store.PruneSlabs(context.Background(), acc1); err != nil {
+		t.Fatal(err)
+	}
+
+	assertSlabs(acc1)
+	assertSlabs(acc2, slabID)
+
+	// delete object for acc2
+	if err := store.DeleteObject(context.Background(), acc2, objKey); err != nil {
+		t.Fatal(err)
+	}
+
+	assertSlabs(acc1)
+	assertSlabs(acc2, slabID)
+
+	// prune slabs for acc2
+	if err := store.PruneSlabs(context.Background(), acc2); err != nil {
+		t.Fatal(err)
+	}
+
+	assertSlabs(acc1)
+	assertSlabs(acc2)
 }
