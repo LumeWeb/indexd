@@ -193,34 +193,38 @@ func TestSlabPruning(t *testing.T) {
 	// create 2 accounts
 	acc1, acc2 := proto4.Account{1}, proto4.Account{2}
 	for _, acc := range []proto4.Account{acc1, acc2} {
-		err := store.AddAccount(context.Background(), types.PublicKey(acc), accounts.AccountMeta{})
-		if err != nil {
+		if err := store.AddAccount(context.Background(), types.PublicKey(acc), accounts.AccountMeta{}); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	// pin slab for both accounts
-	slab := slabs.SlabPinParams{MinShards: 1}
+	slab1 := slabs.SlabPinParams{MinShards: 1}
 	for _, acc := range []proto4.Account{acc1, acc2} {
-		_, err := store.PinSlab(context.Background(), acc, time.Time{}, slab)
-		if err != nil {
+		if _, err := store.PinSlab(context.Background(), acc, time.Time{}, slab1); err != nil {
 			t.Fatal(err)
 		}
 	}
 
+	// pin second slab for first account
+	slab2 := slabs.SlabPinParams{MinShards: 2}
+	if _, err := store.PinSlab(context.Background(), acc1, time.Time{}, slab2); err != nil {
+		t.Fatal(err)
+	}
+
 	// add objects for both accounts
-	objKey := frand.Entropy256()
-	slabID, _ := slab.Digest()
-	obj := slabs.Object{
-		Key: objKey,
+	obj1Key := frand.Entropy256()
+	slab1ID, _ := slab1.Digest()
+	obj1 := slabs.Object{
+		Key: obj1Key,
 		Slabs: []slabs.SlabSlice{
 			{
-				SlabID: slabID,
+				SlabID: slab1ID,
 				Offset: 10,
 				Length: 100,
 			},
 			{
-				SlabID: slabID,
+				SlabID: slab1ID,
 				Offset: 110,
 				Length: 200,
 			},
@@ -228,10 +232,33 @@ func TestSlabPruning(t *testing.T) {
 		Meta: []byte("hello world"),
 	}
 	for _, acc := range []proto4.Account{acc1, acc2} {
-		err := store.SaveObject(context.Background(), acc, obj)
-		if err != nil {
+		if err := store.SaveObject(context.Background(), acc, obj1); err != nil {
 			t.Fatal(err)
 		}
+	}
+
+	// pin this object to first account only
+	obj2Key := frand.Entropy256()
+	slab2ID, _ := slab2.Digest()
+	obj2 := slabs.Object{
+		Key: obj2Key,
+		Slabs: []slabs.SlabSlice{
+			{
+				SlabID: slab2ID,
+				Offset: 10,
+				Length: 100,
+			},
+			{
+				SlabID: slab2ID,
+				Offset: 110,
+				Length: 200,
+			},
+		},
+		Meta: []byte("hello world"),
+	}
+
+	if err := store.SaveObject(context.Background(), acc1, obj2); err != nil {
+		t.Fatal(err)
 	}
 
 	assertSlabs := func(acc proto4.Account, expected ...slabs.SlabID) {
@@ -246,38 +273,38 @@ func TestSlabPruning(t *testing.T) {
 		}
 	}
 
-	assertSlabs(acc1, slabID)
-	assertSlabs(acc2, slabID)
+	assertSlabs(acc1, slab2ID, slab1ID)
+	assertSlabs(acc2, slab1ID)
 
 	// delete object for acc1
-	if err := store.DeleteObject(context.Background(), acc1, objKey); err != nil {
+	if err := store.DeleteObject(context.Background(), acc1, obj1Key); err != nil {
 		t.Fatal(err)
 	}
 
-	assertSlabs(acc1, slabID)
-	assertSlabs(acc2, slabID)
+	assertSlabs(acc1, slab2ID, slab1ID)
+	assertSlabs(acc2, slab1ID)
 
 	// prune slabs for acc1
 	if err := store.PruneSlabs(context.Background(), acc1); err != nil {
 		t.Fatal(err)
 	}
 
-	assertSlabs(acc1)
-	assertSlabs(acc2, slabID)
+	assertSlabs(acc1, slab2ID)
+	assertSlabs(acc2, slab1ID)
 
 	// delete object for acc2
-	if err := store.DeleteObject(context.Background(), acc2, objKey); err != nil {
+	if err := store.DeleteObject(context.Background(), acc2, obj1Key); err != nil {
 		t.Fatal(err)
 	}
 
-	assertSlabs(acc1)
-	assertSlabs(acc2, slabID)
+	assertSlabs(acc1, slab2ID)
+	assertSlabs(acc2, slab1ID)
 
 	// prune slabs for acc2
 	if err := store.PruneSlabs(context.Background(), acc2); err != nil {
 		t.Fatal(err)
 	}
 
-	assertSlabs(acc1)
+	assertSlabs(acc1, slab2ID)
 	assertSlabs(acc2)
 }
