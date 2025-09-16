@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	proto "go.sia.tech/core/rhp/v4"
 	proto4 "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
@@ -307,4 +308,51 @@ func TestSlabPruning(t *testing.T) {
 
 	assertSlabs(acc1, slab2ID)
 	assertSlabs(acc2)
+}
+
+func BenchmarkPruneSlabs(b *testing.B) {
+	const (
+		numAccounts          = 10_000
+		numObjectsPerAccount = 10
+	)
+	store := initPostgres(b, zap.NewNop())
+
+	batch := &pgx.Batch{}
+	var accs []proto.Account
+	var slabID, objectID int64
+	for i := range numAccounts {
+		pk := types.GeneratePrivateKey().PublicKey()
+		accs = append(accs, proto.Account(pk))
+
+		batch.Queue(`INSERT INTO accounts(public_key, max_pinned_data) VALUES ($1, 1000000);`, sqlPublicKey(pk))
+		for range numObjectsPerAccount {
+			accountID := i + 1
+
+			var encryptionKey [32]byte
+			frand.Read(encryptionKey[:])
+
+			slabDigest := sqlHash256(frand.Entropy256())
+			objectKey := sqlHash256(frand.Entropy256())
+
+			slabID++
+			batch.Queue(`INSERT INTO slabs(digest, encryption_key, min_shards) VALUES ($1, $2, 1);`, slabDigest, sqlHash256(encryptionKey))
+			batch.Queue(`INSERT INTO account_slabs(account_id, slab_id) VALUES ($1, $2)`, accountID, slabID)
+
+			if i%2 == 0 {
+				objectID++
+				batch.Queue(`INSERT INTO objects(object_key, account_id) VALUES ($1, $2)`, objectKey, accountID)
+				batch.Queue(`INSERT INTO object_slabs(object_id, slab_digest, slab_index, slab_offset, slab_length) VALUES ($1, $2, 0, 0, 0)`, objectID, slabDigest)
+			}
+		}
+	}
+	batch.Queue(`UPDATE sectors_stats SET num_slabs = $1`, slabID)
+	if err := store.pool.SendBatch(b.Context(), batch).Close(); err != nil {
+		b.Fatal(err)
+	}
+
+	for b.Loop() {
+		if err := store.PruneSlabs(b.Context(), accs[frand.Intn(len(accs))]); err != nil {
+			b.Fatal(err)
+		}
+	}
 }
