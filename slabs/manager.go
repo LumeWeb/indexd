@@ -318,7 +318,7 @@ func (m *SlabManager) performIntegrityChecks(ctx context.Context) error {
 					<-sem
 					wg.Done()
 				}()
-				m.performIntegrityChecksForHost(ctx, host, logger)
+				m.performIntegrityChecksForHost(ctx, hostKey, logger)
 			}(host)
 		}
 		wg.Wait()
