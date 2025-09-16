@@ -1475,6 +1475,7 @@ func BenchmarkUsableHosts(b *testing.B) {
 	const (
 		numHosts     = 10_000
 		numBlocklist = 1000
+		defaultLimit = 100
 		maxLimit     = 500
 	)
 
@@ -1592,54 +1593,62 @@ func BenchmarkUsableHosts(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	b.Run("UsableHosts", func(b *testing.B) {
-		for b.Loop() {
-			hosts, err := store.UsableHosts(context.Background(), 0, maxLimit)
-			if err != nil {
-				b.Fatal(err)
-			} else if len(hosts) != maxLimit {
-				b.Fatalf("sanity check failed, found %d usable hosts", len(hosts))
+	for _, test := range []struct {
+		name  string
+		limit int
+	}{
+		{"DefaultLimit", defaultLimit},
+		{"MaxLimit", maxLimit},
+	} {
+		b.Run("UsableHosts_"+test.name, func(b *testing.B) {
+			for b.Loop() {
+				hosts, err := store.UsableHosts(context.Background(), 0, test.limit)
+				if err != nil {
+					b.Fatal(err)
+				} else if len(hosts) != test.limit {
+					b.Fatalf("sanity check failed, found %d usable hosts", len(hosts))
+				}
 			}
-		}
-	})
+		})
 
-	b.Run("UsableHosts_WithProtocol", func(b *testing.B) {
-		for b.Loop() {
-			hosts, err := store.UsableHosts(context.Background(), 0, maxLimit, hosts.WithProtocol(randomProtocol()))
-			if err != nil {
-				b.Fatal(err)
-			} else if len(hosts) != maxLimit {
-				b.Fatalf("sanity check failed, found %d usable hosts", len(hosts))
+		b.Run("UsableHosts_WithProtocol_"+test.name, func(b *testing.B) {
+			for b.Loop() {
+				hosts, err := store.UsableHosts(context.Background(), 0, test.limit, hosts.WithProtocol(randomProtocol()))
+				if err != nil {
+					b.Fatal(err)
+				} else if len(hosts) != test.limit {
+					b.Fatalf("sanity check failed, found %d usable hosts", len(hosts))
+				}
 			}
-		}
-	})
+		})
 
-	b.Run("UsableHosts_WithCountry", func(b *testing.B) {
-		for b.Loop() {
-			hosts, err := store.UsableHosts(context.Background(), 0, maxLimit, hosts.WithCountry(randomCountry()))
-			if err != nil {
-				b.Fatal(err)
-			} else if len(hosts) < 100 {
-				b.Fatalf("sanity check failed, found %d usable hosts", len(hosts))
+		b.Run("UsableHosts_WithCountry_"+test.name, func(b *testing.B) {
+			for b.Loop() {
+				hosts, err := store.UsableHosts(context.Background(), 0, test.limit, hosts.WithCountry(randomCountry()))
+				if err != nil {
+					b.Fatal(err)
+				} else if len(hosts) < test.limit/10 {
+					b.Fatalf("sanity check failed, found %d usable hosts", len(hosts))
+				}
 			}
-		}
-	})
+		})
 
-	b.Run("UsableHosts_WithProximity", func(b *testing.B) {
-		for b.Loop() {
-			point := randomLocation()
-			hosts, err := store.UsableHosts(context.Background(), 0, maxLimit, hosts.WithSortOptions(api.SortOptions{
-				SortBy:  "proximity",
-				SortDir: "asc",
-				SortCtx: &point,
-			}))
-			if err != nil {
-				b.Fatal(err)
-			} else if len(hosts) != maxLimit {
-				b.Fatalf("sanity check failed, found %d usable hosts", len(hosts))
+		b.Run("UsableHosts_WithProximity_"+test.name, func(b *testing.B) {
+			for b.Loop() {
+				point := randomLocation()
+				hosts, err := store.UsableHosts(context.Background(), 0, test.limit, hosts.WithSortOptions(api.SortOptions{
+					SortBy:  "proximity",
+					SortDir: "asc",
+					SortCtx: &point,
+				}))
+				if err != nil {
+					b.Fatal(err)
+				} else if len(hosts) != test.limit {
+					b.Fatalf("sanity check failed, found %d usable hosts", len(hosts))
+				}
 			}
-		}
-	})
+		})
+	}
 }
 
 func newTestHostSettings(pk types.PublicKey) proto4.HostSettings {
