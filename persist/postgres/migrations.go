@@ -126,7 +126,9 @@ CREATE INDEX object_slabs_object_id_slab_index_idx ON object_slabs(object_id, sl
 	},
 	// adds the index on the "location" column in hosts
 	func(ctx context.Context, tx *txn, _ *zap.Logger) error {
-		_, err := tx.Exec(ctx, `CREATE INDEX hosts_location_spgist_idx ON hosts USING SPGIST (location);`)
+		_, err := tx.Exec(ctx, `
+			CREATE INDEX hosts_location_gist_idx ON hosts USING GIST (location);
+			CREATE INDEX contracts_host_active_idx ON contracts (host_id) WHERE state <= 1;`)
 		return err
 	},
 }
