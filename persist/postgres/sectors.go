@@ -595,8 +595,19 @@ func (s *Store) MigrateSector(ctx context.Context, root types.Hash256, hostKey t
 			FROM hosts
 			WHERE sector_root = $1 AND hosts.public_key = $2
 		`, sqlHash256(root), sqlPublicKey(hostKey))
-		migrated = resp.RowsAffected() > 0
-		return err
+		if err != nil {
+			return fmt.Errorf("failed to migrate sector: %w", err)
+		} else if resp.RowsAffected() == 0 {
+			return nil
+		}
+
+		migrated = true
+		_, err = tx.Exec(ctx, `UPDATE sectors_stats SET num_migrated_sectors = num_migrated_sectors + 1`)
+		if err != nil {
+			return fmt.Errorf("failed to increment number of migrated sectors: %w", err)
+		}
+
+		return nil
 	})
 	return migrated, err
 }

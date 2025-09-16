@@ -21,8 +21,8 @@ func (s *Store) initSectorStats(ctx context.Context, tx *txn) error {
 func (s *Store) SectorStats(ctx context.Context) (admin.SectorsStatsResponse, error) {
 	var stats admin.SectorsStatsResponse
 	err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
-		row := tx.QueryRow(ctx, "SELECT num_slabs FROM sectors_stats")
-		return row.Scan(&stats.NumSlabs)
+		row := tx.QueryRow(ctx, "SELECT num_slabs, num_migrated_sectors FROM sectors_stats")
+		return row.Scan(&stats.NumSlabs, &stats.NumMigratedSectors)
 	})
 	return stats, err
 }
