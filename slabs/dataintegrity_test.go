@@ -5,6 +5,7 @@ import (
 	"math"
 	"reflect"
 	"testing"
+	"time"
 
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
@@ -103,6 +104,61 @@ func TestPerformIntegrityChecksForHost(t *testing.T) {
 		t.Fatalf("expected lost sector %v, got %v", r2, store.lostSectors)
 	} else if _, exists := store.lostSectors[host.PublicKey][r3]; !exists {
 		t.Fatalf("expected lost sector %v, got %v", r3, store.lostSectors)
+	}
+}
+
+func TestPerformIntegrityChecksForHostExpiredPrices(t *testing.T) {
+	// prepare host
+	hk := types.PublicKey{1}
+	host := hosts.Host{
+		Networks:  []string{"1.1.1.1"},
+		PublicKey: hk,
+		Settings: proto.HostSettings{
+			Prices: proto.HostPrices{
+				EgressPrice: types.Siacoins(1).Div64(proto.SectorSize), // 1SC per sector
+				ValidUntil:  time.Time{},                               // prices are initially expired
+			},
+		},
+	}
+	dialer := newMockDialer([]hosts.Host{host})
+
+	// prepare managers
+	store := newMockStore()
+	am := newMockAccountManager(store)
+	hm := newMockHostManager()
+	hm.refreshPrices = true // refresh prices after first scan
+	host.Usability = hosts.GoodUsability
+	hm.hosts[host.PublicKey] = host // make host scannable to get valid prices
+
+	// prepare account
+	sk := types.GeneratePrivateKey()
+	acc := proto.Account(sk.PublicKey())
+
+	// prepare slab manager
+	sm, err := newSlabManager(am, hm, store, dialer, nil, sk, sk)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// prepare 2 roots for checking
+	r1 := types.Hash256{1}
+	r2 := types.Hash256{2}
+	dialer.clients[host.PublicKey].integrity[r1] = nil
+	dialer.clients[host.PublicKey].integrity[r2] = nil
+	store.sectorsForCheck = []types.Hash256{r1, r2}
+
+	// fund service account
+	err = am.UpdateServiceAccountBalance(context.Background(), hk, acc, types.MaxCurrency)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// perform the checks once
+	sm.performIntegrityChecksForHost(context.Background(), host.PublicKey, zap.NewNop())
+
+	// no checks should have failed
+	if len(store.failedChecks) != 0 {
+		t.Fatal("expected 0 failed checks, got", len(store.failedChecks))
 	}
 }
 
