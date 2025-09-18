@@ -131,7 +131,7 @@ func TestHost(t *testing.T) {
 	} else if _, err := db.PinSlab(context.Background(), proto4.Account(hk), time.Now(), slabs.SlabPinParams{
 		EncryptionKey: [32]byte{},
 		MinShards:     1,
-		Sectors:       []slabs.SectorPinParams{{Root: r1, HostKey: hk}},
+		Sectors:       []slabs.PinnedSector{{Root: r1, HostKey: hk}},
 	}); err != nil {
 		t.Fatal(err)
 	} else if err := db.MarkSectorsLost(context.Background(), hk, []types.Hash256{r1}); err != nil {
@@ -826,7 +826,7 @@ func TestHostsWithLostSectors(t *testing.T) {
 	_, err := db.PinSlab(context.Background(), account, time.Time{}, slabs.SlabPinParams{
 		EncryptionKey: [32]byte{},
 		MinShards:     10,
-		Sectors: []slabs.SectorPinParams{
+		Sectors: []slabs.PinnedSector{
 			{
 				Root:    root1,
 				HostKey: hk1,
@@ -920,7 +920,7 @@ func TestHostsWithUnpinnableSectors(t *testing.T) {
 	_, err := db.PinSlab(context.Background(), account, time.Time{}, slabs.SlabPinParams{
 		EncryptionKey: [32]byte{},
 		MinShards:     1,
-		Sectors: []slabs.SectorPinParams{
+		Sectors: []slabs.PinnedSector{
 			{
 				Root:    types.Hash256(hk3),
 				HostKey: hk3,
@@ -1661,7 +1661,7 @@ func TestHostsForPinning(t *testing.T) {
 	if _, err := db.PinSlab(context.Background(), acc, time.Now(), slabs.SlabPinParams{
 		EncryptionKey: [32]byte{},
 		MinShards:     1,
-		Sectors: []slabs.SectorPinParams{
+		Sectors: []slabs.PinnedSector{
 			{
 				Root:    r1,
 				HostKey: hk1,
@@ -1888,7 +1888,7 @@ func TestHostsForIntegrityChecks(t *testing.T) {
 		_, err := db.PinSlab(context.Background(), acc, nextCheck, slabs.SlabPinParams{
 			EncryptionKey: [32]byte{},
 			MinShards:     1,
-			Sectors: []slabs.SectorPinParams{
+			Sectors: []slabs.PinnedSector{
 				{
 					Root:    root,
 					HostKey: hk,
@@ -2044,11 +2044,11 @@ func BenchmarkHostsForPinning(b *testing.B) {
 		for remainingSectors := nSectorsPerHost; remainingSectors > 0; {
 			batchSize := min(remainingSectors, 10000)
 			remainingSectors -= batchSize
-			var sectors []slabs.SectorPinParams
+			var sectors []slabs.PinnedSector
 			var roots []types.Hash256
 			for range batchSize {
 				root := frand.Entropy256()
-				sectors = append(sectors, slabs.SectorPinParams{
+				sectors = append(sectors, slabs.PinnedSector{
 					Root:    root,
 					HostKey: hk,
 				})
@@ -2103,10 +2103,10 @@ func BenchmarkHostsForIntegrityCheck(b *testing.B) {
 		for remainingSectors := nSectorsPerHost; remainingSectors > 0; {
 			batchSize := min(remainingSectors, 10000)
 			remainingSectors -= batchSize
-			var sectors []slabs.SectorPinParams
+			var sectors []slabs.PinnedSector
 			for range batchSize {
 				root := frand.Entropy256()
-				sectors = append(sectors, slabs.SectorPinParams{
+				sectors = append(sectors, slabs.PinnedSector{
 					Root:    root,
 					HostKey: hk,
 				})
@@ -2166,10 +2166,10 @@ func BenchmarkHostsWithLostSectors(b *testing.B) {
 		for remainingSectors := nSectorsPerHost; remainingSectors > 0; {
 			batchSize := min(remainingSectors, 10000)
 			remainingSectors -= batchSize
-			var sectors []slabs.SectorPinParams
+			var sectors []slabs.PinnedSector
 			for range batchSize {
 				root := frand.Entropy256()
-				sectors = append(sectors, slabs.SectorPinParams{
+				sectors = append(sectors, slabs.PinnedSector{
 					Root:    root,
 					HostKey: hk,
 				})
@@ -2222,10 +2222,10 @@ func BenchmarkHostsWithUnpinnableSectors(b *testing.B) {
 		for remainingSectors := nSectorsPerHost; remainingSectors > 0; {
 			batchSize := min(remainingSectors, 10000)
 			remainingSectors -= batchSize
-			var sectors []slabs.SectorPinParams
+			var sectors []slabs.PinnedSector
 			for range batchSize {
 				root := frand.Entropy256()
-				sectors = append(sectors, slabs.SectorPinParams{
+				sectors = append(sectors, slabs.PinnedSector{
 					Root:    root,
 					HostKey: hk,
 				})
