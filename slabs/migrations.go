@@ -11,6 +11,7 @@ import (
 	"go.sia.tech/indexd/contracts"
 	"go.sia.tech/indexd/hosts"
 	"go.uber.org/zap"
+	"golang.org/x/crypto/chacha20"
 	"lukechampine.com/frand"
 )
 
@@ -91,6 +92,14 @@ func (m *SlabManager) migrateSlab(ctx context.Context, slabID SlabID, allHosts [
 		return fmt.Errorf("failed to download slab %s: %w", slab.ID, err)
 	}
 
+	// decrypt the shards
+	nonce := make([]byte, 24)
+	for i := range shards {
+		nonce[0] = byte(i)
+		c, _ := chacha20.NewUnauthenticatedCipher(slab.EncryptionKey[:], nonce)
+		c.XORKeyStream(shards[i], shards[i])
+	}
+
 	// indicate what shards are required
 	required := make([]bool, len(slab.Sectors))
 	for _, i := range indices {
@@ -110,6 +119,13 @@ func (m *SlabManager) migrateSlab(ctx context.Context, slabID SlabID, allHosts [
 		if !missing {
 			shards[i] = nil // nil shards that are not missing
 		}
+	}
+
+	// re-encrypt the shards
+	for i := range shards {
+		nonce[0] = byte(i)
+		c, _ := chacha20.NewUnauthenticatedCipher(slab.EncryptionKey[:], nonce)
+		c.XORKeyStream(shards[i], shards[i])
 	}
 
 	// upload the missing shards
