@@ -300,6 +300,10 @@ func (s *Store) PinSlab(ctx context.Context, account proto.Account, nextIntegrit
 }
 
 func (s *Store) unpinSlabs(ctx context.Context, tx *txn, accountID int64, slabIDs []slabs.SlabID) error {
+	if _, err := tx.Exec(ctx, `SET LOCAL enable_seqscan=FALSE`); err != nil {
+		return fmt.Errorf("failed to disable seqscan: %w", err)
+	}
+
 	var args []sqlHash256
 	for _, slabID := range slabIDs {
 		args = append(args, sqlHash256(slabID))
@@ -377,20 +381,18 @@ RETURNING slab_id`, accountID, args)
 
 	// prune the slab and its sectors
 	batch := &pgx.Batch{}
-	for _, sID := range notPinned {
-		batch.Queue(`
+	batch.Queue(`
 				WITH candidate_sectors AS (
 					SELECT ss.sector_id
 					FROM slab_sectors ss
-					WHERE ss.slab_id = $1 AND NOT EXISTS (
+					WHERE ss.slab_id = ANY($1) AND NOT EXISTS (
 						SELECT 1
 						FROM slab_sectors ss2
-						WHERE ss2.sector_id = ss.sector_id AND ss2.slab_id <> $1
+						WHERE ss2.sector_id = ss.sector_id AND ss2.slab_id <> ANY($1)
 					)
 				)
-				DELETE FROM sectors WHERE id IN (SELECT sector_id FROM candidate_sectors);`, sID)
-		batch.Queue(`DELETE FROM slabs WHERE id = $1`, sID)
-	}
+				DELETE FROM sectors WHERE id IN (SELECT sector_id FROM candidate_sectors);`, notPinned)
+	batch.Queue(`DELETE FROM slabs WHERE id = ANY($1)`, notPinned)
 	if err := tx.Tx.SendBatch(ctx, batch).Close(); err != nil {
 		return fmt.Errorf("failed to prune slab: %w", err)
 	}

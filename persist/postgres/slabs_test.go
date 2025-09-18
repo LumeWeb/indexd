@@ -311,7 +311,7 @@ func TestSlabPruning(t *testing.T) {
 
 func BenchmarkPruneSlabs(b *testing.B) {
 	const (
-		numAccounts          = 10_000
+		numAccounts          = 50_000
 		numObjectsPerAccount = 10
 	)
 	store := initPostgres(b, zap.NewNop())
