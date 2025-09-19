@@ -333,7 +333,7 @@ RETURNING slab_id`, accountID, args)
 		return fmt.Errorf("failed to get slab IDs: %w", err)
 	}
 	if len(sIDs) == 0 {
-		return slabs.ErrSlabNotFound
+		return nil
 	}
 
 	// update the account's pinned data
@@ -414,7 +414,12 @@ func (s *Store) UnpinSlab(ctx context.Context, account proto.Account, slabID sla
 		if err != nil {
 			return fmt.Errorf("failed to get account ID: %w", err)
 		}
-		return s.unpinSlabs(ctx, tx, id, []slabs.SlabID{slabID})
+		if err := s.unpinSlabs(ctx, tx, id, []slabs.SlabID{slabID}); errors.Is(err, sql.ErrNoRows) {
+			return slabs.ErrSlabNotFound
+		} else if err != nil {
+			return err
+		}
+		return nil
 	})
 }
 
