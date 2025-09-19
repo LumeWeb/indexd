@@ -172,4 +172,12 @@ CREATE INDEX object_slabs_object_id_slab_index_idx ON object_slabs(object_id, sl
 		}
 		return nil
 	},
+	// add expiration_height index
+	func(ctx context.Context, tx *txn, _ *zap.Logger) error {
+		_, err := tx.Exec(ctx, `CREATE INDEX contracts_expiration_height_idx ON contracts (expiration_height)`)
+		if err != nil {
+			return fmt.Errorf("failed to create index: %w", err)
+		}
+		return nil
+	},
 }
