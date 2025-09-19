@@ -341,9 +341,8 @@ RETURNING slab_id`, accountID, args)
 			UPDATE accounts
 			SET pinned_data = pinned_data - (
 				SELECT COUNT(*) * $1
-				FROM slabs
-				INNER JOIN slab_sectors ON slabs.id = slab_sectors.slab_id
-				WHERE slabs.id = ANY($2)
+				FROM slab_sectors
+				WHERE slab_id = ANY($2)
 			)
 			WHERE id = $3
 		`, proto.SectorSize, sIDs, accountID)

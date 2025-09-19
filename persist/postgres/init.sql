@@ -294,6 +294,9 @@ CREATE TABLE account_slabs (
     PRIMARY KEY (account_id, slab_id)
 );
 
+-- speed up seeing if slab is pinned by any accounts
+CREATE INDEX account_slabs_slab_id_idx ON account_slabs(slab_id);
+
 CREATE TABLE sectors (
     id BIGSERIAL PRIMARY KEY,
     sector_root BYTEA UNIQUE NOT NULL,
