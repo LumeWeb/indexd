@@ -195,10 +195,14 @@ CREATE INDEX object_slabs_object_id_slab_index_idx ON object_slabs(object_id, sl
 	},
 	// add the account_stats table
 	func(ctx context.Context, tx *txn, _ *zap.Logger) error {
-		_, err := tx.Exec(ctx, `CREATE TABLE account_stats (
-    id INTEGER PRIMARY KEY NOT NULL DEFAULT 0 CHECK (id = 0), -- enforce a single row
-    num_registered BIGINT NOT NULL DEFAULT 0 CHECK (num_registered >= 0) -- number of accounts currently registered
-);`)
-		return err
+		_, err := tx.Exec(ctx, `ALTER TABLE sectors_stats RENAME TO stats;`)
+		if err != nil {
+			return fmt.Errorf("failed to rename sector stats table: %w", err)
+		}
+		_, err = tx.Exec(ctx, `ALTER TABLE stats ADD COLUMN num_accounts_registered BIGINT NOT NULL DEFAULT 0 CHECK (num_accounts_registered >= 0);`)
+		if err != nil {
+			return fmt.Errorf("failed to add num_accounts_registered column: %w", err)
+		}
+		return nil
 	},
 }

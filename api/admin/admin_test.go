@@ -838,7 +838,7 @@ func TestSectorStatsAPI(t *testing.T) {
 	}
 }
 
-func TestContractsStatsAPI(t *testing.T) {
+func TestAccountStatsAPI(t *testing.T) {
 	// create cluster with three hosts
 	logger := newTestLogger(false)
 	cluster := testutils.NewCluster(t, testutils.WithHosts(3), testutils.WithLogger(logger))
