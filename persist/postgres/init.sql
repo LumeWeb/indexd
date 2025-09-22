@@ -9,6 +9,11 @@ CREATE TABLE accounts (
     service_url TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE account_stats (
+    id INTEGER PRIMARY KEY NOT NULL DEFAULT 0 CHECK (id = 0), -- enforce a single row
+    num_registered BIGINT NOT NULL DEFAULT 0 CHECK (num_registered >= 0) -- number of accounts currently registered
+);
+
 CREATE TABLE app_connect_keys (
     app_key TEXT PRIMARY KEY,
     use_description TEXT NOT NULL,

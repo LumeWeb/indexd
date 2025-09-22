@@ -46,3 +46,17 @@ func (s *Store) SectorStats(ctx context.Context) (admin.SectorsStatsResponse, er
 	})
 	return stats, err
 }
+
+func (s *Store) incrementNumAccounts(ctx context.Context, tx *txn, delta int64) error {
+	_, err := tx.Exec(ctx, "UPDATE account_stats SET num_registered = num_registered + $1", delta)
+	return err
+}
+
+// AccountStats reports statistics about the accounts stored in the database.
+func (s *Store) AccountStats(ctx context.Context) (admin.AccountStatsResponse, error) {
+	var stats admin.AccountStatsResponse
+	err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
+		return tx.QueryRow(ctx, "SELECT num_registered FROM account_stats").Scan(&stats.Registered)
+	})
+	return stats, err
+}
