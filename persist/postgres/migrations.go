@@ -199,6 +199,10 @@ CREATE INDEX object_slabs_object_id_slab_index_idx ON object_slabs(object_id, sl
 		if err != nil {
 			return fmt.Errorf("failed to rename sector stats table: %w", err)
 		}
+		_, err = tx.Exec(ctx, `ALTER INDEX sectors_stats_pkey RENAME TO stats_pkey;`)
+		if err != nil {
+			return fmt.Errorf("failed to rename sector stats index: %w", err)
+		}
 		_, err = tx.Exec(ctx, `ALTER TABLE stats ADD COLUMN num_accounts_registered BIGINT NOT NULL DEFAULT 0 CHECK (num_accounts_registered >= 0);`)
 		if err != nil {
 			return fmt.Errorf("failed to add num_accounts_registered column: %w", err)
