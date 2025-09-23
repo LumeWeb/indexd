@@ -35,7 +35,7 @@ type (
 
 	// Slabs defines the slab interface for the application API.
 	Slabs interface {
-		PinSlabs(context.Context, proto.Account, time.Time, ...slabs.SlabPinParams) ([]slabs.SlabID, error)
+		PinSlabs(ctx context.Context, account proto.Account, nextIntegrityCheck time.Time, toPin ...slabs.SlabPinParams) ([]slabs.SlabID, error)
 
 		Object(ctx context.Context, account proto.Account, key types.Hash256) (slabs.Object, error)
 		DeleteObject(ctx context.Context, account proto.Account, objectKey types.Hash256) error
@@ -46,7 +46,6 @@ type (
 
 	// Store defines the store interface for the application API.
 	Store interface {
-		PinSlab(context.Context, proto.Account, time.Time, slabs.SlabPinParams) (slabs.SlabID, error)
 		PinnedSlab(context.Context, slabs.SlabID) (slabs.PinnedSlab, error)
 		SlabIDs(ctx context.Context, accountID proto.Account, offset, limit int) ([]slabs.SlabID, error)
 		UnpinSlab(context.Context, proto.Account, slabs.SlabID) error
@@ -290,12 +289,14 @@ func (a *app) handlePOSTSlabs(jc jape.Context, pk types.PublicKey) {
 		return
 	}
 
-	slabID, err := a.store.PinSlab(jc.Request.Context(), proto.Account(pk), time.Now(), params)
+	slabIDs, err := a.slabs.PinSlabs(jc.Request.Context(), proto.Account(pk), time.Now(), params)
 	if jc.Check("failed to pin slab", err) != nil {
 		return
+	} else if len(slabIDs) == 0 {
+		jc.Error(fmt.Errorf("PinSlabs did not return any slab IDs"), http.StatusInternalServerError)
 	}
 
-	jc.Encode(slabID)
+	jc.Encode(slabIDs[0])
 }
 
 func (a *app) handlePOSTObjectsShared(jc jape.Context, pk types.PublicKey) {
@@ -306,9 +307,9 @@ func (a *app) handlePOSTObjectsShared(jc jape.Context, pk types.PublicKey) {
 
 	var toPin []slabs.SlabPinParams
 	for _, slab := range shared.Slabs {
-		sectors := make([]slabs.SectorPinParams, 0, len(slab.Sectors))
+		sectors := make([]slabs.PinnedSector, 0, len(slab.Sectors))
 		for _, sector := range slab.Sectors {
-			sectors = append(sectors, slabs.SectorPinParams{
+			sectors = append(sectors, slabs.PinnedSector{
 				Root:    sector.Root,
 				HostKey: sector.HostKey,
 			})
@@ -690,6 +691,7 @@ func NewAPI(advertiseURL string, store Store, am Accounts, contracts Contracts, 
 		"GET /objects/:key/shared": wrapCORS(wrapSignedAuth(a.handleGETObjectShared)),
 		"POST /objects":            wrapCORS(wrapSignedAuth(a.handlePOSTObjects)),
 		"DELETE /objects/:key":     wrapCORS(wrapSignedAuth(a.handleDELETEObjects)),
+		"POST /objects/shared":     wrapCORS(wrapSignedAuth(a.handlePOSTObjectsShared)),
 
 		"GET /slabs":            wrapCORS(wrapSignedAuth(a.handleGETSlabs)),
 		"POST /slabs":           wrapCORS(wrapSignedAuth(a.handlePOSTSlabs)),
