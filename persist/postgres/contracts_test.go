@@ -1607,6 +1607,71 @@ func BenchmarkContracts(b *testing.B) {
 	})
 }
 
+func BenchmarkContractsStats(b *testing.B) {
+	store := initPostgres(b, zap.NewNop())
+
+	hk := types.PublicKey{1}
+
+	store.addTestHost(b, hk)
+
+	const (
+		generations  = 100 // about 10 years of renewals at a 6 week period
+		numContracts = 100 // number of active contracts
+	)
+
+	fcids := make([]types.FileContractID, numContracts)
+	for i := range numContracts {
+		fcids[i] = types.FileContractID{byte(i + 1)}
+		store.addTestContract(b, hk, fcids[i])
+	}
+
+	for range generations {
+		for i := range numContracts {
+			from := fcids[i]
+			to := from.V2RenewalID()
+			fcids[i] = to
+
+			err := store.AddRenewedContract(b.Context(), from, to, newTestRevision(hk), types.ZeroCurrency, types.ZeroCurrency)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+
+	// make sure only the last generation is active
+	err := store.UpdateChainState(b.Context(), func(tx subscriber.UpdateTx) error {
+		return tx.UpdateLastScannedIndex(b.Context(), types.ChainIndex{Height: 100})
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	_, err = store.pool.Exec(b.Context(), `
+		UPDATE contracts
+		SET proof_height = 99, state = $1
+		WHERE renewed_to IS NOT NULL;
+	`, contracts.ContractStateResolved)
+	if err != nil {
+		b.Fatal(err)
+	}
+	_, err = store.pool.Exec(b.Context(), `
+		UPDATE contracts
+		SET proof_height = 101, state = $1
+		WHERE renewed_to IS NULL;
+	`, contracts.ContractStateActive)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	for b.Loop() {
+		stats, err := store.ContractsStats(b.Context())
+		if err != nil {
+			b.Fatal(err)
+		} else if stats.Contracts != numContracts {
+			b.Fatalf("expected %d contracts, got %d", numContracts, stats.Contracts)
+		}
+	}
+}
+
 func BenchmarkPrunableContractRoots(b *testing.B) {
 	store := initPostgres(b, zap.NewNop())
 
