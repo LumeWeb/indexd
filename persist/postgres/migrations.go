@@ -200,12 +200,28 @@ CREATE INDEX object_slabs_object_id_slab_index_idx ON object_slabs(object_id, sl
 			CREATE INDEX contracts_host_active_idx ON contracts (host_id) WHERE state <= 1;`)
 		return err
 	},
+	// add the account_stats table
+	func(ctx context.Context, tx *txn, _ *zap.Logger) error {
+		_, err := tx.Exec(ctx, `ALTER TABLE sectors_stats RENAME TO stats;`)
+		if err != nil {
+			return fmt.Errorf("failed to rename sector stats table: %w", err)
+		}
+		_, err = tx.Exec(ctx, `ALTER INDEX sectors_stats_pkey RENAME TO stats_pkey;`)
+		if err != nil {
+			return fmt.Errorf("failed to rename sector stats index: %w", err)
+		}
+		_, err = tx.Exec(ctx, `ALTER TABLE stats ADD COLUMN num_accounts_registered BIGINT NOT NULL DEFAULT 0 CHECK (num_accounts_registered >= 0);`)
+		if err != nil {
+			return fmt.Errorf("failed to add num_accounts_registered column: %w", err)
+		}
+		return nil
+	},
 	// add expiration_height index
 	func(ctx context.Context, tx *txn, _ *zap.Logger) error {
 		_, err := tx.Exec(ctx, `
-			CREATE INDEX contracts_proof_height_idx ON contracts (proof_height);
-			CREATE INDEX contracts_state_active_idx ON contracts(state) WHERE state = 0 OR state = 1;
-		`)
+				CREATE INDEX contracts_proof_height_idx ON contracts (proof_height);
+				CREATE INDEX contracts_state_active_idx ON contracts(state) WHERE state = 0 OR state = 1;
+			`)
 		if err != nil {
 			return fmt.Errorf("failed to create index: %w", err)
 		}
