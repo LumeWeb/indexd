@@ -1364,10 +1364,10 @@ func TestContractsStats(t *testing.T) {
 	store.addTestContract(t, hk, fcid3)
 	store.addTestContract(t, hk, fcid4)
 
-	updateContract := func(id types.FileContractID, good bool, size, capacity, expiration uint64) {
+	updateContract := func(id types.FileContractID, good bool, size, capacity, proofHeight uint64) {
 		t.Helper()
-		res, err := store.pool.Exec(t.Context(), `UPDATE contracts SET good = $1, size = $2, capacity = $3, expiration_height = $4 WHERE contract_id = $5`,
-			good, size, capacity, expiration, sqlHash256(id))
+		res, err := store.pool.Exec(t.Context(), `UPDATE contracts SET good = $1, size = $2, capacity = $3, proof_height = $4 WHERE contract_id = $5`,
+			good, size, capacity, proofHeight, sqlHash256(id))
 		if err != nil {
 			t.Fatal(err)
 		} else if res.RowsAffected() != 1 {

@@ -774,8 +774,7 @@ func TestWalletAPI(t *testing.T) {
 
 func TestContractsStatsAPI(t *testing.T) {
 	// create cluster with three hosts
-	logger := newTestLogger(false)
-	cluster := testutils.NewCluster(t, testutils.WithHosts(3), testutils.WithLogger(logger))
+	cluster := testutils.NewCluster(t, testutils.WithHosts(1))
 	indexer := cluster.Indexer
 	adminClient := indexer.Admin
 

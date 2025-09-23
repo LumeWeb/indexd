@@ -40,15 +40,17 @@ func (s *Store) ContractsStats(ctx context.Context) (resp admin.ContractsStatsRe
     			SELECT scanned_height FROM global_settings
        		)
 			SELECT
-				COUNT(*),       -- all contracts
-				COALESCE(SUM(good::int), 0), -- good contracts
-				COALESCE(SUM(capacity), 0),  -- total capacity
-				COALESCE(SUM(size), 0)      -- total size
+				COUNT(*),       				-- non-expired contracts
+				COALESCE(SUM(good::int), 0), 	-- good contracts
+				COALESCE(SUM(capacity), 0),  	-- total capacity
+				COALESCE(SUM(size), 0)      	-- total size
 			FROM contracts
 			CROSS JOIN globals
 			WHERE
-				expiration_height > globals.scanned_height
-		`).Scan(&numContracts, &numGood, &totalCapacity, &totalSize)
+				proof_height > globals.scanned_height AND
+				(state <> $1 OR state <> $2)
+		`, contracts.ContractStatePending, contracts.ContractStateActive).
+			Scan(&numContracts, &numGood, &totalCapacity, &totalSize)
 		if err != nil {
 			return err
 		}
@@ -62,9 +64,11 @@ func (s *Store) ContractsStats(ctx context.Context) (resp admin.ContractsStatsRe
 			FROM contracts
 			CROSS JOIN globals
 			WHERE
-				expiration_height > globals.scanned_height AND
-				globals.scanned_height + globals.contracts_renew_window >= expiration_height
-		`).Scan(&numRenewing)
+				proof_height > globals.scanned_height AND
+				(state <> $1 OR state <> $2) AND
+				globals.scanned_height + globals.contracts_renew_window >= proof_height
+		`, contracts.ContractStatePending, contracts.ContractStateActive).
+			Scan(&numRenewing)
 		if err != nil {
 			return err
 		}
