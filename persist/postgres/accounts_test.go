@@ -720,33 +720,51 @@ func TestServiceAccounts(t *testing.T) {
 }
 
 func TestActiveAccounts(t *testing.T) {
-	// prepare database
 	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
 
 	now := time.Now()
-	const day = 24 * 7 * time.Hour
-
-	durations := []time.Duration{day, 2 * day, 3 * day, 7 * day, 10 * day, 14 * day, 30 * day}
-	for _, duration := range durations {
-		lastUsed := now.Add(-duration)
-		if _, err := store.pool.Exec(t.Context(), `INSERT INTO accounts (public_key, last_used, max_pinned_data) VALUES ($1, $2, 1000000);`, sqlPublicKey(types.GeneratePrivateKey().PublicKey()), lastUsed); err != nil {
+	insert := func(d time.Duration) {
+		lastUsed := now.Add(-d)
+		if _, err := store.pool.Exec(
+			t.Context(),
+			`INSERT INTO accounts (public_key, last_used, max_pinned_data) VALUES ($1, $2, 1000000);`,
+			sqlPublicKey(types.GeneratePrivateKey().PublicKey()),
+			lastUsed,
+		); err != nil {
 			t.Fatal(err)
 		}
 	}
+
+	// only 3 accounts
+	const day = 24 * time.Hour
+	insert(1 * day)
+	insert(7 * day)
 
 	assertActive := func(n uint64, threshold time.Time) {
 		t.Helper()
-
-		if activeAccounts, err := store.ActiveAccounts(t.Context(), threshold); err != nil {
+		active, err := store.ActiveAccounts(t.Context(), threshold)
+		if err != nil {
 			t.Fatal(err)
-		} else if activeAccounts != n {
-			t.Fatalf("expected %d active accounts, got %d", n, activeAccounts)
+		}
+		if active != n {
+			t.Fatalf("expected %d active accounts, got %d", n, active)
 		}
 	}
 
-	for i := range durations {
-		assertActive(uint64(i)+1, now.Add(-durations[i]))
-	}
+	// 0 days
+	threshold := now
+	assertActive(0, threshold.Add(-time.Second))
+	assertActive(0, threshold.Add(time.Second))
+
+	// 1 day
+	threshold = now.Add(-1 * day)
+	assertActive(0, threshold.Add(time.Second))
+	assertActive(1, threshold.Add(-time.Second))
+
+	// 7 days
+	threshold = now.Add(-7 * day)
+	assertActive(2, threshold.Add(-time.Second))
+	assertActive(1, threshold.Add(time.Second))
 }
 
 // BenchmarkServiceAccounts benchmarks the service account related methods
