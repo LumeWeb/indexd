@@ -107,8 +107,11 @@ ORDER BY ss.slab_index ASC`, dbID)
 // PruneSlabs prunes all pinned slabs of a user not currently connected to an
 // object.
 func (s *Store) PruneSlabs(ctx context.Context, account proto.Account) error {
-	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
-		id, err := accountID(ctx, tx, account)
+	var id int64
+	var slabIDs []slabs.SlabID
+	err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
+		var err error
+		id, err = accountID(ctx, tx, account)
 		if err != nil {
 			return fmt.Errorf("failed to get account ID: %w", err)
 		}
@@ -130,7 +133,6 @@ WHERE a.account_id = $1
 		}
 		defer rows.Close()
 
-		var slabIDs []slabs.SlabID
 		for rows.Next() {
 			var slabID slabs.SlabID
 			if err := rows.Scan((*sqlHash256)(&slabID)); err != nil {
@@ -144,10 +146,24 @@ WHERE a.account_id = $1
 			return nil
 		}
 
-		if err := s.unpinSlabs(ctx, tx, id, slabIDs); err != nil {
-			return fmt.Errorf("failed to unpin slab: %w", err)
-		}
-
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+
+	const batchSize = 5
+	for i := 0; i < len(slabIDs); i += batchSize {
+		err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
+			if err := s.unpinSlabs(ctx, tx, id, slabIDs[i:min(len(slabIDs), i+batchSize)]); err != nil {
+				return fmt.Errorf("failed to unpin slabs: %w", err)
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
