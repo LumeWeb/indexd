@@ -130,12 +130,11 @@ func (d *dialer) initHosts() error {
 	}
 
 	// refresh in background thread
-	ctx, cancel, err = d.tg.AddContext(context.Background())
-	if err != nil {
-		return err
-	}
-
 	go func() {
+		ctx, cancel, err = d.tg.AddContext(context.Background())
+		if err != nil {
+			return
+		}
 		defer cancel()
 
 		ticker := time.NewTicker(10 * time.Minute)
