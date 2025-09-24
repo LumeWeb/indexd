@@ -152,7 +152,7 @@ WHERE a.account_id = $1
 		return err
 	}
 
-	const batchSize = 5
+	const batchSize = 20
 	for i := 0; i < len(slabIDs); i += batchSize {
 		err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
 			if err := s.unpinSlabs(ctx, tx, id, slabIDs[i:min(len(slabIDs), i+batchSize)]); err != nil {
