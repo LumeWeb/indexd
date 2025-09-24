@@ -60,13 +60,11 @@ func (s *Store) Slab(ctx context.Context, slabID slabs.SlabID) (slab slabs.Slab,
 }
 
 // PinnedSlab retrieves a pinned slab from the database by its ID.
-func (s *Store) PinnedSlab(ctx context.Context, account *proto.Account, slabID slabs.SlabID) (slab slabs.PinnedSlab, err error) {
+func (s *Store) PinnedSlab(ctx context.Context, account proto.Account, slabID slabs.SlabID) (slab slabs.PinnedSlab, err error) {
 	slab.ID = slabID
 	err = s.transaction(ctx, func(ctx context.Context, tx *txn) error {
-		if account != nil {
-			if _, err := tx.Exec(ctx, `UPDATE accounts SET last_used = NOW() WHERE public_key = $1`, sqlPublicKey(*account)); err != nil {
-				return fmt.Errorf("failed to update last used: %w", err)
-			}
+		if _, err := tx.Exec(ctx, `UPDATE accounts SET last_used = NOW() WHERE public_key = $1`, sqlPublicKey(account)); err != nil {
+			return fmt.Errorf("failed to update last used: %w", err)
 		}
 
 		var dbID int64

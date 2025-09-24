@@ -163,7 +163,7 @@ func (m *SlabManager) Slabs(ctx context.Context, account proto.Account, slabIDs 
 
 // PinnedSlab retrieves a pinned slab from the database by its ID.  If account
 // is not nil, the last used field of that account will be updated.
-func (m *SlabManager) PinnedSlab(ctx context.Context, account *proto.Account, slabID SlabID) (PinnedSlab, error) {
+func (m *SlabManager) PinnedSlab(ctx context.Context, account proto.Account, slabID SlabID) (PinnedSlab, error) {
 	return m.store.PinnedSlab(ctx, account, slabID)
 }
 

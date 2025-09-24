@@ -98,7 +98,7 @@ type (
 		UnpinSlab(context.Context, proto.Account, SlabID) error
 		RecordIntegrityCheck(ctx context.Context, success bool, nextCheck time.Time, hostKey types.PublicKey, roots []types.Hash256) error
 		SectorsForIntegrityCheck(ctx context.Context, hostKey types.PublicKey, limit int) ([]types.Hash256, error)
-		PinnedSlab(ctx context.Context, account *proto.Account, slabID SlabID) (PinnedSlab, error)
+		PinnedSlab(ctx context.Context, account proto.Account, slabID SlabID) (PinnedSlab, error)
 		Slab(ctx context.Context, slabID SlabID) (Slab, error)
 		Slabs(ctx context.Context, account proto.Account, slabIDs []SlabID) ([]Slab, error)
 		SlabIDs(ctx context.Context, account proto.Account, offset, limit int) ([]SlabID, error)
