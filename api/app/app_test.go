@@ -342,8 +342,9 @@ func TestApplicationAPI(t *testing.T) {
 		t.Fatal("unexpected sector roots in slab")
 	}
 
-	obj := slabs.Object{
-		Key: types.Hash256(frand.Entropy256()),
+	obj := slabs.LockedObject{
+		ID:                 types.Hash256(frand.Entropy256()),
+		EncryptedMasterKey: frand.Bytes(72),
 		Slabs: []slabs.SlabSlice{
 			{
 				SlabID: slab1.ID,
@@ -356,7 +357,7 @@ func TestApplicationAPI(t *testing.T) {
 				Length: 256,
 			},
 		},
-		Meta: nil,
+		EncryptedMetadata: nil,
 	}
 
 	objs, err := client.ListObjects(context.Background(), slabs.Cursor{}, 100)
@@ -380,30 +381,30 @@ func TestApplicationAPI(t *testing.T) {
 
 	if objs, err := client.ListObjects(context.Background(), slabs.Cursor{
 		After: obj1.UpdatedAt,
-		Key:   obj1.Key,
+		Key:   obj1.ID,
 	}, 100); err != nil {
 		t.Fatal(err)
 	} else if len(objs) != 0 {
 		t.Fatalf("expected 0 objects, got %d", len(objs))
 	}
 
-	obj, err = client.Object(context.Background(), obj1.Key)
+	obj, err = client.Object(context.Background(), obj1.ID)
 	if err != nil {
 		t.Fatal(err)
 	} else if !reflect.DeepEqual(obj, objs[0]) {
 		t.Fatal("objects not equal")
 	}
 
-	if err := client.DeleteObject(context.Background(), obj1.Key); err != nil {
+	if err := client.DeleteObject(context.Background(), obj1.ID); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = client.Object(context.Background(), obj1.Key)
+	_, err = client.Object(context.Background(), obj1.ID)
 	if err == nil || !strings.Contains(err.Error(), slabs.ErrObjectNotFound.Error()) {
 		t.Fatal("expected object to be not found, got", err)
 	}
 
-	if err := client.DeleteObject(context.Background(), obj1.Key); err == nil || err.Error() != slabs.ErrObjectNotFound.Error() {
+	if err := client.DeleteObject(context.Background(), obj1.ID); err == nil || err.Error() != slabs.ErrObjectNotFound.Error() {
 		t.Fatalf("expected %v, got %v", slabs.ErrObjectNotFound, err)
 	}
 
@@ -425,8 +426,9 @@ func TestApplicationAPI(t *testing.T) {
 		t.Fatal("failed to pin slab:", err)
 	}
 	// Try to save an object referencing that slab on first account
-	badObj := slabs.Object{
-		Key: types.Hash256(frand.Entropy256()),
+	badObj := slabs.LockedObject{
+		ID:                 types.Hash256(frand.Entropy256()),
+		EncryptedMasterKey: frand.Bytes(32),
 		Slabs: []slabs.SlabSlice{{
 			SlabID: slabID,
 			Offset: 0,
@@ -614,8 +616,8 @@ func TestSharedObjects(t *testing.T) {
 	}
 
 	expectedSharedObj := slabs.SharedObject{
-		Key: types.Hash256(frand.Entropy256()),
-		Slabs: []slabs.SharedObjectSlab{
+		ID: types.Hash256(frand.Entropy256()),
+		Slabs: []slabs.SharedSlab{
 			{
 				PinnedSlab: slabs.PinnedSlab{
 					ID:            slab1ID,
@@ -655,12 +657,13 @@ func TestSharedObjects(t *testing.T) {
 				Length: 256,
 			},
 		},
-		Meta: nil,
+		EncryptedMetadata: nil,
 	}
 
 	// add the object to the db
-	obj := slabs.Object{
-		Key: expectedSharedObj.Key,
+	obj := slabs.LockedObject{
+		ID:                 expectedSharedObj.ID,
+		EncryptedMasterKey: frand.Bytes(32),
 		Slabs: []slabs.SlabSlice{
 			{
 				SlabID: slab1ID,
@@ -679,16 +682,16 @@ func TestSharedObjects(t *testing.T) {
 	}
 
 	// populate the object's created and updated fields
-	obj, err = client1.Object(ctx, obj.Key)
+	obj, err = client1.Object(ctx, obj.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// generate a random encryption key
-	encryptionKey := frand.Entropy256()
+	encryptionKey := frand.Bytes(32)
 
 	// create a shared URL for the object
-	shareURL, err := client1.CreateSharedObjectURL(ctx, obj.Key, encryptionKey, time.Now().Add(time.Second))
+	shareURL, err := client1.CreateSharedObjectURL(ctx, obj.ID, encryptionKey, time.Now().Add(time.Second))
 	if err != nil {
 		t.Fatal("failed to create shared object URL:", err)
 	}
@@ -697,7 +700,7 @@ func TestSharedObjects(t *testing.T) {
 	sharedObj, key, err := client2.SharedObject(ctx, shareURL)
 	if err != nil {
 		t.Fatal("failed to retrieve shared object:", err)
-	} else if !bytes.Equal(key[:], encryptionKey[:]) {
+	} else if !bytes.Equal(key, encryptionKey) {
 		t.Fatal("encryption key mismatch")
 	} else if !reflect.DeepEqual(expectedSharedObj, sharedObj) {
 		t.Fatal("shared object mismatch")

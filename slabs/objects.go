@@ -11,9 +11,22 @@ import (
 )
 
 type (
-	// A SharedObjectSlab represents a slab of a shared object.
+
+	// A LockedObject is an object that has been locked with an app key.
+	// It can be safely serialized and shared, but cannot be used to access
+	// the underlying data until it has been unlocked with the app key.
+	LockedObject struct {
+		ID                 types.Hash256 `json:"id"`
+		EncryptedMasterKey []byte        `json:"encryptedMasterKey"`
+		Slabs              []SlabSlice   `json:"slabs"`
+		EncryptedMetadata  []byte        `json:"encryptedMetadata"`
+		CreatedAt          time.Time     `json:"createdAt"`
+		UpdatedAt          time.Time     `json:"updatedAt"`
+	}
+
+	// A SharedSlab represents a slab of a shared object.
 	// It contains all the metadata needed to retrieve a slab.
-	SharedObjectSlab struct {
+	SharedSlab struct {
 		PinnedSlab
 		Offset uint32 `json:"offset"`
 		Length uint32 `json:"length"`
@@ -22,18 +35,9 @@ type (
 	// SharedObject provides all the metadata necessary to retrieve
 	// and decrypt an object.
 	SharedObject struct {
-		Key   types.Hash256      `json:"key"`
-		Slabs []SharedObjectSlab `json:"slabs"`
-		Meta  []byte             `json:"meta,omitempty"`
-	}
-
-	// Object represents a collection of slabs that form an uploaded object.
-	Object struct {
-		Key       types.Hash256 `json:"key"`
-		Slabs     []SlabSlice   `json:"slabs"`
-		Meta      []byte        `json:"meta,omitempty"`
-		CreatedAt time.Time     `json:"createdAt"`
-		UpdatedAt time.Time     `json:"updatedAt"`
+		ID                types.Hash256 `json:"id"`
+		Slabs             []SharedSlab  `json:"slabs"`
+		EncryptedMetadata []byte        `json:"encryptedMetadata"`
 	}
 
 	// Cursor describes a cursor for paginating through objects. During
@@ -76,7 +80,7 @@ var (
 )
 
 // Object retrieves the object with the given key for the given account.
-func (m *SlabManager) Object(ctx context.Context, account proto.Account, key types.Hash256) (Object, error) {
+func (m *SlabManager) Object(ctx context.Context, account proto.Account, key types.Hash256) (LockedObject, error) {
 	return m.store.Object(ctx, account, key)
 }
 
@@ -87,11 +91,11 @@ func (m *SlabManager) DeleteObject(ctx context.Context, account proto.Account, o
 
 // SaveObject saves the given object for the given account. If an object with
 // the given key exists for an account, it is overwritten.
-func (m *SlabManager) SaveObject(ctx context.Context, account proto.Account, obj Object) error {
+func (m *SlabManager) SaveObject(ctx context.Context, account proto.Account, obj LockedObject) error {
 	if len(obj.Slabs) == 0 {
 		return ErrObjectMinimumSlabs
-	} else if len(obj.Meta) > metadataLimit {
-		return fmt.Errorf("%w: got %d bytes", ErrObjectMetadataLimitExceeded, len(obj.Meta))
+	} else if len(obj.EncryptedMetadata) > metadataLimit {
+		return fmt.Errorf("%w: got %d bytes", ErrObjectMetadataLimitExceeded, len(obj.EncryptedMetadata))
 	}
 
 	return m.store.SaveObject(ctx, account, obj)
@@ -99,7 +103,7 @@ func (m *SlabManager) SaveObject(ctx context.Context, account proto.Account, obj
 
 // ListObjects lists objects for the given account that were updated after the
 // the given 'after' time.
-func (m *SlabManager) ListObjects(ctx context.Context, account proto.Account, cursor Cursor, limit int) ([]Object, error) {
+func (m *SlabManager) ListObjects(ctx context.Context, account proto.Account, cursor Cursor, limit int) ([]LockedObject, error) {
 	return m.store.ListObjects(ctx, account, cursor, limit)
 }
 

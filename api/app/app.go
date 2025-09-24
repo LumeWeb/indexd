@@ -41,10 +41,10 @@ type (
 		SlabIDs(ctx context.Context, account proto.Account, offset, limit int) ([]slabs.SlabID, error)
 		UnpinSlab(ctx context.Context, account proto.Account, slabID slabs.SlabID) error
 
-		Object(ctx context.Context, account proto.Account, key types.Hash256) (slabs.Object, error)
+		Object(ctx context.Context, account proto.Account, key types.Hash256) (slabs.LockedObject, error)
 		DeleteObject(ctx context.Context, account proto.Account, objectKey types.Hash256) error
-		SaveObject(ctx context.Context, account proto.Account, obj slabs.Object) error
-		ListObjects(ctx context.Context, account proto.Account, cursor slabs.Cursor, limit int) (objs []slabs.Object, _ error)
+		SaveObject(ctx context.Context, account proto.Account, obj slabs.LockedObject) error
+		ListObjects(ctx context.Context, account proto.Account, cursor slabs.Cursor, limit int) (objs []slabs.LockedObject, _ error)
 		SharedObject(ctx context.Context, key types.Hash256) (slabs.SharedObject, error)
 	}
 
@@ -258,7 +258,7 @@ func (a *app) handleGETObjects(jc jape.Context, pk types.PublicKey) {
 }
 
 func (a *app) handlePOSTObjects(jc jape.Context, pk types.PublicKey) {
-	var obj slabs.Object
+	var obj slabs.LockedObject
 	if jc.Decode(&obj) != nil {
 		return
 	}

@@ -1,0 +1,159 @@
+package sdk
+
+import (
+	"context"
+	"crypto/cipher"
+	"encoding/json"
+	"fmt"
+	"slices"
+	"time"
+
+	"go.sia.tech/core/types"
+	"go.sia.tech/indexd/slabs"
+	"golang.org/x/crypto/chacha20poly1305"
+	"lukechampine.com/frand"
+)
+
+// An Object represents a collection of slabs that can be used to access
+// encrypted data. The master key is used to encrypt/decrypt the data and
+// metadata, and should be kept secret.
+//
+// It has no public fields to prevent accidental leakage of unencrypted data.
+type Object struct {
+	masterKey []byte
+	slabs     []slabs.SlabSlice
+	metadata  json.RawMessage
+	createdAt time.Time
+	updatedAt time.Time
+}
+
+func (o *Object) ID() types.Hash256 {
+	h := types.NewHasher()
+	for _, slab := range o.slabs {
+		slab.EncodeTo(h.E)
+	}
+	return h.Sum()
+}
+
+// CreatedAt returns the time the object was created.
+func (o *Object) CreatedAt() time.Time {
+	return o.createdAt
+}
+
+// UpdatedAt returns the time the object was last updated.
+func (o *Object) UpdatedAt() time.Time {
+	return o.updatedAt
+}
+
+// Lock returns a LockedObject that can be safely serialized and shared.
+func (o *Object) Lock(appKey types.PrivateKey) slabs.LockedObject {
+	keyCipher := masterKeyCipher(appKey)
+	nonce := frand.Bytes(keyCipher.NonceSize())
+	encryptedMasterKey := keyCipher.Seal(nonce, nonce, o.masterKey, nil)
+
+	metaCipher := metadataCipher(o.masterKey)
+	nonce = frand.Bytes(metaCipher.NonceSize())
+	encryptedMeta := metaCipher.Seal(nonce, nonce, o.metadata, nil)
+	return slabs.LockedObject{
+		ID:                 o.ID(),
+		EncryptedMasterKey: encryptedMasterKey,
+		Slabs:              o.slabs,
+		EncryptedMetadata:  encryptedMeta,
+		CreatedAt:          o.createdAt,
+		UpdatedAt:          o.updatedAt,
+	}
+}
+
+// Slabs returns a copy of the object's slabs.
+func (o *Object) Slabs() []slabs.SlabSlice {
+	return slices.Clone(o.slabs)
+}
+
+// Metadata returns a copy of the object's metadata.
+func (o *Object) Metadata() json.RawMessage {
+	return slices.Clone(o.metadata)
+}
+
+// UpdateMetadata updates the object's metadata.
+func (o *Object) UpdateMetadata(meta json.RawMessage) {
+	o.metadata = slices.Clone(meta)
+}
+
+func masterKeyCipher(appKey types.PrivateKey) cipher.AEAD {
+	h := types.HashBytes(appKey[:])
+	cipher, _ := chacha20poly1305.NewX(h[:])
+	return cipher
+}
+
+func metadataCipher(masterKey []byte) cipher.AEAD {
+	h := types.HashBytes(append(masterKey, []byte("metadata")...))
+	cipher, _ := chacha20poly1305.NewX(h[:])
+	return cipher
+}
+
+func unlockEncryptedMetadata(masterKey []byte, encryptedMeta []byte) (json.RawMessage, error) {
+	if len(encryptedMeta) == 0 {
+		return nil, nil
+	}
+	metadataCipher := metadataCipher(masterKey)
+	if len(encryptedMeta) < metadataCipher.NonceSize() {
+		return nil, fmt.Errorf("encrypted metadata too short")
+	}
+	nonce := encryptedMeta[:metadataCipher.NonceSize()]
+	metadata, err := metadataCipher.Open(nil, nonce, encryptedMeta[metadataCipher.NonceSize():], nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unlock metadata: %w", err)
+	}
+	return metadata, nil
+}
+
+func newObjectFromLockedObject(lo slabs.LockedObject, appKey types.PrivateKey) (obj Object, err error) {
+	keyCipher := masterKeyCipher(appKey)
+	if len(lo.EncryptedMasterKey) < keyCipher.NonceSize() {
+		return Object{}, fmt.Errorf("encrypted master key too short")
+	}
+	nonce := lo.EncryptedMasterKey[:keyCipher.NonceSize()]
+	obj.masterKey, err = keyCipher.Open(nil, nonce, lo.EncryptedMasterKey[keyCipher.NonceSize():], nil)
+	if err != nil {
+		return Object{}, fmt.Errorf("failed to unlock master key: %w", err)
+	}
+	obj.metadata, err = unlockEncryptedMetadata(obj.masterKey, lo.EncryptedMetadata)
+	if err != nil {
+		return Object{}, fmt.Errorf("failed to unlock metadata: %w", err)
+	}
+	obj.slabs = slices.Clone(lo.Slabs)
+	if obj.ID() != lo.ID {
+		return Object{}, fmt.Errorf("object ID mismatch")
+	}
+	return obj, nil
+}
+
+// Object retrieves the object with the given key.
+func (s *SDK) Object(ctx context.Context, objectKey types.Hash256) (Object, error) {
+	lo, err := s.client.Object(ctx, objectKey)
+	if err != nil {
+		return Object{}, fmt.Errorf("failed to get locked object: %w", err)
+	}
+	return newObjectFromLockedObject(lo, s.appKey)
+}
+
+// ListObjects lists objects, starting from the given cursor, up to the given limit.
+func (s *SDK) ListObjects(ctx context.Context, cursor slabs.Cursor, limit int) ([]Object, error) {
+	los, err := s.client.ListObjects(ctx, cursor, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list locked objects: %w", err)
+	}
+	objs := make([]Object, 0, len(los))
+	for _, lo := range los {
+		obj, err := newObjectFromLockedObject(lo, s.appKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unlock object: %w", err)
+		}
+		objs = append(objs, obj)
+	}
+	return objs, nil
+}
+
+func (s *SDK) ShareObject(ctx context.Context, obj Object, validUntil time.Time) (string, error) {
+	return s.client.CreateSharedObjectURL(ctx, obj.ID(), obj.masterKey, validUntil)
+}

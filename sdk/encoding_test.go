@@ -1,7 +1,6 @@
 package sdk
 
 import (
-	"bytes"
 	"reflect"
 	"testing"
 
@@ -10,47 +9,38 @@ import (
 	"lukechampine.com/frand"
 )
 
-func TestObjectEncoding(t *testing.T) {
-	var key [32]byte
-	frand.Read(key[:])
+func TestLockedObjectRoundtrip(t *testing.T) {
+	appKey := types.GeneratePrivateKey()
 
-	slabs := []Slab{
-		{ID: slabs.SlabID(frand.Entropy256()), Offset: 10, Length: 5000},
-		{ID: slabs.SlabID(frand.Entropy256()), Offset: 32, Length: 4096},
+	ss := []slabs.SlabSlice{
+		{SlabID: slabs.SlabID(frand.Entropy256()), Offset: 10, Length: 5000},
+		{SlabID: slabs.SlabID(frand.Entropy256()), Offset: 32, Length: 4096},
 	}
-	objs := []struct {
-		name string
-		Object
-	}{
-		{
-			name: "with key",
-			Object: Object{
-				Key:   &key,
-				Slabs: slabs,
-			},
-		},
-		{
-			name: "without key",
-			Object: Object{
-				Slabs: slabs,
-			},
-		},
+	masterKey := frand.Bytes(32)
+	obj := Object{
+		masterKey: masterKey,
+		slabs:     ss,
+		metadata:  frand.Bytes(128),
 	}
 
-	for _, expected := range objs {
-		t.Run(expected.name, func(t *testing.T) {
-			var buf bytes.Buffer
-			e := types.NewEncoder(&buf)
-			expected.Object.EncodeTo(e)
-			e.Flush()
+	locked := obj.Lock(appKey)
 
-			var got Object
-			d := types.NewBufDecoder(buf.Bytes())
-			got.DecodeFrom(d)
+	data, err := locked.MarshalSia()
+	if err != nil {
+		t.Fatal(err)
+	}
 
-			if !reflect.DeepEqual(expected.Object, got) {
-				t.Fatalf("mismatch after encoding and decoding: expected %v, got %v", expected.Object, got)
-			}
-		})
+	var decoded slabs.LockedObject
+	if err := decoded.UnmarshalSia(data); err != nil {
+		t.Fatal(err)
+	}
+
+	obj2, err := newObjectFromLockedObject(decoded, appKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !reflect.DeepEqual(obj, obj2) {
+		t.Fatalf("object mismatch: expected %+v, got %+v", obj, obj2)
 	}
 }
