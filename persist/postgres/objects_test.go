@@ -1,10 +1,12 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"math"
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 
@@ -56,32 +58,46 @@ func TestObjects(t *testing.T) {
 	assertObjects(acc2, 0)
 
 	// add objects for both accounts
-	objKey := frand.Entropy256()
-	randomObject := func() slabs.LockedObject {
-		var s []slabs.SlabSlice
-		for i := 0; i < 2; i++ {
-			params := slabs.SlabPinParams{
+	randomSlabs := func(n int) []slabs.SlabPinParams {
+		s := make([]slabs.SlabPinParams, n)
+		for i := range s {
+			s[i] = slabs.SlabPinParams{
 				EncryptionKey: frand.Entropy256(),
 				MinShards:     1,
 			}
-			id, err := store.PinSlab(context.Background(), acc1, time.Time{}, params)
+		}
+		return s
+	}
+
+	pinSlabs := func(acc proto4.Account, params []slabs.SlabPinParams) []slabs.SlabSlice {
+		t.Helper()
+
+		var ss []slabs.SlabSlice
+		for _, p := range params {
+			id, err := store.PinSlab(context.Background(), acc, time.Time{}, p)
 			if err != nil {
 				t.Fatal(err)
 			}
-			s = append(s, slabs.SlabSlice{
+			ss = append(ss, slabs.SlabSlice{
 				SlabID: id,
-				Offset: uint32(frand.Uint64n(math.MaxInt32)),
-				Length: uint32(frand.Uint64n(math.MaxInt32)),
+				Offset: 10,
+				Length: 120,
 			})
 		}
+		return ss
+	}
+
+	randomObject := func(s []slabs.SlabSlice) slabs.LockedObject {
 		return slabs.LockedObject{
 			EncryptedMasterKey: frand.Bytes(72),
 			Slabs:              s,
 			EncryptedMetadata:  []byte("hello world"),
 		}
 	}
-	obj1 := randomObject()
+	slabs1 := randomSlabs(3)
+	obj1 := randomObject(pinSlabs(acc1, slabs1))
 	for _, acc := range []proto4.Account{acc1, acc2} {
+		pinSlabs(acc, slabs1)
 		err := store.SaveObject(context.Background(), acc, obj1)
 		if err != nil {
 			t.Fatal(err)
@@ -108,7 +124,7 @@ func TestObjects(t *testing.T) {
 	assertObj(obj1, objs[0])
 
 	// delete object for acc1
-	if err := store.DeleteObject(context.Background(), acc1, objKey); err != nil {
+	if err := store.DeleteObject(context.Background(), acc1, obj1.ID()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -118,7 +134,7 @@ func TestObjects(t *testing.T) {
 	assertObj(obj1, objs[0])
 
 	// add another object to acc2
-	obj2 := randomObject()
+	obj2 := randomObject(pinSlabs(acc2, randomSlabs(2)))
 	if err := store.SaveObject(context.Background(), acc2, obj2); err != nil {
 		t.Fatal(err)
 	}
@@ -223,13 +239,17 @@ func TestListObjectsRegression(t *testing.T) {
 
 	// add multiple objects
 	var objectIDs []types.Hash256
-	for i := 3; i >= 1; i-- {
+	for range 3 {
 		obj := randomObject()
 		objectIDs = append(objectIDs, obj.ID())
 		if err := store.SaveObject(context.Background(), acc, obj); err != nil {
 			t.Fatal(err)
 		}
 	}
+	// list objects returns objects in updated_at ASC then lexicographical order of ID
+	sort.Slice(objectIDs, func(i, j int) bool {
+		return bytes.Compare(objectIDs[i][:], objectIDs[j][:]) < 0
+	})
 
 	ts := time.Now().Round(time.Second)
 	_, err = store.pool.Exec(context.Background(), "UPDATE objects SET updated_at = $1", ts)
@@ -319,8 +339,9 @@ func TestSharedObjects(t *testing.T) {
 		EncryptedMetadata: []byte("hello world"),
 	}
 	obj := slabs.LockedObject{
-		Slabs:             make([]slabs.SlabSlice, len(expectedSharedObj.Slabs)),
-		EncryptedMetadata: expectedSharedObj.EncryptedMetadata,
+		EncryptedMasterKey: frand.Bytes(72),
+		Slabs:              make([]slabs.SlabSlice, len(expectedSharedObj.Slabs)),
+		EncryptedMetadata:  expectedSharedObj.EncryptedMetadata,
 	}
 	for i, slab := range expectedSharedObj.Slabs {
 		obj.Slabs[i] = slabs.SlabSlice{
