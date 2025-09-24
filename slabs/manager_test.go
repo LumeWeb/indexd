@@ -55,10 +55,6 @@ func (s *mockStore) AddServiceAccount(ctx context.Context, account types.PublicK
 	return nil
 }
 
-func (s *mockStore) UpdateLastUsed(ctx context.Context, account proto.Account) error {
-	return nil
-}
-
 func (s *mockStore) Contracts(ctx context.Context, offset, limit int, opts ...contracts.ContractQueryOpt) ([]contracts.Contract, error) {
 	opt := contracts.ContractQueryOpts{}
 	for _, o := range opts {

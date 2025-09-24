@@ -418,7 +418,7 @@ components:
         lastUsed:
           type: string
           format: date-time
-          description: The last time the account was used.  Updated when pinning a slab or retrieving a slab.
+          description: The last time the account was used. Updated when pinning a slab or retrieving a slab.
 
     Contract:
       type: object
