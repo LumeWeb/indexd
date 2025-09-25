@@ -108,14 +108,19 @@ ORDER BY ss.slab_index ASC`, dbID)
 // object.
 func (s *Store) PruneSlabs(ctx context.Context, account proto.Account) error {
 	var id int64
-	var slabIDs []slabs.SlabID
 	err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
 		var err error
 		id, err = accountID(ctx, tx, account)
 		if err != nil {
 			return fmt.Errorf("failed to get account ID: %w", err)
 		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
 
+	getSlabs := func(tx *txn, limit int64) ([]slabs.SlabID, error) {
 		rows, err := tx.Query(ctx, `SELECT s.digest
 FROM slabs s
 JOIN account_slabs a ON s.id = a.slab_id
@@ -126,36 +131,41 @@ WHERE a.account_id = $1
 		JOIN object_slabs os ON o.id = os.object_id
 		WHERE o.account_id = a.account_id
 		AND os.slab_digest = s.digest
-	);
-`, id)
+	)
+LIMIT $2
+`, id, limit)
 		if err != nil {
-			return fmt.Errorf("failed to get unused slabs: %w", err)
+			return nil, fmt.Errorf("failed to get unused slabs: %w", err)
 		}
 		defer rows.Close()
 
+		var slabIDs []slabs.SlabID
 		for rows.Next() {
 			var slabID slabs.SlabID
 			if err := rows.Scan((*sqlHash256)(&slabID)); err != nil {
-				return fmt.Errorf("failed to scan slab ID: %w", err)
+				return nil, fmt.Errorf("failed to scan slab ID: %w", err)
 			}
 			slabIDs = append(slabIDs, slabID)
 		}
 		if err := rows.Err(); err != nil {
-			return fmt.Errorf("failed to get slab IDs: %w", err)
+			return nil, fmt.Errorf("failed to get slab IDs: %w", err)
 		} else if len(slabIDs) == 0 {
-			return nil
+			return nil, nil
 		}
-
-		return nil
-	})
-	if err != nil {
-		return err
+		return slabIDs, nil
 	}
 
+	var exhausted bool
 	const batchSize = 20
-	for i := 0; i < len(slabIDs); i += batchSize {
+	for !exhausted {
 		err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
-			if err := s.unpinSlabs(ctx, tx, id, slabIDs[i:min(len(slabIDs), i+batchSize)]); err != nil {
+			slabIDs, err := getSlabs(tx, batchSize)
+			if err != nil {
+				return fmt.Errorf("failed to get slabs to unpin: %w", err)
+			} else if len(slabIDs) < batchSize {
+				exhausted = true
+			}
+			if err := s.unpinSlabs(ctx, tx, id, slabIDs); err != nil {
 				return fmt.Errorf("failed to unpin slabs: %w", err)
 			}
 			return nil
