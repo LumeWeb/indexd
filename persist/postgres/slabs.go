@@ -156,7 +156,7 @@ LIMIT $2
 	}
 
 	var exhausted bool
-	const batchSize = 20
+	const batchSize = 100
 	for !exhausted {
 		err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
 			slabIDs, err := getSlabs(tx, batchSize)
