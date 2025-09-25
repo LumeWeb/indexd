@@ -237,4 +237,14 @@ CREATE INDEX object_slabs_object_id_slab_index_idx ON object_slabs(object_id, sl
 		}
 		return nil
 	},
+	// drop index 'contracts_state_active_idx' and recreate it
+	func(ctx context.Context, tx *txn, _ *zap.Logger) error {
+		if _, err := tx.Exec(ctx, `DROP INDEX contracts_state_active_idx;`); err != nil {
+			return fmt.Errorf("failed to drop index: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `CREATE INDEX contracts_state_active_idx ON contracts(state) WHERE (state = 0 OR state = 1) AND renewed_to IS NULL;`); err != nil {
+			return fmt.Errorf("failed to create index: %w", err)
+		}
+		return nil
+	},
 }
