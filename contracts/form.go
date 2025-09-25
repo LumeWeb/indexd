@@ -88,6 +88,18 @@ func (s *formContractSigner) SignV2Inputs(txn *types.V2Transaction, toSign []int
 	s.w.SignV2Inputs(txn, toSign)
 }
 
+// activeAccounts returns the number of accounts that have been active within
+// the accountActivityThreshold, floored at 1
+func (cm *ContractManager) activeAccounts(ctx context.Context) (uint64, error) {
+	activeAccounts, err := cm.store.ActiveAccounts(ctx, time.Now().Add(-accountActivityThreshold))
+	if err != nil {
+		return 0, err
+	} else if activeAccounts == 0 {
+		activeAccounts = 1
+	}
+	return activeAccounts, nil
+}
+
 // performContractFormation makes sure that we have at least 'wanted' good
 // contracts with good hosts that are sufficiently spaced apart.
 func (cm *ContractManager) performContractFormation(ctx context.Context, period uint64, wanted int64, log *zap.Logger) error {
@@ -214,11 +226,10 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 		wanted--
 	}
 
-	activeAccounts, err := cm.store.ActiveAccounts(ctx, time.Now().Add(-accountActivityThreshold))
+	// scale funding by active account count
+	activeAccounts, err := cm.activeAccounts(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get active accounts: %w", err)
-	} else if activeAccounts == 0 {
-		activeAccounts = 1
 	}
 
 	// randomize the candidate order to avoid preferring any host
