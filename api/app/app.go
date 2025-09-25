@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,6 +44,7 @@ type (
 		Object(ctx context.Context, account proto.Account, key types.Hash256) (slabs.Object, error)
 		DeleteObject(ctx context.Context, account proto.Account, objectKey types.Hash256) error
 		SaveObject(ctx context.Context, account proto.Account, obj slabs.Object) error
+		PinSharedObject(ctx context.Context, account proto.Account, shared slabs.SharedObject) error
 		ListObjects(ctx context.Context, account proto.Account, cursor slabs.Cursor, limit int) (objs []slabs.Object, _ error)
 		SharedObject(ctx context.Context, key types.Hash256) (slabs.SharedObject, error)
 	}
@@ -316,47 +318,8 @@ func (a *app) handlePOSTObjectsShared(jc jape.Context, pk types.PublicKey) {
 		return
 	}
 
-	var toPin []slabs.SlabPinParams
-	for _, slab := range shared.Slabs {
-		sectors := make([]slabs.PinnedSector, 0, len(slab.Sectors))
-		for _, sector := range slab.Sectors {
-			sectors = append(sectors, slabs.PinnedSector{
-				Root:    sector.Root,
-				HostKey: sector.HostKey,
-			})
-		}
-
-		s := slabs.SlabPinParams{
-			EncryptionKey: slab.EncryptionKey,
-			MinShards:     slab.MinShards,
-			Sectors:       sectors,
-		}
-		if jc.Check("failed to validate slab", s.Validate()) != nil {
-			return
-		}
-		toPin = append(toPin, s)
-	}
-
-	if _, err := a.slabs.PinSlabs(jc.Request.Context(), proto.Account(pk), time.Now(), toPin...); jc.Check("failed to pin slabs", err) != nil {
-		return
-	}
-
-	var objSlabs []slabs.SlabSlice
-	for _, slab := range shared.Slabs {
-		objSlabs = append(objSlabs, slabs.SlabSlice{
-			SlabID: slab.ID,
-			Offset: slab.Offset,
-			Length: slab.Length,
-		})
-	}
-	obj := slabs.Object{
-		Key:   shared.Key,
-		Slabs: objSlabs,
-		Meta:  shared.Meta,
-	}
-
-	err := a.slabs.SaveObject(jc.Request.Context(), proto.Account(pk), obj)
-	if errors.Is(err, slabs.ErrObjectMetadataLimitExceeded) || errors.Is(err, slabs.ErrObjectMinimumSlabs) {
+	err := a.slabs.PinSharedObject(jc.Request.Context(), proto.Account(pk), shared)
+	if err != nil && (strings.Contains(err.Error(), "failed to validate slab") || errors.Is(err, slabs.ErrObjectMetadataLimitExceeded) || errors.Is(err, slabs.ErrObjectMinimumSlabs)) {
 		jc.Error(err, http.StatusBadRequest)
 		return
 	} else if jc.Check("failed to save object", err) != nil {

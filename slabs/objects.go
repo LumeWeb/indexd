@@ -107,3 +107,51 @@ func (m *SlabManager) ListObjects(ctx context.Context, account proto.Account, cu
 func (m *SlabManager) SharedObject(ctx context.Context, key types.Hash256) (SharedObject, error) {
 	return m.store.SharedObject(ctx, key)
 }
+
+// PinSharedObject is a helper to pin all the slabs in a shared object and save
+// the object to the account.
+func (m *SlabManager) PinSharedObject(ctx context.Context, account proto.Account, shared SharedObject) error {
+	var toPin []SlabPinParams
+	for _, slab := range shared.Slabs {
+		sectors := make([]PinnedSector, 0, len(slab.Sectors))
+		for _, sector := range slab.Sectors {
+			sectors = append(sectors, PinnedSector{
+				Root:    sector.Root,
+				HostKey: sector.HostKey,
+			})
+		}
+
+		s := SlabPinParams{
+			EncryptionKey: slab.EncryptionKey,
+			MinShards:     slab.MinShards,
+			Sectors:       sectors,
+		}
+		if err := s.Validate(); err != nil {
+			return fmt.Errorf("failed to validate slab: %w", err)
+		}
+		toPin = append(toPin, s)
+	}
+
+	if _, err := m.PinSlabs(ctx, account, time.Now(), toPin...); err != nil {
+		return fmt.Errorf("failed to pin slabs: %w", err)
+	}
+
+	var objSlabs []SlabSlice
+	for _, slab := range shared.Slabs {
+		objSlabs = append(objSlabs, SlabSlice{
+			SlabID: slab.ID,
+			Offset: slab.Offset,
+			Length: slab.Length,
+		})
+	}
+	obj := Object{
+		Key:   shared.Key,
+		Slabs: objSlabs,
+		Meta:  shared.Meta,
+	}
+
+	if err := m.SaveObject(ctx, account, obj); err != nil {
+		return fmt.Errorf("failed to save object: %w", err)
+	}
+	return nil
+}
