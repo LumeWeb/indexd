@@ -126,7 +126,7 @@ func TestHost(t *testing.T) {
 
 	// pin a sector and mark it as lost
 	r1 := types.Hash256{1}
-	if err := db.AddAccount(context.Background(), hk, accounts.AccountMeta{}); err != nil {
+	if err := db.addTestAccount(context.Background(), hk, accounts.AccountMeta{}); err != nil {
 		t.Fatal(err)
 	} else if _, err := db.PinSlab(context.Background(), proto4.Account(hk), time.Now(), slabs.SlabPinParams{
 		EncryptionKey: [32]byte{},
@@ -806,7 +806,7 @@ func TestHostsWithLostSectors(t *testing.T) {
 
 	// add account
 	account := proto4.Account{1}
-	if err := db.AddAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
+	if err := db.addTestAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
 		t.Fatal("failed to add account:", err)
 	}
 
@@ -897,7 +897,7 @@ func TestHostsWithUnpinnableSectors(t *testing.T) {
 
 	// add account
 	account := proto4.Account{1}
-	if err := db.AddAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
+	if err := db.addTestAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
 		t.Fatal("failed to add account:", err)
 	}
 
@@ -1669,7 +1669,7 @@ func TestHostsForPinning(t *testing.T) {
 
 	// add account
 	acc := proto4.Account{1}
-	if err := db.AddAccount(context.Background(), types.PublicKey(acc), accounts.AccountMeta{}); err != nil {
+	if err := db.addTestAccount(context.Background(), types.PublicKey(acc), accounts.AccountMeta{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1752,7 +1752,7 @@ func TestHostsForPruning(t *testing.T) {
 
 	// add account
 	acc := proto4.Account{1}
-	if err := db.AddAccount(context.Background(), types.PublicKey(acc), accounts.AccountMeta{}); err != nil {
+	if err := db.addTestAccount(context.Background(), types.PublicKey(acc), accounts.AccountMeta{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1810,7 +1810,7 @@ func BenchmarkHostsForPruning(b *testing.B) {
 
 	// add account
 	account := proto4.Account{1}
-	if err := store.AddAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
+	if err := store.addTestAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
 		b.Fatal("failed to add account:", err)
 	}
 
@@ -1895,7 +1895,7 @@ func TestHostsForIntegrityChecks(t *testing.T) {
 
 	// add account
 	acc := proto4.Account{1}
-	if err := db.AddAccount(context.Background(), types.PublicKey(acc), accounts.AccountMeta{}); err != nil {
+	if err := db.addTestAccount(context.Background(), types.PublicKey(acc), accounts.AccountMeta{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1993,7 +1993,7 @@ func BenchmarkHostsForPinning(b *testing.B) {
 
 	// add account
 	account := proto4.Account{1}
-	if err := store.AddAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
+	if err := store.addTestAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
 		b.Fatal("failed to add account:", err)
 	}
 
@@ -2102,7 +2102,7 @@ func BenchmarkHostsForIntegrityCheck(b *testing.B) {
 	store := initPostgres(b, zap.NewNop())
 	account := proto4.Account{1}
 
-	if err := store.AddAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
+	if err := store.addTestAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
 		b.Fatal("failed to add account:", err)
 	}
 
@@ -2165,7 +2165,7 @@ func BenchmarkHostsWithLostSectors(b *testing.B) {
 	store := initPostgres(b, zap.NewNop())
 	account := proto4.Account{1}
 
-	if err := store.AddAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
+	if err := store.addTestAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
 		b.Fatal("failed to add account:", err)
 	}
 
@@ -2221,7 +2221,7 @@ func BenchmarkHostsWithUnpinnableSectors(b *testing.B) {
 	store := initPostgres(b, zap.NewNop())
 	account := proto4.Account{1}
 
-	if err := store.AddAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
+	if err := store.addTestAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
 		b.Fatal("failed to add account:", err)
 	}
 

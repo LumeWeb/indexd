@@ -20,7 +20,7 @@ func TestSlab(t *testing.T) {
 	account := proto.Account{1}
 
 	// add account
-	if err := store.AddAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
+	if err := store.addTestAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -107,7 +107,7 @@ func TestPinnedSlab(t *testing.T) {
 	account := proto.Account{1}
 
 	// add account
-	if err := store.AddAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
+	if err := store.addTestAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
 		t.Fatal(err)
 	}
 

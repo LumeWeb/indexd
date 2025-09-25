@@ -25,7 +25,7 @@ func TestObjects(t *testing.T) {
 	// create 2 accounts
 	acc1, acc2 := proto4.Account{1}, proto4.Account{2}
 	for _, acc := range []proto4.Account{acc1, acc2} {
-		err := store.AddAccount(context.Background(), types.PublicKey(acc), accounts.AccountMeta{})
+		err := store.addTestAccount(context.Background(), types.PublicKey(acc), accounts.AccountMeta{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -181,7 +181,7 @@ func TestListObjectsRegression(t *testing.T) {
 
 	// create account
 	acc := proto4.Account{1}
-	err := store.AddAccount(context.Background(), types.PublicKey(acc), accounts.AccountMeta{})
+	err := store.addTestAccount(context.Background(), types.PublicKey(acc), accounts.AccountMeta{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +235,7 @@ func TestSharedObjects(t *testing.T) {
 	// create 2 accounts
 	acc1, acc2 := proto4.Account{1}, proto4.Account{2}
 	for _, acc := range []proto4.Account{acc1, acc2} {
-		err := store.AddAccount(context.Background(), types.PublicKey(acc), accounts.AccountMeta{})
+		err := store.addTestAccount(context.Background(), types.PublicKey(acc), accounts.AccountMeta{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -349,7 +349,7 @@ func BenchmarkSaveObject(b *testing.B) {
 	// create 2 accounts
 	acc1, acc2 := proto4.Account{1}, proto4.Account{2}
 	for _, acc := range []proto4.Account{acc1, acc2} {
-		err := store.AddAccount(context.Background(), types.PublicKey(acc), accounts.AccountMeta{})
+		err := store.addTestAccount(context.Background(), types.PublicKey(acc), accounts.AccountMeta{})
 		if err != nil {
 			b.Fatal(err)
 		}

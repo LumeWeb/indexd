@@ -151,7 +151,7 @@ func TestAccountsAPI(t *testing.T) {
 	var accs []types.PublicKey
 	for range 10 {
 		accs = append(accs, types.GeneratePrivateKey().PublicKey())
-		err := indexer.Store().AddAccount(context.Background(), accs[len(accs)-1], accounts.AccountMeta{})
+		err := indexer.AddAccount(context.Background(), accs[len(accs)-1], accounts.AccountMeta{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -822,7 +822,7 @@ func TestSectorStatsAPI(t *testing.T) {
 
 	// pin a slab
 	account := types.GeneratePrivateKey()
-	indexer.Store().AddAccount(context.Background(), account.PublicKey(), accounts.AccountMeta{})
+	indexer.AddAccount(context.Background(), account.PublicKey(), accounts.AccountMeta{})
 	slabID, err := indexer.App(account).PinSlab(context.Background(), slabs.SlabPinParams{
 		EncryptionKey: [32]byte{1},
 		MinShards:     1,
@@ -872,7 +872,7 @@ func TestAccountStatsAPI(t *testing.T) {
 	}
 
 	account1 := types.GeneratePrivateKey().PublicKey()
-	if err := indexer.Store().AddAccount(t.Context(), account1, accounts.AccountMeta{}); err != nil {
+	if err := indexer.AddAccount(t.Context(), account1, accounts.AccountMeta{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -883,7 +883,7 @@ func TestAccountStatsAPI(t *testing.T) {
 	}
 
 	account2 := types.GeneratePrivateKey().PublicKey()
-	if err := indexer.Store().AddAccount(t.Context(), account2, accounts.AccountMeta{}); err != nil {
+	if err := indexer.AddAccount(t.Context(), account2, accounts.AccountMeta{}); err != nil {
 		t.Fatal(err)
 	}
 

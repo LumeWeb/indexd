@@ -463,7 +463,7 @@ func TestPrunableContractRoots(t *testing.T) {
 
 	// add account
 	account := proto.Account{1}
-	if err := store.AddAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
+	if err := store.addTestAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
 		t.Fatal("failed to add account:", err)
 	}
 
@@ -1684,7 +1684,7 @@ func BenchmarkPrunableContractRoots(b *testing.B) {
 
 	// add account
 	account := proto.Account{1}
-	if err := store.AddAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
+	if err := store.addTestAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
 		b.Fatal("failed to add account:", err)
 	}
 

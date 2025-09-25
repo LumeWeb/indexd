@@ -23,7 +23,7 @@ func TestAccountFunding(t *testing.T) {
 
 	// add an account
 	a1 := types.GeneratePrivateKey()
-	err := indexer.Store().AddAccount(context.Background(), a1.PublicKey(), accounts.AccountMeta{})
+	err := indexer.AddAccount(context.Background(), a1.PublicKey(), accounts.AccountMeta{})
 	if err != nil {
 		t.Fatal(err)
 	}

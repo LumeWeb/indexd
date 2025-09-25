@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -312,6 +313,28 @@ func (idx *Indexer) Tip() (types.ChainIndex, error) {
 // WalletAddr returns the address of the wallet.
 func (idx *Indexer) WalletAddr() types.Address {
 	return idx.wallet.Address()
+}
+
+// AddAccount creates a test app connect key if it does not already exist and
+// creates an account using it.
+func (idx *Indexer) AddAccount(ctx context.Context, ak types.PublicKey, meta accounts.AccountMeta) error {
+	store := idx.Store()
+
+	const connectKey = "test"
+	_, err := store.AddAppConnectKey(ctx, accounts.UpdateAppConnectKey{
+		Key:           connectKey,
+		MaxPinnedData: 1e10,
+		RemainingUses: 10000,
+	})
+	// ignore if key was already inserted
+	if err != nil && !strings.Contains(err.Error(), "duplicate") {
+		return err
+	}
+
+	if err := store.UseAppConnectKey(ctx, connectKey, ak, meta); err != nil {
+		return err
+	}
+	return nil
 }
 
 // closeWithTimeout is a helper which closes a resource and panics if it takes
