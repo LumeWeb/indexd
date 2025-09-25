@@ -222,11 +222,6 @@ func (s *Store) PinSlabs(ctx context.Context, account proto.Account, nextIntegri
 			ON CONFLICT (digest) DO UPDATE SET pinned_at = NOW()
 			RETURNING id
 			`, sqlHash256(digest), sqlHash256(slab.EncryptionKey), slab.MinShards).Scan(&slabID)
-			if errors.Is(err, sql.ErrNoRows) {
-				// slab already exists, fetch its slab id
-				existingSlab = true
-				err = tx.QueryRow(ctx, `SELECT id FROM slabs WHERE digest = $1`, sqlHash256(digest)).Scan(&slabID)
-			}
 			if err != nil {
 				return err
 			}
