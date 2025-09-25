@@ -729,6 +729,68 @@ func TestPinSlabs(t *testing.T) {
 	assertUnpinnedSectors(4)
 }
 
+func TestPinSlabsConflict(t *testing.T) {
+	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
+	account := proto.Account{1}
+	nextCheck := time.Now().Round(time.Microsecond).Add(time.Hour)
+
+	if err := store.AddAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	hk := store.addTestHost(t)
+
+	// helper to create slabs
+	newSlab := func() (slabs.SlabID, slabs.SlabPinParams) {
+		slab := slabs.SlabPinParams{
+			EncryptionKey: [32]byte{9},
+			MinShards:     1,
+			Sectors: []slabs.PinnedSector{{
+				Root:    frand.Entropy256(),
+				HostKey: hk,
+			}},
+		}
+		slabID, err := slab.Digest()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return slabID, slab
+	}
+
+	slabID, slab := newSlab()
+
+	// first pin
+	_, err := store.PinSlabs(context.Background(), account, nextCheck, slab)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// fetch pinned_at
+	slabs1, err := store.Slabs(context.Background(), account, []slabs.SlabID{slabID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinnedAt1 := slabs1[0].PinnedAt
+
+	time.Sleep(time.Millisecond) // ensure timestamp difference
+
+	// second pin (same slab, should hit conflict update)
+	_, err = store.PinSlabs(context.Background(), account, nextCheck, slab)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// fetch again
+	slabs2, err := store.Slabs(context.Background(), account, []slabs.SlabID{slabID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinnedAt2 := slabs2[0].PinnedAt
+
+	if !pinnedAt2.After(pinnedAt1) {
+		t.Fatalf("expected pinned_at to update on conflict")
+	}
+}
+
 func TestUnpinSlab(t *testing.T) {
 	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
 
