@@ -730,7 +730,7 @@ func TestSharedObjects(t *testing.T) {
 	for _, slab := range obj.Slabs {
 		if got, err := client2.Slab(ctx, slab.SlabID); err != nil {
 			t.Fatal(err)
-		} else if slab.ID != got.SlabID {
+		} else if slab.SlabID != got.ID {
 			t.Fatal("slab mismatch")
 		}
 	}
