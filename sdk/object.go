@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go.sia.tech/core/types"
+	"go.sia.tech/indexd/keys"
 	"go.sia.tech/indexd/slabs"
 	"golang.org/x/crypto/chacha20poly1305"
 	"lukechampine.com/frand"
@@ -124,14 +125,14 @@ func (s *SDK) CreateSharedObjectURL(ctx context.Context, objectKey types.Hash256
 }
 
 func masterKeyCipher(appKey types.PrivateKey) cipher.AEAD {
-	h := types.HashBytes(appKey[:])
-	cipher, _ := chacha20poly1305.NewX(h[:])
+	key := keys.Derive(appKey, "master", 32)
+	cipher, _ := chacha20poly1305.NewX(key)
 	return cipher
 }
 
 func metadataCipher(masterKey []byte) cipher.AEAD {
-	h := types.HashBytes(append(masterKey, []byte("metadata")...))
-	cipher, _ := chacha20poly1305.NewX(h[:])
+	key := keys.Derive(masterKey, "metadata", 32)
+	cipher, _ := chacha20poly1305.NewX(key)
 	return cipher
 }
 
