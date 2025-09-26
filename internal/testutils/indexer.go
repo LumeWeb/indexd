@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -321,13 +320,16 @@ func (idx *Indexer) AddAccount(ctx context.Context, ak types.PublicKey, meta acc
 	store := idx.Store()
 
 	const connectKey = "test"
-	_, err := store.AddAppConnectKey(ctx, accounts.UpdateAppConnectKey{
-		Key:           connectKey,
-		MaxPinnedData: 1e10,
-		RemainingUses: 10000,
-	})
-	// ignore if key was already inserted
-	if err != nil && !strings.Contains(err.Error(), "duplicate") {
+	if _, err := store.ValidAppConnectKey(ctx, connectKey); errors.Is(err, accounts.ErrKeyNotFound) {
+		_, err := store.AddAppConnectKey(ctx, accounts.UpdateAppConnectKey{
+			Key:           connectKey,
+			MaxPinnedData: 1e10,
+			RemainingUses: 10000,
+		})
+		if err != nil {
+			return err
+		}
+	} else if err != nil {
 		return err
 	}
 
