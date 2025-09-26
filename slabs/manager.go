@@ -262,7 +262,7 @@ func (m *SlabManager) initServiceAccounts(migrationAccount, integrityAccount typ
 // perform on slabs
 func (m *SlabManager) maintenanceLoop(ctx context.Context) {
 	var wg sync.WaitGroup
-	launch := func(task func()) {
+	launch := func(descr string, task func(context.Context) error) {
 		healthTicker := time.NewTicker(m.healthCheckInterval)
 
 		wg.Add(1)
@@ -275,25 +275,15 @@ func (m *SlabManager) maintenanceLoop(ctx context.Context) {
 				case <-ctx.Done():
 					return
 				}
-				task()
+				if err := task(ctx); err != nil && !(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+					m.log.Error("failed to perform "+descr, zap.Error(err))
+				}
 			}
 		}()
 	}
 
-	launch(func() {
-		if err := m.performIntegrityChecks(ctx); errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return
-		} else if err != nil {
-			m.log.Error("failed to perform integrity checks", zap.Error(err))
-		}
-	})
-	launch(func() {
-		if err := m.performSlabMigrations(ctx); errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return
-		} else if err != nil {
-			m.log.Error("failed to perform slab migrations", zap.Error(err))
-		}
-	})
+	launch("integrity checks", m.performIntegrityChecks)
+	launch("slab migrations", m.performSlabMigrations)
 	wg.Wait()
 }
 
