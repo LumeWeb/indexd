@@ -73,6 +73,9 @@ var (
 	// ErrObjectUnpinnedSlab is returned when an user attempts to save an
 	// object containing a slab that is not pinned to their account.
 	ErrObjectUnpinnedSlab = errors.New("object contains unpinned slab")
+
+	// ErrInvalidSlab is returned when a slab in the object contains an invalid slab.
+	ErrInvalidSlab = errors.New("object contains invalid slab")
 )
 
 // Object retrieves the object with the given key for the given account.
@@ -119,7 +122,7 @@ func (m *SlabManager) PinSharedObject(ctx context.Context, account proto.Account
 			Sectors:       slab.Sectors,
 		}
 		if err := s.Validate(); err != nil {
-			return fmt.Errorf("failed to validate slab: %w", err)
+			return fmt.Errorf("%w: %w", ErrInvalidSlab, err)
 		}
 		toPin = append(toPin, s)
 	}

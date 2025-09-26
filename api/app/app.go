@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -319,7 +318,7 @@ func (a *app) handlePOSTObjectsShared(jc jape.Context, pk types.PublicKey) {
 	}
 
 	err := a.slabs.PinSharedObject(jc.Request.Context(), proto.Account(pk), shared)
-	if err != nil && (strings.Contains(err.Error(), "failed to validate slab") || errors.Is(err, slabs.ErrObjectMetadataLimitExceeded) || errors.Is(err, slabs.ErrObjectMinimumSlabs)) {
+	if errors.Is(err, slabs.ErrInvalidSlab) || errors.Is(err, slabs.ErrObjectMetadataLimitExceeded) || errors.Is(err, slabs.ErrObjectMinimumSlabs) {
 		jc.Error(err, http.StatusBadRequest)
 		return
 	} else if jc.Check("failed to save object", err) != nil {
