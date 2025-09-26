@@ -113,18 +113,10 @@ func (m *SlabManager) SharedObject(ctx context.Context, key types.Hash256) (Shar
 func (m *SlabManager) PinSharedObject(ctx context.Context, account proto.Account, shared SharedObject) error {
 	var toPin []SlabPinParams
 	for _, slab := range shared.Slabs {
-		sectors := make([]PinnedSector, 0, len(slab.Sectors))
-		for _, sector := range slab.Sectors {
-			sectors = append(sectors, PinnedSector{
-				Root:    sector.Root,
-				HostKey: sector.HostKey,
-			})
-		}
-
 		s := SlabPinParams{
 			EncryptionKey: slab.EncryptionKey,
 			MinShards:     slab.MinShards,
-			Sectors:       sectors,
+			Sectors:       slab.Sectors,
 		}
 		if err := s.Validate(); err != nil {
 			return fmt.Errorf("failed to validate slab: %w", err)
