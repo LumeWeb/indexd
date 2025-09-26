@@ -9,7 +9,6 @@ import (
 
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
-	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/slabs"
 	"go.uber.org/zap/zaptest"
 	"lukechampine.com/frand"
@@ -20,7 +19,7 @@ func TestSlab(t *testing.T) {
 	account := proto.Account{1}
 
 	// add account
-	store.addTestAccount(t, types.PublicKey(account), accounts.AccountMeta{})
+	store.addTestAccount(t, types.PublicKey(account))
 
 	// add hosts
 	hosts := make([]types.PublicKey, 30)
@@ -105,7 +104,7 @@ func TestPinnedSlab(t *testing.T) {
 	account := proto.Account{1}
 
 	// add account
-	store.addTestAccount(t, types.PublicKey(account), accounts.AccountMeta{})
+	store.addTestAccount(t, types.PublicKey(account))
 
 	// add hosts
 	hosts := make([]types.PublicKey, 30)

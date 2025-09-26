@@ -25,7 +25,7 @@ func TestMigrateSector(t *testing.T) {
 
 	// add account
 	account := proto.Account{1}
-	store.addTestAccount(t, types.PublicKey(account), accounts.AccountMeta{})
+	store.addTestAccount(t, types.PublicKey(account))
 
 	// add two hosts
 	hk1 := store.addTestHost(t)
@@ -169,7 +169,7 @@ func TestRecordIntegrityCheck(t *testing.T) {
 
 	// add account
 	account := proto.Account{1}
-	store.addTestAccount(t, types.PublicKey(account), accounts.AccountMeta{})
+	store.addTestAccount(t, types.PublicKey(account))
 
 	// add host
 	hk := store.addTestHost(t)
@@ -311,7 +311,7 @@ func TestSectorsForIntegrityCheck(t *testing.T) {
 
 	// add account
 	account := proto.Account{1}
-	store.addTestAccount(t, types.PublicKey(account), accounts.AccountMeta{})
+	store.addTestAccount(t, types.PublicKey(account))
 
 	// add host
 	hk := store.addTestHost(t)
@@ -393,9 +393,9 @@ func TestSlabIDs(t *testing.T) {
 
 	// add 2 accounts
 	a1 := proto.Account{1}
-	store.addTestAccount(t, types.PublicKey(a1), accounts.AccountMeta{})
+	store.addTestAccount(t, types.PublicKey(a1))
 	a2 := proto.Account{2}
-	store.addTestAccount(t, types.PublicKey(a2), accounts.AccountMeta{})
+	store.addTestAccount(t, types.PublicKey(a2))
 
 	// add two hosts
 	hk1 := store.addTestHost(t)
@@ -482,8 +482,8 @@ func TestPinSlabs(t *testing.T) {
 	slabSize := uint64(2 * proto.SectorSize)
 
 	// add accounts - account1 can pin 2 slabs and account2 can pin 3 slabs
-	store.addTestAccount(t, types.PublicKey(account), accounts.AccountMeta{}, accounts.WithMaxPinnedData(2*slabSize))
-	store.addTestAccount(t, types.PublicKey(account2), accounts.AccountMeta{}, accounts.WithMaxPinnedData(3*slabSize))
+	store.addTestAccount(t, types.PublicKey(account), accounts.WithMaxPinnedData(2*slabSize))
+	store.addTestAccount(t, types.PublicKey(account2), accounts.WithMaxPinnedData(3*slabSize))
 
 	// add two hosts
 	hk1 := store.addTestHost(t)
@@ -772,7 +772,7 @@ func TestUnpinSlab(t *testing.T) {
 
 	// add an account with 2 slabs, 2 sectors each
 	acc1 := proto.Account{1}
-	store.addTestAccount(t, types.PublicKey(acc1), accounts.AccountMeta{})
+	store.addTestAccount(t, types.PublicKey(acc1))
 	if _, err := store.PinSlab(context.Background(), acc1, time.Time{}, params[0]); err != nil {
 		t.Fatal(err)
 	} else if _, err := store.PinSlab(context.Background(), acc1, time.Time{}, params[1]); err != nil {
@@ -781,7 +781,7 @@ func TestUnpinSlab(t *testing.T) {
 
 	// add another account with 2 slabs, the first one is shared with acc1
 	acc2 := proto.Account{2}
-	store.addTestAccount(t, types.PublicKey(acc2), accounts.AccountMeta{})
+	store.addTestAccount(t, types.PublicKey(acc2))
 	if _, err := store.PinSlab(context.Background(), acc2, time.Time{}, params[1]); err != nil {
 		t.Fatal(err)
 	} else if _, err := store.PinSlab(context.Background(), acc2, time.Time{}, params[2]); err != nil {
@@ -870,7 +870,7 @@ func TestPinSectors(t *testing.T) {
 	// create host and account
 	hk := store.addTestHost(t)
 	account := proto.Account{1}
-	store.addTestAccount(t, types.PublicKey(account), accounts.AccountMeta{})
+	store.addTestAccount(t, types.PublicKey(account))
 
 	// create 2 contracts
 	contractID1 := store.addTestContract(t, hk, types.FileContractID{1})
@@ -1006,7 +1006,7 @@ func TestUnhealthySlabs(t *testing.T) {
 
 	// add an account
 	account := proto.Account{1}
-	store.addTestAccount(t, types.PublicKey(account), accounts.AccountMeta{})
+	store.addTestAccount(t, types.PublicKey(account))
 
 	// add a host and a contract
 	hk := store.addTestHost(t)
@@ -1168,7 +1168,7 @@ func TestPruneUnpinnableSectors(t *testing.T) {
 
 	// add account
 	account := proto.Account{1}
-	store.addTestAccount(t, types.PublicKey(account), accounts.AccountMeta{})
+	store.addTestAccount(t, types.PublicKey(account))
 
 	// add host with a contract
 	hk := store.addTestHost(t)
@@ -1255,7 +1255,7 @@ func TestUnpinnedSectors(t *testing.T) {
 
 	// create host with account and contract
 	account := proto.Account{1}
-	store.addTestAccount(t, types.PublicKey(account), accounts.AccountMeta{})
+	store.addTestAccount(t, types.PublicKey(account))
 	hk := store.addTestHost(t)
 	store.addTestContract(t, hk)
 
@@ -1346,7 +1346,7 @@ func TestPinnedSectorsStatistics(t *testing.T) {
 
 	// create host with account
 	account := proto.Account{1}
-	store.addTestAccount(t, types.PublicKey(account), accounts.AccountMeta{})
+	store.addTestAccount(t, types.PublicKey(account))
 	hk := store.addTestHost(t)
 
 	r1 := types.Hash256{1}
@@ -1442,7 +1442,7 @@ func BenchmarkSlabs(b *testing.B) {
 	store := initPostgres(b, zaptest.NewLogger(b).Named("postgres"))
 	account := proto.Account{1}
 
-	store.addTestAccount(b, types.PublicKey(account), accounts.AccountMeta{})
+	store.addTestAccount(b, types.PublicKey(account))
 
 	// 30 hosts to simulate default redundancy
 	var hks []types.PublicKey
@@ -1577,7 +1577,7 @@ func BenchmarkUnpinnedSectors(b *testing.B) {
 
 	// create account, host and contract
 	account := proto.Account{1}
-	store.addTestAccount(b, types.PublicKey(account), accounts.AccountMeta{})
+	store.addTestAccount(b, types.PublicKey(account))
 	hk := store.addTestHost(b)
 	store.addTestContract(b, hk)
 
@@ -1671,7 +1671,7 @@ func BenchmarkSectorsForIntegrityCheck(b *testing.B) {
 	store := initPostgres(b, zap.NewNop())
 	account := proto.Account{1}
 
-	store.addTestAccount(b, types.PublicKey(account), accounts.AccountMeta{})
+	store.addTestAccount(b, types.PublicKey(account))
 
 	// add a host
 	hk := store.addTestHost(b)
@@ -1733,7 +1733,7 @@ func BenchmarkPinSectors(b *testing.B) {
 
 	// create account, host and contract
 	account := proto.Account{1}
-	store.addTestAccount(b, types.PublicKey(account), accounts.AccountMeta{})
+	store.addTestAccount(b, types.PublicKey(account))
 	hk := store.addTestHost(b)
 	store.addTestContract(b, hk)
 
@@ -1820,7 +1820,7 @@ func BenchmarkUnhealthySlabs(b *testing.B) {
 	store := initPostgres(b, zaptest.NewLogger(b).Named("postgres"))
 
 	account := proto.Account{1}
-	store.addTestAccount(b, types.PublicKey(account), accounts.AccountMeta{})
+	store.addTestAccount(b, types.PublicKey(account))
 
 	// 30 hosts to simulate default redundancy
 	var hks []types.PublicKey
@@ -1934,7 +1934,7 @@ func BenchmarkUnpinSlab(b *testing.B) {
 
 	// add account
 	account := proto.Account{1}
-	store.addTestAccount(b, types.PublicKey(account), accounts.AccountMeta{})
+	store.addTestAccount(b, types.PublicKey(account))
 
 	// add host with one contract
 	hk := store.addTestHost(b)
@@ -1991,7 +1991,7 @@ func BenchmarkRecordIntegrityChecks(b *testing.B) {
 	store := initPostgres(b, zap.NewNop())
 	account := proto.Account{1}
 
-	store.addTestAccount(b, types.PublicKey(account), accounts.AccountMeta{})
+	store.addTestAccount(b, types.PublicKey(account))
 
 	// add a host
 	hk := store.addTestHost(b)
@@ -2053,7 +2053,7 @@ func BenchmarkMarkFailingSectorsLost(b *testing.B) {
 	store := initPostgres(b, zap.NewNop())
 	account := proto.Account{1}
 
-	store.addTestAccount(b, types.PublicKey(account), accounts.AccountMeta{})
+	store.addTestAccount(b, types.PublicKey(account))
 
 	// add a host
 	hk := store.addTestHost(b)
@@ -2115,7 +2115,7 @@ func BenchmarkPruneUnpinnableSectors(b *testing.B) {
 	store := initPostgres(b, zap.NewNop())
 	account := proto.Account{1}
 
-	store.addTestAccount(b, types.PublicKey(account), accounts.AccountMeta{})
+	store.addTestAccount(b, types.PublicKey(account))
 
 	// add a host
 	hk := store.addTestHost(b)
@@ -2186,7 +2186,7 @@ func TestMarkSectorsLost(t *testing.T) {
 
 	// add account
 	account := proto.Account{1}
-	store.addTestAccount(t, types.PublicKey(account), accounts.AccountMeta{})
+	store.addTestAccount(t, types.PublicKey(account))
 
 	// add two hosts
 	hk1 := store.addTestHost(t)
@@ -2292,7 +2292,7 @@ func BenchmarkMarkSectorsLost(b *testing.B) {
 
 	// create account, host and contract
 	account := proto.Account{1}
-	store.addTestAccount(b, types.PublicKey(account), accounts.AccountMeta{})
+	store.addTestAccount(b, types.PublicKey(account))
 	hk := store.addTestHost(b)
 	store.addTestContract(b, hk)
 
@@ -2416,7 +2416,7 @@ func BenchmarkMigrateSector(b *testing.B) {
 
 	// create account, host and contract
 	account := proto.Account{1}
-	store.addTestAccount(b, types.PublicKey(account), accounts.AccountMeta{})
+	store.addTestAccount(b, types.PublicKey(account))
 
 	// add 100 hosts and contracts
 	var hks []types.PublicKey

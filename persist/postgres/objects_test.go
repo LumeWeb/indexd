@@ -12,7 +12,6 @@ import (
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/chain"
 	"go.sia.tech/coreutils/rhp/v4/quic"
-	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/slabs"
 	"go.sia.tech/indexd/subscriber"
 	"go.uber.org/zap"
@@ -25,7 +24,7 @@ func TestObjects(t *testing.T) {
 	// create 2 accounts
 	acc1, acc2 := proto4.Account{1}, proto4.Account{2}
 	for _, acc := range []proto4.Account{acc1, acc2} {
-		store.addTestAccount(t, types.PublicKey(acc), accounts.AccountMeta{})
+		store.addTestAccount(t, types.PublicKey(acc))
 	}
 
 	// pin slab for both accounts
@@ -178,7 +177,7 @@ func TestListObjectsRegression(t *testing.T) {
 
 	// create account
 	acc := proto4.Account{1}
-	store.addTestAccount(t, types.PublicKey(acc), accounts.AccountMeta{})
+	store.addTestAccount(t, types.PublicKey(acc))
 
 	// pin slab for both accounts
 	slab := slabs.SlabPinParams{MinShards: 1}
@@ -229,7 +228,7 @@ func TestSharedObjects(t *testing.T) {
 	// create 2 accounts
 	acc1, acc2 := proto4.Account{1}, proto4.Account{2}
 	for _, acc := range []proto4.Account{acc1, acc2} {
-		store.addTestAccount(t, types.PublicKey(acc), accounts.AccountMeta{})
+		store.addTestAccount(t, types.PublicKey(acc))
 	}
 
 	hostKeys := make([]types.PublicKey, 30)
@@ -340,7 +339,7 @@ func BenchmarkSaveObject(b *testing.B) {
 	// create 2 accounts
 	acc1, acc2 := proto4.Account{1}, proto4.Account{2}
 	for _, acc := range []proto4.Account{acc1, acc2} {
-		store.addTestAccount(b, types.PublicKey(acc), accounts.AccountMeta{})
+		store.addTestAccount(b, types.PublicKey(acc))
 	}
 
 	hostKeys := make([]types.PublicKey, 30)

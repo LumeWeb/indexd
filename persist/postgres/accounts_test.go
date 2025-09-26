@@ -20,9 +20,9 @@ import (
 	"lukechampine.com/frand"
 )
 
-func (s *Store) addTestAccount(t testing.TB, ak types.PublicKey, meta accounts.AccountMeta, opts ...accounts.AddAccountOption) {
+func (s *Store) addTestAccount(t testing.TB, ak types.PublicKey, opts ...accounts.AddAccountOption) {
 	err := s.transaction(t.Context(), func(ctx context.Context, tx *txn) error {
-		if err := addAccount(ctx, tx, ak, false, meta, opts...); err != nil {
+		if err := addAccount(ctx, tx, ak, false, accounts.AccountMeta{}, opts...); err != nil {
 			return fmt.Errorf("failed to add account: %w", err)
 		}
 		return nil
@@ -48,7 +48,7 @@ func TestAccounts(t *testing.T) {
 	}
 
 	pk1 := types.GeneratePrivateKey().PublicKey()
-	store.addTestAccount(t, pk1, accounts.AccountMeta{})
+	store.addTestAccount(t, pk1)
 
 	pk2 := types.GeneratePrivateKey().PublicKey()
 	err := store.AddServiceAccount(context.Background(), pk2, accounts.AccountMeta{})
@@ -57,7 +57,7 @@ func TestAccounts(t *testing.T) {
 	}
 
 	pk3 := types.GeneratePrivateKey().PublicKey()
-	store.addTestAccount(t, pk3, accounts.AccountMeta{}, accounts.WithMaxPinnedData(100))
+	store.addTestAccount(t, pk3, accounts.WithMaxPinnedData(100))
 
 	// fetch all
 	accs, err := store.Accounts(context.Background(), 0, 10)
@@ -194,7 +194,7 @@ func TestDeleteAccount(t *testing.T) {
 		t.Fatal("expected [accounts.ErrNotFound]")
 	}
 
-	store.addTestAccount(t, pk, accounts.AccountMeta{})
+	store.addTestAccount(t, pk)
 
 	found, err := store.HasAccount(context.Background(), pk)
 	if err != nil {
@@ -262,12 +262,12 @@ func TestUpdateAccount(t *testing.T) {
 
 	// add an account
 	pk1 := types.GeneratePrivateKey().PublicKey()
-	store.addTestAccount(t, pk1, accounts.AccountMeta{})
+	store.addTestAccount(t, pk1)
 	db1 := dbID(pk1)
 
 	// add another account
 	pk2 := types.GeneratePrivateKey().PublicKey()
-	store.addTestAccount(t, pk2, accounts.AccountMeta{})
+	store.addTestAccount(t, pk2)
 
 	// assert updating to an existing account fails
 	err := store.UpdateAccount(context.Background(), pk1, pk2)
@@ -320,7 +320,7 @@ func TestHasAccount(t *testing.T) {
 	} else if found {
 		t.Fatal("unexpected")
 	}
-	store.addTestAccount(t, pk, accounts.AccountMeta{})
+	store.addTestAccount(t, pk)
 
 	found, err = store.HasAccount(context.Background(), pk)
 	if err != nil {
@@ -359,7 +359,7 @@ func TestHostAccountsForFunding(t *testing.T) {
 
 	// add an account
 	ak1 := types.PublicKey{1, 1}
-	store.addTestAccount(t, ak1, accounts.AccountMeta{})
+	store.addTestAccount(t, ak1)
 
 	// assert there's now one account to fund
 	accs, err = store.HostAccountsForFunding(context.Background(), hk1, 10)
@@ -403,7 +403,7 @@ func TestHostAccountsForFunding(t *testing.T) {
 
 	// add another account
 	ak2 := types.PublicKey{2, 2}
-	store.addTestAccount(t, ak2, accounts.AccountMeta{})
+	store.addTestAccount(t, ak2)
 
 	// assert h1 has one account to fund
 	accs, err = store.HostAccountsForFunding(context.Background(), hk1, 10)
@@ -461,7 +461,7 @@ func TestUpdateHostAccounts(t *testing.T) {
 	// add a host and an account
 	hk := store.addTestHost(t)
 	ak := types.GeneratePrivateKey().PublicKey()
-	store.addTestAccount(t, ak, accounts.AccountMeta{})
+	store.addTestAccount(t, ak)
 
 	// fetch accounts for funding
 	accounts, err := store.HostAccountsForFunding(context.Background(), hk, 10)
@@ -648,7 +648,7 @@ func TestServiceAccounts(t *testing.T) {
 
 	// setup
 	account := types.GeneratePrivateKey().PublicKey()
-	store.addTestAccount(t, account, accounts.AccountMeta{})
+	store.addTestAccount(t, account)
 	hk := types.GeneratePrivateKey().PublicKey()
 	ha := chain.NetAddress{Protocol: quic.Protocol, Address: "[::]:4848"}
 	if err := store.UpdateChainState(context.Background(), func(tx subscriber.UpdateTx) error {
@@ -658,7 +658,7 @@ func TestServiceAccounts(t *testing.T) {
 	}
 
 	// add account
-	store.addTestAccount(t, hk, accounts.AccountMeta{})
+	store.addTestAccount(t, hk)
 
 	// account not found
 	_, err := store.ServiceAccountBalance(context.Background(), hk, proto.Account(account))
@@ -772,7 +772,7 @@ func BenchmarkServiceAccounts(b *testing.B) {
 	}
 
 	account := proto.Account(types.GeneratePrivateKey().PublicKey())
-	store.addTestAccount(b, types.PublicKey(account), accounts.AccountMeta{})
+	store.addTestAccount(b, types.PublicKey(account))
 
 	var hosts []types.PublicKey
 	for range numHosts {
