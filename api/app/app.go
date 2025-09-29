@@ -36,6 +36,7 @@ type (
 	// Slabs defines the slab interface for the application API.
 	Slabs interface {
 		PinSlabs(ctx context.Context, account proto.Account, nextIntegrityCheck time.Time, toPin ...slabs.SlabPinParams) ([]slabs.SlabID, error)
+		PruneSlabs(ctx context.Context, account proto.Account) error
 		PinnedSlab(ctx context.Context, account proto.Account, slabID slabs.SlabID) (slabs.PinnedSlab, error)
 		SlabIDs(ctx context.Context, account proto.Account, offset, limit int) ([]slabs.SlabID, error)
 		UnpinSlab(ctx context.Context, account proto.Account, slabID slabs.SlabID) error
@@ -324,6 +325,15 @@ func (a *app) handlePOSTObjectsShared(jc jape.Context, pk types.PublicKey) {
 	} else if jc.Check("failed to pin shared object", err) != nil {
 		return
 	}
+	jc.Encode(nil)
+}
+
+func (a *app) handlePOSTSlabsPrune(jc jape.Context, pk types.PublicKey) {
+	err := a.slabs.PruneSlabs(jc.Request.Context(), proto.Account(pk))
+	if jc.Check("failed to prune slabs", err) != nil {
+		return
+	}
+
 	jc.Encode(nil)
 }
 
@@ -670,6 +680,7 @@ func NewAPI(advertiseURL string, store Store, am Accounts, contracts Contracts, 
 
 		"GET /slabs":            wrapCORS(wrapSignedAuth(a.handleGETSlabs)),
 		"POST /slabs":           wrapCORS(wrapSignedAuth(a.handlePOSTSlabs)),
+		"POST /slabs/prune":     wrapCORS(wrapSignedAuth(a.handlePOSTSlabsPrune)),
 		"GET /slabs/:slabid":    wrapCORS(wrapSignedAuth(a.handleGETSlab)),
 		"DELETE /slabs/:slabid": wrapCORS(wrapSignedAuth(a.handleDELETESlab)),
 	}), nil
