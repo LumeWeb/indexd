@@ -99,9 +99,10 @@ func (cm *ContractManager) performSectorPinningOnHost(ctx context.Context, host 
 	return ctx.Err()
 }
 
-// pinSectors pins a set of sectors using the given set of contracts The
-// contracts are tried in order, the contract ID that ends up being used is
-// returned, alongside with a list of missing sectors if any.
+// pinSectors pins a set of sectors using the given set of contracts. It will
+// attempt to pin all sectors, but may not be able to if the contracts run out of
+// space. It will try to pin sectors using the contracts in the order they are
+// provided. If the host refuses to pin a sector, it will be marked as lost.
 func (cm *ContractManager) pinSectors(ctx context.Context, client HostClient, hostKey types.PublicKey, hostPrices proto.HostPrices, contractIDs []types.FileContractID, sectors []types.Hash256, log *zap.Logger) error {
 	for _, contractID := range contractIDs {
 		if len(sectors) == 0 {
@@ -119,26 +120,25 @@ func (cm *ContractManager) pinSectors(ctx context.Context, client HostClient, ho
 			continue
 		}
 
-		// TODO: this should be atomic with where the contract revision is updated.
-		// Any time a revision is saved the sectors that were added or removed should
-		// be updated in the same transaction.
+		// TODO: this should be atomic with the contract revision. Any time a
+		// revision is saved the sectors that were added or removed should
+		// be updated in the same transaction for consistency.
 		if err := cm.store.PinSectors(ctx, contractID, res.Sectors); err != nil {
 			return fmt.Errorf("failed to pin sectors: %w", err)
 		}
 
-		// if a contract didn't have enough space to pin all the sectors,
-		// it may have pinned some of them. Only the sectors that were
-		// attempted should be marked as missing.
+		// Only the sectors that were attempted should be marked
+		// as missing. So sectors that were not part of the append
+		// call can be pinned to other contracts.
 		if len(res.Sectors) != len(sectors[:attempted]) {
-			missing := sectors[:attempted]
 			lookup := make(map[types.Hash256]struct{}, attempted)
-			for _, sector := range missing {
+			for _, sector := range sectors[:attempted] {
 				lookup[sector] = struct{}{}
 			}
 			for _, sector := range res.Sectors {
 				delete(lookup, sector)
 			}
-			missing = missing[:0]
+			missing := make([]types.Hash256, 0, len(lookup))
 			for sector := range lookup {
 				missing = append(missing, sector)
 			}
@@ -148,8 +148,8 @@ func (cm *ContractManager) pinSectors(ctx context.Context, client HostClient, ho
 			}
 			log = log.With(zap.Int("missing", len(missing)))
 		}
+		sectors = sectors[attempted:] // pin the remaining sectors
 		log.Debug("pinned sectors", zap.Int("pinned", len(res.Sectors)), zap.Int("attempted", attempted))
-		sectors = sectors[attempted:]
 	}
 	return nil
 }
