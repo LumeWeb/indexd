@@ -129,9 +129,8 @@ func (cm *ContractManager) pinSectors(ctx context.Context, client HostClient, ho
 		// if a contract didn't have enough space to pin all the sectors,
 		// it may have pinned some of them. Only the sectors that were
 		// attempted should be marked as missing.
-		missing := sectors[:attempted]
-		// figure out which sectors were missing
-		if len(res.Sectors) != len(missing) {
+		if len(res.Sectors) != len(sectors[:attempted]) {
+			missing := sectors[:attempted]
 			lookup := make(map[types.Hash256]struct{}, attempted)
 			for _, sector := range missing {
 				lookup[sector] = struct{}{}
@@ -147,8 +146,9 @@ func (cm *ContractManager) pinSectors(ctx context.Context, client HostClient, ho
 			if err := cm.store.MarkSectorsLost(ctx, hostKey, missing); err != nil {
 				return fmt.Errorf("failed to mark sectors as lost: %w", err)
 			}
+			log = log.With(zap.Int("missing", len(missing)))
 		}
-		log.Debug("pinned sectors", zap.Int("pinned", len(res.Sectors)), zap.Int("attempted", attempted), zap.Int("missing", len(missing)))
+		log.Debug("pinned sectors", zap.Int("pinned", len(res.Sectors)), zap.Int("attempted", attempted))
 		sectors = sectors[attempted:]
 	}
 	return nil
