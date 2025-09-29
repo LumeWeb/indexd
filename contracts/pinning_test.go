@@ -258,7 +258,7 @@ func TestPerformSectorPinningOnHost(t *testing.T) {
 			t.Fatalf("expected sectors for host %v", hostKey)
 		}
 		for _, sector := range sectors {
-			if !slices.Contains(roots, sector.root) || sector.contractID == nil && contractID == nil {
+			if !slices.Contains(roots, sector.root) || (sector.contractID == nil && contractID == nil) {
 				// sector not part of the check, or both unpinned
 				continue
 			} else if contractID == nil && sector.contractID != nil {
