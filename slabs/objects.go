@@ -128,7 +128,7 @@ func (m *SlabManager) PinSharedObject(ctx context.Context, account proto.Account
 		if digest, err := s.Digest(); err != nil {
 			return fmt.Errorf("failed to get digest: %w", err)
 		} else if slab.ID != digest {
-			return fmt.Errorf("%w: mismatched digest: expected %v, got %v", slab.ID, digest)
+			return fmt.Errorf("%w: mismatched digest: expected %v, got %v", ErrInvalidSlab, slab.ID, digest)
 		}
 		toPin = append(toPin, s)
 	}

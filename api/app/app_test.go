@@ -735,6 +735,12 @@ func TestSharedObjects(t *testing.T) {
 		}
 	}
 
+	// corrupt the object and make sure it errors
+	sharedObj.Slabs[0].ID[0] ^= 255
+	if err := client2.PinSharedObject(ctx, sharedObj); err == nil || !strings.Contains(err.Error(), slabs.ErrInvalidSlab.Error()) {
+		t.Fatalf("expected %v", slabs.ErrInvalidSlab)
+	}
+
 	time.Sleep(time.Second * 2)
 	// try to retrieve the object again, should be expired
 	_, _, err = client1.SharedObject(ctx, shareURL)
