@@ -106,29 +106,53 @@ func (c *HostClient) AccountBalance(ctx context.Context, account proto.Account) 
 	return rhp.RPCAccountBalance(ctx, c.client, account)
 }
 
-// AppendSectors appends the given sectors to the contract.
-func (c *HostClient) AppendSectors(ctx context.Context, hostPrices proto.HostPrices, contractID types.FileContractID, sectors []types.Hash256) (rhp.RPCAppendSectorsResult, error) {
+// AppendSectors appends the given sectors to the contract. If the contract
+// cannot fit all sectors, as many as possible will be appended and the number of
+// sectors attempted will be returned.
+//
+// The integer returned does not indicate the number of sectors that were
+// appended, but rather the number of sectors that were attempted. Check the
+// result for the actual number of sectors that were appended.
+func (c *HostClient) AppendSectors(ctx context.Context, hostPrices proto.HostPrices, contractID types.FileContractID, sectors []types.Hash256) (res rhp.RPCAppendSectorsResult, remaining int, err error) {
 	// sanity check
 	if len(sectors) > proto.MaxSectorBatchSize {
-		return rhp.RPCAppendSectorsResult{}, fmt.Errorf("too many sectors, %d > %d", len(sectors), proto.MaxSectorBatchSize) // developer error
+		return rhp.RPCAppendSectorsResult{}, 0, fmt.Errorf("too many sectors, %d > %d", len(sectors), proto.MaxSectorBatchSize) // developer error
 	}
 
 	// append sectors
-	var res rhp.RPCAppendSectorsResult
-	if err := c.withRevision(ctx, contractID, func(contract rhp.ContractRevision) (_ rhp.ContractRevision, _ proto.Usage, err error) {
+	err = c.withRevision(ctx, contractID, func(contract rhp.ContractRevision) (_ rhp.ContractRevision, _ proto.Usage, err error) {
 		if contract.Revision.Filesize > maxContractSize {
 			return rhp.ContractRevision{}, proto.Usage{}, fmt.Errorf("contract is too large, %d > %d", contract.Revision.Filesize, maxContractSize)
 		}
+		// calculate the maximum number of sectors we can append based on the
+		// contract's remaining capacity and collateral
+		maxRemainingSectors := (maxContractSize - contract.Revision.Filesize) / proto.SectorSize
+		var maxAppendSectors uint64
+		if contract.Revision.Filesize < contract.Revision.Capacity {
+			maxAppendSectors = (contract.Revision.Capacity - contract.Revision.Filesize) / proto.SectorSize
+		}
+		sectorCollateralCost := hostPrices.RPCAppendSectorsCost(1, contract.Revision.ExpirationHeight-hostPrices.TipHeight).RiskedCollateral
+		if sectorCollateralCost.IsZero() {
+			sectorCollateralCost = types.NewCurrency64(1) // avoid division by zero
+		}
+		maxAppendSectors += contract.Revision.RemainingCollateral().Div(sectorCollateralCost).Big().Uint64()
+		// ensure the maximum contract size is not exceeded
+		maxAppendSectors = min(maxAppendSectors, maxRemainingSectors)
+
+		// only attempt to append up to the calculated maximum number of sectors
+		if uint64(len(sectors)) > maxAppendSectors {
+			sectors = sectors[:maxAppendSectors]
+			remaining = len(sectors)
+		}
+
 		res, err = rhp.RPCAppendSectors(ctx, c.client, c.signer, c.cm.TipState(), hostPrices, contract, sectors)
 		if err != nil {
 			return rhp.ContractRevision{}, proto.Usage{}, fmt.Errorf("failed to append sectors: %w", err)
 		}
 		contract.Revision = res.Revision
 		return contract, res.Usage, nil
-	}); err != nil {
-		return rhp.RPCAppendSectorsResult{}, fmt.Errorf("failed to append sectors: %w", err)
-	}
-	return res, nil
+	})
+	return
 }
 
 // Close closes the underlying transport client.
