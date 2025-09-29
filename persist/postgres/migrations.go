@@ -237,6 +237,27 @@ CREATE INDEX object_slabs_object_id_slab_index_idx ON object_slabs(object_id, sl
 		}
 		return nil
 	},
+	// reset registered accounts
+	func(ctx context.Context, tx *txn, _ *zap.Logger) error {
+		if _, err := tx.Exec(ctx, `UPDATE stats SET num_accounts_registered = (SELECT COUNT(*) FROM accounts WHERE service_account != TRUE);`); err != nil {
+			return fmt.Errorf("failed to reset num_accounts_registered: %w", err)
+		}
+		return nil
+	},
+	// drop host_resolved_cidrs table
+	func(ctx context.Context, tx *txn, _ *zap.Logger) error {
+		_, err := tx.Exec(ctx, `DROP TABLE IF EXISTS host_resolved_cidrs;`)
+		return err
+	},
+	// add indexes to speed up unpinning slabs
+	func(ctx context.Context, tx *txn, _ *zap.Logger) error {
+		if _, err := tx.Exec(ctx, `CREATE INDEX account_slabs_slab_id_idx ON account_slabs(slab_id);`); err != nil {
+			return fmt.Errorf("failed to add account_slabs_slab_id_idx: %w", err)
+		} else if _, err := tx.Exec(ctx, `CREATE UNIQUE INDEX slab_sectors_sector_id_slab_id_idx ON slab_sectors(sector_id, slab_id);`); err != nil {
+			return fmt.Errorf("failed to add slab_sectors_sector_id_slab_id_idx: %w", err)
+		}
+		return nil
+	},
 	// drop index 'contracts_state_active_idx' and recreate it
 	func(ctx context.Context, tx *txn, _ *zap.Logger) error {
 		if _, err := tx.Exec(ctx, `DROP INDEX contracts_state_active_idx;`); err != nil {

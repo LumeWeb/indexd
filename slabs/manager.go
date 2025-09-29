@@ -25,13 +25,12 @@ type (
 	// checking their integrity on the network and migrating their sectors if
 	// necessary.
 	SlabManager struct {
-		disableCIDRChecks bool
-
 		healthCheckInterval time.Duration
 
 		integrityCheckInterval       time.Duration
 		failedIntegrityCheckInterval time.Duration
 		maxFailedIntegrityChecks     uint
+		minHostDistanceKm            float64
 
 		migrationAccount    proto.Account
 		migrationAccountKey types.PrivateKey
@@ -103,6 +102,7 @@ type (
 		Slabs(ctx context.Context, account proto.Account, slabIDs []SlabID) ([]Slab, error)
 		SlabIDs(ctx context.Context, account proto.Account, offset, limit int) ([]SlabID, error)
 		UnhealthySlabs(ctx context.Context, maxRepairAttempt time.Time, limit int) ([]SlabID, error)
+		PruneSlabs(ctx context.Context, account proto.Account) error
 
 		// Object methods
 		Object(ctx context.Context, account proto.Account, key types.Hash256) (Object, error)
@@ -126,13 +126,6 @@ var (
 // An Option is a functional option for the SlabManager.
 type Option func(*SlabManager)
 
-// WithDisabledCIDRChecks disables the CIDR checks for the slab manager.
-func WithDisabledCIDRChecks() Option {
-	return func(m *SlabManager) {
-		m.disableCIDRChecks = true
-	}
-}
-
 // WithHealthCheckInterval sets the interval for health checks.
 func WithHealthCheckInterval(interval time.Duration) Option {
 	return func(m *SlabManager) {
@@ -145,6 +138,15 @@ func WithIntegrityCheckIntervals(success, failure time.Duration) Option {
 	return func(m *SlabManager) {
 		m.integrityCheckInterval = success
 		m.failedIntegrityCheckInterval = failure
+	}
+}
+
+// WithMinHostDistance sets the minimum distance between hosts used for storing
+// sectors of the same slab. The default is 10km, if set to 0, the distance
+// check is disabled.
+func WithMinHostDistance(km float64) Option {
+	return func(m *SlabManager) {
+		m.minHostDistanceKm = km
 	}
 }
 
@@ -195,6 +197,7 @@ func newSlabManager(am AccountManager, hm HostManager, store Store, dialer Diale
 		integrityCheckInterval:       7 * 24 * time.Hour,
 		failedIntegrityCheckInterval: 6 * time.Hour,
 		maxFailedIntegrityChecks:     5,
+		minHostDistanceKm:            10,
 
 		migrationAccount:    proto.Account(migrationAccount.PublicKey()),
 		migrationAccountKey: migrationAccount,
