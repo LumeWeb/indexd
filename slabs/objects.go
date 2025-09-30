@@ -82,7 +82,7 @@ var (
 	ErrObjectUnpinnedSlab = errors.New("object contains unpinned slab")
 
 	// ErrInvalidSlab is returned when a slab in the object contains an invalid slab.
-	ErrInvalidSlab = errors.New("object contains invalid slab")
+	ErrInvalidSlab = errors.New("slab is invalid")
 )
 
 // ID returns the object's ID, which is a hash of its slabs.
