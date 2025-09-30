@@ -134,7 +134,6 @@ func TestUpdateLastUsed(t *testing.T) {
 	}
 
 	// pin the slab
-	// pin the slab
 	slabID, err := app.PinSlab(context.Background(), slabs.SlabPinParams{
 		EncryptionKey: encryptionKey,
 		MinShards:     1,
