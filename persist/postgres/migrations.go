@@ -249,6 +249,29 @@ CREATE INDEX object_slabs_object_id_slab_index_idx ON object_slabs(object_id, sl
 		_, err := tx.Exec(ctx, `DROP TABLE IF EXISTS host_resolved_cidrs;`)
 		return err
 	},
+	// add indexes to speed up unpinning slabs
+	func(ctx context.Context, tx *txn, _ *zap.Logger) error {
+		if _, err := tx.Exec(ctx, `CREATE INDEX account_slabs_slab_id_idx ON account_slabs(slab_id);`); err != nil {
+			return fmt.Errorf("failed to add account_slabs_slab_id_idx: %w", err)
+		} else if _, err := tx.Exec(ctx, `CREATE UNIQUE INDEX slab_sectors_sector_id_slab_id_idx ON slab_sectors(sector_id, slab_id);`); err != nil {
+			return fmt.Errorf("failed to add slab_sectors_sector_id_slab_id_idx: %w", err)
+		}
+		return nil
+	},
+	func(ctx context.Context, tx *txn, _ *zap.Logger) error {
+		// note: it is not practical to migrate the existing object data since
+		// the master key column does not exist.
+		if _, err := tx.Exec(ctx, `TRUNCATE objects CASCADE;`); err != nil {
+			return fmt.Errorf("failed to drop objects table: %w", err)
+		}
+		const query = `
+ALTER TABLE objects DROP COLUMN meta;
+ALTER TABLE objects ADD COLUMN encrypted_master_key BYTEA UNIQUE NOT NULL CHECK (LENGTH(encrypted_master_key) = 72); -- user provided, master encryption key (xchacha20 nonce + key + tag)
+ALTER TABLE objects ADD COLUMN encrypted_metadata BYTEA; -- user provided, encrypted metadata
+ALTER TABLE objects ADD COLUMN signature BYTEA UNIQUE NOT NULL CHECK (LENGTH(signature) = 64); -- signature of blake2b(object_key || encrypted_master_key || encrypted_metadata)`
+		_, err := tx.Exec(ctx, query)
+		return err
+	},
 	// reset registered accounts
 	func(ctx context.Context, tx *txn, _ *zap.Logger) error {
 		if _, err := tx.Exec(ctx, `UPDATE stats SET num_accounts_registered = (SELECT COUNT(*) FROM accounts);`); err != nil {

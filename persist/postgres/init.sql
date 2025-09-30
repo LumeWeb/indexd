@@ -267,11 +267,13 @@ CREATE INDEX slabs_id_last_repair_attempt_idx ON slabs(last_repair_attempt ASC);
 
 CREATE TABLE objects (
     id BIGSERIAL PRIMARY KEY,
-    object_key BYTEA NOT NULL CHECK(LENGTH(object_key) = 32), -- user provided, object identifier
+    object_key BYTEA NOT NULL CHECK(LENGTH(object_key) = 32),
+    encrypted_master_key BYTEA UNIQUE NOT NULL CHECK(LENGTH(encrypted_master_key) = 72), -- user provided, master encryption key (xchacha20 nonce + key + tag)
     account_id INTEGER REFERENCES accounts(id) NOT NULL, -- account that owns object
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(), -- allow sorting by update time
-    meta BYTEA -- user provided, encrypted metadata
+    encrypted_metadata BYTEA, -- user provided, encrypted metadata
+    signature BYTEA UNIQUE NOT NULL CHECK(LENGTH(signature) = 64) -- signature of blake2b(object_key || encrypted_master_key || encrypted_metadata)
 );
 
 -- object_key is unique per account
@@ -301,6 +303,9 @@ CREATE TABLE account_slabs (
     slab_id BIGSERIAL REFERENCES slabs(id) NOT NULL,
     PRIMARY KEY (account_id, slab_id)
 );
+
+-- speed up query used when unpinning slabs
+CREATE INDEX account_slabs_slab_id_idx ON account_slabs(slab_id);
 
 CREATE TABLE sectors (
     id BIGSERIAL PRIMARY KEY,
@@ -373,3 +378,6 @@ CREATE INDEX slab_sectors_sector_id_idx ON slab_sectors(sector_id);
 
 -- speed up fetching sectors for slab ordered by their position within the slab
 CREATE UNIQUE INDEX slab_sectors_slab_id_slab_index_idx ON slab_sectors(slab_id, slab_index ASC);
+
+-- speeds up finding sectors for deletion when unpinning slabs
+CREATE UNIQUE INDEX slab_sectors_sector_id_slab_id_idx ON slab_sectors(sector_id, slab_id);
