@@ -823,7 +823,7 @@ func TestSectorStatsAPI(t *testing.T) {
 	// pin a slab
 	account := types.GeneratePrivateKey()
 	indexer.Store().AddAccount(context.Background(), account.PublicKey(), accounts.AccountMeta{})
-	slabID, err := indexer.App(account).PinSlab(context.Background(), slabs.SlabPinParams{
+	slabIDs, err := indexer.App(account).PinSlabs(context.Background(), slabs.SlabPinParams{
 		EncryptionKey: [32]byte{1},
 		MinShards:     1,
 		Sectors: []slabs.PinnedSector{
@@ -835,6 +835,7 @@ func TestSectorStatsAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	slabID := slabIDs[0]
 
 	// assert 1 slab
 	stats, err = adminClient.StatsSectors(context.Background())

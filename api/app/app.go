@@ -292,23 +292,26 @@ func (a *app) handleDELETEObjects(jc jape.Context, pk types.PublicKey) {
 }
 
 func (a *app) handlePOSTSlabs(jc jape.Context, pk types.PublicKey) {
-	var params slabs.SlabPinParams
+	var params []slabs.SlabPinParams
 	if err := jc.Decode(&params); err != nil {
 		jc.Error(err, http.StatusBadRequest)
 		return
-	} else if err := params.Validate(); err != nil {
-		jc.Error(fmt.Errorf("invalid slab pin params: %w", err), http.StatusBadRequest)
-		return
+	}
+	for _, param := range params {
+		if err := param.Validate(); err != nil {
+			jc.Error(fmt.Errorf("invalid slab pin params: %w", err), http.StatusBadRequest)
+			return
+		}
 	}
 
-	slabIDs, err := a.slabs.PinSlabs(jc.Request.Context(), proto.Account(pk), time.Now(), params)
+	slabIDs, err := a.slabs.PinSlabs(jc.Request.Context(), proto.Account(pk), time.Now(), params...)
 	if jc.Check("failed to pin slab", err) != nil {
 		return
 	} else if len(slabIDs) == 0 {
 		jc.Error(fmt.Errorf("PinSlabs did not return any slab IDs"), http.StatusInternalServerError)
 	}
 
-	jc.Encode(slabIDs[0])
+	jc.Encode(slabIDs)
 }
 
 func (a *app) handlePOSTSlabsPrune(jc jape.Context, pk types.PublicKey) {
