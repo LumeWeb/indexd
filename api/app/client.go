@@ -147,7 +147,7 @@ func (c *Client) Hosts(ctx context.Context, opts ...api.URLQueryParameterOption)
 	return
 }
 
-// PinSlab pins a slab to the indexer.
+// PinSlabs pins slabs to the indexer.
 func (c *Client) PinSlabs(ctx context.Context, params ...slabs.SlabPinParams) (slabIDs []slabs.SlabID, err error) {
 	err = c.signedRequestJSON(ctx, http.MethodPost, "/slabs", params, &slabIDs)
 	return
