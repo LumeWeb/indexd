@@ -48,6 +48,10 @@ func (s *mockStore) Hosts(ctx context.Context, offset, limit int, opts ...HostQu
 
 func (s *mockStore) HostsForScanning(ctx context.Context) ([]types.PublicKey, error) { return nil, nil }
 
+func (s *mockStore) HostStats(ctx context.Context, offset, limit int) ([]HostStats, error) {
+	return nil, nil
+}
+
 func (s *mockStore) BlockHosts(ctx context.Context, hostKeys []types.PublicKey, reason string) error {
 	return nil
 }
@@ -64,7 +68,7 @@ func (s *mockStore) PruneHosts(ctx context.Context, lastSuccessfulScanCutoff tim
 	return 0, nil
 }
 
-func (s *mockStore) UpdateHost(ctx context.Context, hk types.PublicKey, networks []string, hs proto4.HostSettings, loc geoip.Location, scanSucceeded bool, nextScan time.Time) error {
+func (s *mockStore) UpdateHost(ctx context.Context, hk types.PublicKey, hs proto4.HostSettings, loc geoip.Location, scanSucceeded bool, nextScan time.Time) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -123,7 +127,15 @@ type mockClient struct {
 	settings map[string]proto4.HostSettings
 }
 
-func (c *mockClient) Settings(ctx context.Context, hk types.PublicKey, addr string) (proto4.HostSettings, error) {
+func (c *mockClient) ScanSiamux(ctx context.Context, hk types.PublicKey, addr string) (proto4.HostSettings, error) {
+	return c.scan(ctx, hk, addr)
+}
+
+func (c *mockClient) ScanQuic(ctx context.Context, hk types.PublicKey, addr string) (proto4.HostSettings, error) {
+	return c.scan(ctx, hk, addr)
+}
+
+func (c *mockClient) scan(ctx context.Context, _ types.PublicKey, addr string) (proto4.HostSettings, error) {
 	select {
 	case <-ctx.Done():
 		return proto4.HostSettings{}, ctx.Err()
@@ -364,13 +376,13 @@ func TestResolveHost(t *testing.T) {
 	locator := &mockLocator{}
 
 	// assert [context.Cancelled] is returned when context is cancelled
-	_, _, _, err := resolveHost(cancelledCtx, r, locator, []chain.NetAddress{testMuxAddr("h1.com:1234")}, zap.NewNop())
+	_, _, err := resolveHost(cancelledCtx, r, locator, []chain.NetAddress{testMuxAddr("h1.com:1234")}, zap.NewNop())
 	if !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 
 	// assert incorrect addresses are filtered out
-	addrs, _, _, err := resolveHost(context.Background(), r, locator, []chain.NetAddress{testMuxAddr("h1.com")}, zap.NewNop())
+	addrs, _, err := resolveHost(context.Background(), r, locator, []chain.NetAddress{testMuxAddr("h1.com")}, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	} else if len(addrs) != 0 {
@@ -378,77 +390,101 @@ func TestResolveHost(t *testing.T) {
 	}
 
 	// assert net addresses with private IPs are filtered out
-	addrs, _, _, err = resolveHost(context.Background(), r, locator, []chain.NetAddress{testMuxAddr("h1.com:1234")}, zap.NewNop())
+	addrs, _, err = resolveHost(context.Background(), r, locator, []chain.NetAddress{testMuxAddr("h1.com:1234")}, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	} else if len(addrs) != 0 {
 		t.Fatal("unexpected", len(addrs))
 	}
 
-	// assert net addresses get resolved and networks are returned
-	addrs, networks, loc, err := resolveHost(context.Background(), r, locator, []chain.NetAddress{testMuxAddr("h2.com:1234")}, zap.NewNop())
+	// assert net addresses get resolved
+	addrs, loc, err := resolveHost(context.Background(), r, locator, []chain.NetAddress{testMuxAddr("h2.com:1234")}, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	} else if len(addrs) != 1 {
 		t.Fatal("unexpected", len(addrs))
-	} else if len(networks) != 1 {
-		t.Fatal("unexpected", len(networks))
 	} else if loc != mockLocation {
 		t.Fatalf("expected location %v, got %v", mockLocation, loc)
 	}
 }
 
 type blockingScanner struct {
-	delay    time.Duration
-	settings proto4.HostSettings
+	delayMux  time.Duration
+	delayQuic time.Duration
+	settings  proto4.HostSettings
 }
 
-func (bs *blockingScanner) Settings(ctx context.Context, _ types.PublicKey, _ string) (proto4.HostSettings, error) {
-	time.Sleep(bs.delay)
+func (bs *blockingScanner) ScanSiamux(ctx context.Context, hk types.PublicKey, addr string) (proto4.HostSettings, error) {
+	time.Sleep(bs.delayMux)
+	return bs.settings, nil
+}
+
+func (bs *blockingScanner) ScanQuic(ctx context.Context, hk types.PublicKey, addr string) (proto4.HostSettings, error) {
+	time.Sleep(bs.delayQuic)
 	return bs.settings, nil
 }
 
 func TestScanTimeout(t *testing.T) {
-	r := &mockResolver{
-		ips: map[string][]net.IPAddr{
-			"1.1.1.1": {{IP: net.IPv4(1, 1, 1, 1)}},
-		},
-	}
-
-	hostKey := types.PublicKey{1}
-	db := &mockStore{hosts: map[types.PublicKey]Host{
-		hostKey: {
-			Addresses: []chain.NetAddress{
-				testMuxAddr("1.1.1.1:1111"),
+	runTest := func(t *testing.T, addr chain.NetAddress, scanner Scanner, release string) {
+		r := &mockResolver{
+			ips: map[string][]net.IPAddr{
+				"1.1.1.1": {{IP: net.IPv4(1, 1, 1, 1)}},
 			},
-		},
-	}}
+		}
 
-	// create host manager
-	mgr, err := NewManager(&mockSyncer{peers: []*syncer.Peer{{}}}, &mockLocator{}, db)
-	if err != nil {
-		t.Fatal(err)
+		hostKey := types.PublicKey{1}
+		db := &mockStore{hosts: map[types.PublicKey]Host{
+			hostKey: {
+				Addresses: []chain.NetAddress{
+					addr,
+				},
+			},
+		}}
+
+		// create host manager
+		mgr, err := NewManager(&mockSyncer{peers: []*syncer.Peer{{}}}, &mockLocator{}, db)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		mgr.resolver = r
+		mgr.scanner = scanner
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+
+		host, err := mgr.ScanHost(ctx, hostKey)
+		if err != nil {
+			t.Fatal(err)
+		} else if host.Settings.Release != release {
+			t.Fatal("unexpected", host.Settings)
+		}
 	}
 
-	mgr.resolver = r
-	mgr.scanner = &blockingScanner{
-		delay: 500 * time.Millisecond,
-		settings: proto4.HostSettings{
-			Release: "delayedScan",
-		},
-	}
+	t.Run("siamux", func(t *testing.T) {
+		scanner := &blockingScanner{
+			delayMux: 500 * time.Millisecond,
+			settings: proto4.HostSettings{
+				Release: "delayedSiamuxScan",
+			},
+		}
+		runTest(t, testMuxAddr("1.1.1.1:1111"), scanner, scanner.settings.Release)
+	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-
-	host, err := mgr.ScanHost(ctx, hostKey)
-	if err != nil {
-		t.Fatal(err)
-	} else if host.Settings.Release != "delayedScan" {
-		t.Fatal("unexpected", host.Settings)
-	}
+	t.Run("quic", func(t *testing.T) {
+		scanner := &blockingScanner{
+			delayQuic: 500 * time.Millisecond,
+			settings: proto4.HostSettings{
+				Release: "delayedQuicScan",
+			},
+		}
+		runTest(t, testQuicAddr("1.1.1.1:1111"), scanner, scanner.settings.Release)
+	})
 }
 
 func testMuxAddr(addr string) chain.NetAddress {
 	return chain.NetAddress{Protocol: siamux.Protocol, Address: addr}
+}
+
+func testQuicAddr(addr string) chain.NetAddress {
+	return chain.NetAddress{Protocol: quic.Protocol, Address: addr}
 }

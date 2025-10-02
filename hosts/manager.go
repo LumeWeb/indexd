@@ -24,9 +24,6 @@ import (
 const (
 	announcementMaxAddressesPerProtocol = 2
 
-	ipv4FilterRange = 24
-	ipv6FilterRange = 32
-
 	pruneFrequency                  = time.Hour * 24
 	pruneMinConsecutiveScanFailures = 10
 	pruneMinDowntime                = time.Hour * 24 * 365 // 1 year
@@ -65,6 +62,15 @@ type (
 		log *zap.Logger
 	}
 
+	// HostStats contains various statistics about a single host.
+	HostStats struct {
+		AccountUsage        types.Currency  `json:"accountUsage"`
+		ActiveContractsSize int64           `json:"activeContractsSize"`
+		PublicKey           types.PublicKey `json:"publicKey"`
+		LostSectors         int64           `json:"lostSectors"`
+		TotalUsage          types.Currency  `json:"totalUsage"`
+	}
+
 	// OnlineChecker defines an interface to check whether the indexer is online. It's
 	// used to ensure hosts aren't punished for failing a scan if the indexer is
 	// offline.
@@ -79,7 +85,8 @@ type (
 
 	// Scanner defines an interface to scan hosts.
 	Scanner interface {
-		Settings(context.Context, types.PublicKey, string) (proto4.HostSettings, error)
+		ScanSiamux(context.Context, types.PublicKey, string) (proto4.HostSettings, error)
+		ScanQuic(context.Context, types.PublicKey, string) (proto4.HostSettings, error)
 	}
 
 	// Store defines an interface to fetch hosts that need to be scanned and
@@ -87,6 +94,7 @@ type (
 	Store interface {
 		Host(ctx context.Context, hk types.PublicKey) (Host, error)
 		Hosts(ctx context.Context, offset, limit int, queryOpts ...HostQueryOpt) ([]Host, error)
+		HostStats(ctx context.Context, offset, limit int) ([]HostStats, error)
 
 		HostsForScanning(ctx context.Context) ([]types.PublicKey, error)
 		HostsForPruning(ctx context.Context) ([]types.PublicKey, error)
@@ -98,7 +106,7 @@ type (
 		UnblockHost(ctx context.Context, hk types.PublicKey) error
 
 		PruneHosts(ctx context.Context, lastSuccessfulScanCutoff time.Time, minConsecutiveFailedScans int) (int64, error)
-		UpdateHost(ctx context.Context, hk types.PublicKey, networks []string, hs proto4.HostSettings, loc geoip.Location, scanSucceeded bool, nextScan time.Time) error
+		UpdateHost(ctx context.Context, hk types.PublicKey, hs proto4.HostSettings, loc geoip.Location, scanSucceeded bool, nextScan time.Time) error
 
 		UsabilitySettings(ctx context.Context) (UsabilitySettings, error)
 		UpdateUsabilitySettings(ctx context.Context, us UsabilitySettings) error
@@ -268,14 +276,12 @@ func (m *HostManager) UpdateUsabilitySettings(ctx context.Context, us UsabilityS
 // NOTE: It's important that the function passed to WithScannedHost can be
 // called twice.
 func (m *HostManager) WithScannedHost(ctx context.Context, hk types.PublicKey, fn func(h Host) error) error {
-	logger := m.log.With(zap.Stringer("hk", hk))
-
 	// fetch host
 	host, err := m.store.Host(ctx, hk)
 	if err != nil {
 		return fmt.Errorf("failed to get host, %w", err)
 	} else if !host.IsGood() {
-		return fmt.Errorf("%w: blocked=%t, usable=%t, networks=%d", ErrBadHost, host.Blocked, host.Usability.Usable(), len(host.Networks))
+		return fmt.Errorf("%w: blocked=%t, usable=%t", ErrBadHost, host.Blocked, host.Usability.Usable())
 	}
 
 	// optimistically call the function if the prices are still valid for a
@@ -288,14 +294,13 @@ func (m *HostManager) WithScannedHost(ctx context.Context, hk types.PublicKey, f
 			return nil // 'fn' succeeded so we're done
 		}
 	}
-	logger.Debug("host has outdated prices, rescan")
 
 	// scan the host if the prices were outdated
 	host, err = m.ScanHost(ctx, hk)
 	if err != nil {
 		return fmt.Errorf("failed to scan host, %w", err)
 	} else if !host.IsGood() {
-		return fmt.Errorf("%w: blocked=%t, usable=%t, networks=%d", ErrBadHost, host.Blocked, host.Usability.Usable(), len(host.Networks))
+		return fmt.Errorf("%w: blocked=%t, usable=%t", ErrBadHost, host.Blocked, host.Usability.Usable())
 	}
 
 	// try again
@@ -315,7 +320,7 @@ func (m *HostManager) ScanHost(ctx context.Context, hk types.PublicKey) (Host, e
 		return Host{}, fmt.Errorf("failed to get host, %w", err)
 	}
 
-	addrs, networks, loc, err := resolveHost(ctx, m.resolver, m.locator, host.Addresses, logger)
+	addrs, loc, err := resolveHost(ctx, m.resolver, m.locator, host.Addresses, logger)
 	if err != nil {
 		return Host{}, fmt.Errorf("failed to resolve host, %w", err)
 	}
@@ -348,7 +353,7 @@ func (m *HostManager) ScanHost(ctx context.Context, hk types.PublicKey) (Host, e
 	updateCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	err = m.store.UpdateHost(updateCtx, hk, networks, settings, loc, success, nextScan)
+	err = m.store.UpdateHost(updateCtx, hk, settings, loc, success, nextScan)
 	if err != nil {
 		return Host{}, fmt.Errorf("failed to update host, %w", err)
 	}
@@ -386,6 +391,11 @@ func (m *HostManager) UpdateChainState(tx UpdateTx, applied []chain.ApplyUpdate)
 		}
 	}
 	return nil
+}
+
+// Stats returns statistics about the hosts in the database.
+func (m *HostManager) Stats(ctx context.Context, offset, limit int) ([]HostStats, error) {
+	return m.store.HostStats(ctx, offset, limit)
 }
 
 // hostsForScanning returns the public keys of the hosts that need to be
@@ -489,18 +499,27 @@ loop:
 func fetchSettings(ctx context.Context, scanner Scanner, hk types.PublicKey, addresses []chain.NetAddress, log *zap.Logger) (proto4.HostSettings, error) {
 	var settings []proto4.HostSettings
 	for _, addr := range addresses {
-		if addr.Protocol == siamux.Protocol {
-			hs, err := scanner.Settings(ctx, hk, addr.Address)
-			if errors.Is(err, context.Canceled) {
-				return proto4.HostSettings{}, err
-			} else if err != nil {
-				log.Debug("failed to get host settings", zap.String("address", addr.Address), zap.Error(err))
-				settings = nil // require host to be available on all addresses
-				break
-			}
-			settings = append(settings, hs)
+		var hs proto4.HostSettings
+		var err error
+		switch addr.Protocol {
+		case siamux.Protocol:
+			hs, err = scanner.ScanSiamux(ctx, hk, addr.Address)
+		case quic.Protocol:
+			hs, err = scanner.ScanQuic(ctx, hk, addr.Address)
+		default:
+			continue // ignore
 		}
-		// TODO: add support for QUIC
+		if errors.Is(err, context.Canceled) {
+			return proto4.HostSettings{}, err
+		} else if err != nil {
+			log.Debug("failed to get host settings",
+				zap.String("address", addr.Address),
+				zap.String("protocol", string(addr.Protocol)),
+				zap.Error(err))
+			settings = nil // require host to be available on all addresses
+			break
+		}
+		settings = append(settings, hs)
 	}
 
 	// return a random setting to avoid the host cheating us by providing
@@ -537,9 +556,8 @@ func calculateNextScanTime(lastScan time.Time, success bool, consecScanFailures 
 // and/or private addresses, and a list of networks in CIDR notation. The only
 // error this function returns is [context.Canceled], other errors that occur
 // during the resolving and parsing are debug logged but otherwise ignored.
-func resolveHost(ctx context.Context, resolver Resolver, locator Locator, addresses []chain.NetAddress, log *zap.Logger) ([]chain.NetAddress, []string, geoip.Location, error) {
+func resolveHost(ctx context.Context, resolver Resolver, locator Locator, addresses []chain.NetAddress, log *zap.Logger) ([]chain.NetAddress, geoip.Location, error) {
 	var filtered []chain.NetAddress
-	var networks []string
 	var loc geoip.Location
 	for _, na := range addresses {
 		host, _, err := net.SplitHostPort(na.Address)
@@ -550,9 +568,12 @@ func resolveHost(ctx context.Context, resolver Resolver, locator Locator, addres
 
 		ips, err := resolver.LookupIPAddr(ctx, host)
 		if errors.Is(err, context.Canceled) {
-			return nil, nil, geoip.Location{}, err
+			return nil, geoip.Location{}, err
 		} else if err != nil {
 			log.Debug("failed to resolve host", zap.String("host", host), zap.Error(err))
+			continue
+		} else if len(ips) == 0 {
+			log.Debug("no IPs found for host", zap.String("host", host))
 			continue
 		}
 
@@ -568,37 +589,17 @@ func resolveHost(ctx context.Context, resolver Resolver, locator Locator, addres
 			continue
 		}
 
-		var ipnets []net.IPNet
-		for _, ip := range ips {
-			ipRange := ipv6FilterRange
-			if ip.IP.To4() != nil {
-				ipRange = ipv4FilterRange
-			}
-
-			cidr := fmt.Sprintf("%s/%d", ip.IP.String(), ipRange)
-			_, ipnet, err := net.ParseCIDR(cidr)
-			if err != nil {
-				log.Debug("failed to parse CIDR", zap.String("CIDR", cidr), zap.Error(err))
-				continue
-			}
-			ipnets = append(ipnets, *ipnet)
-		}
-
-		if len(ipnets) > 0 {
-			for _, ipnet := range ipnets {
-				networks = append(networks, ipnet.String())
-			}
-			filtered = append(filtered, na)
-		}
-
-		if len(ips) > 0 && loc.CountryCode == "" {
+		if loc.CountryCode == "" {
 			loc, err = locator.Locate(ips[0].IP)
 			if err != nil {
 				log.Debug("failed to locate IP address", zap.Error(err))
 			}
 		}
+
+		filtered = append(filtered, na)
 	}
-	return filtered, networks, loc, nil
+
+	return filtered, loc, nil
 }
 
 func isPrivateIP(ip net.IP) bool {

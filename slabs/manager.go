@@ -83,7 +83,6 @@ type (
 	// Store defines an interface to store and update slab related information
 	// in the database.
 	Store interface {
-		AddAccount(ctx context.Context, ak types.PublicKey, meta accounts.AccountMeta, opts ...accounts.AddAccountOption) error
 		AddServiceAccount(ctx context.Context, ak types.PublicKey, meta accounts.AccountMeta, opts ...accounts.AddAccountOption) error
 		Contracts(ctx context.Context, offset, limit int, queryOpts ...contracts.ContractQueryOpt) ([]contracts.Contract, error)
 		Hosts(ctx context.Context, offset, limit int, queryOpts ...hosts.HostQueryOpt) ([]hosts.Host, error)
@@ -102,12 +101,13 @@ type (
 		Slabs(ctx context.Context, account proto.Account, slabIDs []SlabID) ([]Slab, error)
 		SlabIDs(ctx context.Context, account proto.Account, offset, limit int) ([]SlabID, error)
 		UnhealthySlabs(ctx context.Context, maxRepairAttempt time.Time, limit int) ([]SlabID, error)
+		PruneSlabs(ctx context.Context, account proto.Account) error
 
 		// Object methods
-		Object(ctx context.Context, account proto.Account, key types.Hash256) (Object, error)
+		Object(ctx context.Context, account proto.Account, key types.Hash256) (SealedObject, error)
 		DeleteObject(ctx context.Context, account proto.Account, objectKey types.Hash256) error
-		SaveObject(ctx context.Context, account proto.Account, obj Object) error
-		ListObjects(ctx context.Context, account proto.Account, cursor Cursor, limit int) (objs []Object, _ error)
+		SaveObject(ctx context.Context, account proto.Account, obj SealedObject) error
+		ListObjects(ctx context.Context, account proto.Account, cursor Cursor, limit int) ([]SealedObject, error)
 		SharedObject(ctx context.Context, key types.Hash256) (SharedObject, error)
 	}
 

@@ -249,7 +249,7 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 		err := cm.hosts.WithScannedHost(ctx, hostKey, func(host hosts.Host) error {
 			// make sure host is still good
 			if !isGood(host, hostLog) {
-				return fmt.Errorf("host is not good: %s", host.PublicKey)
+				return fmt.Errorf("%w: %s", hosts.ErrBadHost, host.PublicKey)
 			}
 
 			allowance, collateral := contractFunding(host.Settings, 0, target, minHostCollateral, period)

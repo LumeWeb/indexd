@@ -182,19 +182,23 @@ components:
             - quic
           description: The protocol used by the host
 
-    Object:
+    SealedObject:
       type: object
       properties:
-        key:
+        id:
           allOf:
             - $ref: "#/components/schemas/Hash256"
-            - description: The object's key
+            - description: The object's unique ID
+        encryptedMasterKey:
+          type: string
+          format: byte
+          description: The encrypted master key used to encrypt and decrypt the object's data and metadata
         slabs:
           type: array
           items:
             $ref: "#/components/schemas/SlabSlice"
           description: The list of slabs that make up the object
-        meta:
+        encryptedMetadata:
           type: string
           format: byte
           description: Optional metadata stored on the object
@@ -212,22 +216,22 @@ components:
     SharedObject:
       type: object
       properties:
-        key:
+        id:
           allOf:
             - $ref: "#/components/schemas/Hash256"
-            - description: The shared object's key
+            - description: The shared object's unique ID
         slabs:
           type: array
           description: The list of slabs that make up the shared object
           items:
-            $ref: "#/components/schemas/SharedObjectSlab"
-        meta:
+            $ref: "#/components/schemas/SharedSlab"
+        encryptedMetadata:
           type: string
           format: byte
           description: Optional metadata stored on the object
 
     # A slab of a shared object including decryption info and slice bounds.
-    SharedObjectSlab:
+    SharedSlab:
       type: object
       properties:
         id:
@@ -569,10 +573,6 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/NetAddress"
-        networks:
-          type: array
-          items:
-            $ref: "#/components/schemas/IPNet"
         settings:
           $ref: "#/components/schemas/HostSettings"
         usability:
@@ -805,6 +805,35 @@ components:
           type: integer
           format: int64
           description: Total size of all active contracts
+
+    HostsStatsResponse:
+      type: object
+      properties:
+        hosts:
+          type: array
+          items:
+            type: object
+            properties:
+              accountUsage:
+                allOf:
+                  - $ref: "#/components/schemas/Currency"
+                  - description: Total amount spent on ephemeral accounts
+              activeContractsSize:
+                type: integer
+                format: int64
+                description: Total size of all active contracts on this host
+              publicKey:
+                allOf:
+                  - $ref: "#/components/schemas/PublicKey"
+                  - description: The public key of the host
+              lostSectors:
+                type: integer
+                format: int64
+                description: Total number of sectors lost on this host
+              totalUsage:
+                allOf:
+                  - $ref: "#/components/schemas/Currency"
+                  - description: Total amount spent on this host
 
     SectorStatsResponse:
       type: object

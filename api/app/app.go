@@ -35,15 +35,16 @@ type (
 
 	// Slabs defines the slab interface for the application API.
 	Slabs interface {
+		PruneSlabs(ctx context.Context, account proto.Account) error
 		PinSlab(ctx context.Context, account proto.Account, nextIntegrityCheck time.Time, slab slabs.SlabPinParams) (slabs.SlabID, error)
 		PinnedSlab(ctx context.Context, account proto.Account, slabID slabs.SlabID) (slabs.PinnedSlab, error)
 		SlabIDs(ctx context.Context, account proto.Account, offset, limit int) ([]slabs.SlabID, error)
 		UnpinSlab(ctx context.Context, account proto.Account, slabID slabs.SlabID) error
 
-		Object(ctx context.Context, account proto.Account, key types.Hash256) (slabs.Object, error)
+		Object(ctx context.Context, account proto.Account, key types.Hash256) (slabs.SealedObject, error)
 		DeleteObject(ctx context.Context, account proto.Account, objectKey types.Hash256) error
-		SaveObject(ctx context.Context, account proto.Account, obj slabs.Object) error
-		ListObjects(ctx context.Context, account proto.Account, cursor slabs.Cursor, limit int) (objs []slabs.Object, _ error)
+		SaveObject(ctx context.Context, account proto.Account, obj slabs.SealedObject) error
+		ListObjects(ctx context.Context, account proto.Account, cursor slabs.Cursor, limit int) (objs []slabs.SealedObject, _ error)
 		SharedObject(ctx context.Context, key types.Hash256) (slabs.SharedObject, error)
 	}
 
@@ -257,7 +258,7 @@ func (a *app) handleGETObjects(jc jape.Context, pk types.PublicKey) {
 }
 
 func (a *app) handlePOSTObjects(jc jape.Context, pk types.PublicKey) {
-	var obj slabs.Object
+	var obj slabs.SealedObject
 	if jc.Decode(&obj) != nil {
 		return
 	}
@@ -306,6 +307,15 @@ func (a *app) handlePOSTSlabs(jc jape.Context, pk types.PublicKey) {
 	}
 
 	jc.Encode(slabID)
+}
+
+func (a *app) handlePOSTSlabsPrune(jc jape.Context, pk types.PublicKey) {
+	err := a.slabs.PruneSlabs(jc.Request.Context(), proto.Account(pk))
+	if jc.Check("failed to prune slabs", err) != nil {
+		return
+	}
+
+	jc.Encode(nil)
 }
 
 func encodeBinary(jc jape.Context, resp types.EncoderTo) {
@@ -650,6 +660,7 @@ func NewAPI(advertiseURL string, store Store, am Accounts, contracts Contracts, 
 
 		"GET /slabs":            wrapCORS(wrapSignedAuth(a.handleGETSlabs)),
 		"POST /slabs":           wrapCORS(wrapSignedAuth(a.handlePOSTSlabs)),
+		"POST /slabs/prune":     wrapCORS(wrapSignedAuth(a.handlePOSTSlabsPrune)),
 		"GET /slabs/:slabid":    wrapCORS(wrapSignedAuth(a.handleGETSlab)),
 		"DELETE /slabs/:slabid": wrapCORS(wrapSignedAuth(a.handleDELETESlab)),
 	}), nil

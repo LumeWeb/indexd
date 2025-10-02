@@ -9,7 +9,6 @@ import (
 
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
-	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/internal/testutils"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
@@ -24,13 +23,10 @@ func TestHostDialer(t *testing.T) {
 	// add an account
 	a1 := types.GeneratePrivateKey()
 	app := indexer.App(a1)
-	err := indexer.Store().AddAccount(context.Background(), a1.PublicKey(), accounts.AccountMeta{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	indexer.AddAccount(t, a1.PublicKey())
 	time.Sleep(2 * time.Second)
 
-	dialer, err := NewDialer(app, a1, zap.NewNop())
+	dialer, err := newDialer(app, a1, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +55,7 @@ func TestHostDialer(t *testing.T) {
 	}
 	dialer.Close()
 
-	dialer, err = NewDialer(app, a1, zap.NewNop())
+	dialer, err = newDialer(app, a1, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,13 +82,10 @@ func TestHostDialerParallel(t *testing.T) {
 	// add an account
 	a1 := types.GeneratePrivateKey()
 	app := indexer.App(a1)
-	err := indexer.Store().AddAccount(context.Background(), a1.PublicKey(), accounts.AccountMeta{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	indexer.AddAccount(t, a1.PublicKey())
 	time.Sleep(2 * time.Second)
 
-	dialer, err := NewDialer(app, a1, logger.Named("Dialer"))
+	dialer, err := newDialer(app, a1, logger.Named("Dialer"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,13 +138,10 @@ func TestHostDialerHosts(t *testing.T) {
 	// add an account
 	a1 := types.GeneratePrivateKey()
 	app := indexer.App(a1)
-	err := indexer.Store().AddAccount(context.Background(), a1.PublicKey(), accounts.AccountMeta{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	indexer.AddAccount(t, a1.PublicKey())
 	time.Sleep(2 * time.Second)
 
-	dialer, err := NewDialer(app, a1, zap.NewNop())
+	dialer, err := newDialer(app, a1, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}

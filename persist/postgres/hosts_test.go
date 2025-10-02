@@ -16,7 +16,6 @@ import (
 	"go.sia.tech/coreutils/rhp/v4"
 	"go.sia.tech/coreutils/rhp/v4/quic"
 	"go.sia.tech/coreutils/rhp/v4/siamux"
-	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/contracts"
 	"go.sia.tech/indexd/geoip"
 	"go.sia.tech/indexd/hosts"
@@ -26,8 +25,6 @@ import (
 	"go.uber.org/zap/zaptest"
 	"lukechampine.com/frand"
 )
-
-var testNetworks = []string{"1.2.3.4/32"}
 
 func TestAddHostAnnouncement(t *testing.T) {
 	// create database
@@ -105,30 +102,26 @@ func TestHost(t *testing.T) {
 	db.addTestHost(t, hk)
 
 	// update the host
-	networks := []string{"1.2.3.4/32"}
-	err = db.UpdateHost(context.Background(), hk, networks, hs, geoip.Location{}, true, time.Now())
+	err = db.UpdateHost(context.Background(), hk, hs, geoip.Location{}, true, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// assert host is found and address, networks and settings are populated
+	// assert host is found and addresses and settings are populated
 	if h, err := db.Host(context.Background(), hk); err != nil {
 		t.Fatal(err)
 	} else if !reflect.DeepEqual(h.Settings, hs) {
 		t.Fatal("expected settings to match", h.Settings)
 	} else if len(h.Addresses) != 1 {
 		t.Fatal("unexpected", len(h.Addresses))
-	} else if len(h.Networks) != 1 {
-		t.Fatal("unexpected networks", h.Networks)
 	} else if h.LostSectors != 0 {
 		t.Fatal("expected lost sectors to be 0, got", h.LostSectors)
 	}
 
 	// pin a sector and mark it as lost
 	r1 := types.Hash256{1}
-	if err := db.AddAccount(context.Background(), hk, accounts.AccountMeta{}); err != nil {
-		t.Fatal(err)
-	} else if _, err := db.PinSlab(context.Background(), proto4.Account(hk), time.Now(), slabs.SlabPinParams{
+	db.addTestAccount(t, hk)
+	if _, err := db.PinSlab(context.Background(), proto4.Account(hk), time.Now(), slabs.SlabPinParams{
 		EncryptionKey: [32]byte{},
 		MinShards:     1,
 		Sectors:       []slabs.PinnedSector{{Root: r1, HostKey: hk}},
@@ -222,7 +215,7 @@ func TestHostChecks(t *testing.T) {
 	}
 
 	// update host with settings that fail all checks
-	err := db.UpdateHost(context.Background(), hk, testNetworks, proto4.HostSettings{
+	err := db.UpdateHost(context.Background(), hk, proto4.HostSettings{
 		Release:             "test",
 		ProtocolVersion:     proto4.ProtocolVersion{0, 0, 0},
 		AcceptingContracts:  false,
@@ -247,7 +240,7 @@ func TestHostChecks(t *testing.T) {
 	}
 
 	// fail scan to ensure we fail on uptime
-	err = db.UpdateHost(context.Background(), hk, nil, proto4.HostSettings{}, geoip.Location{}, false, time.Now())
+	err = db.UpdateHost(context.Background(), hk, proto4.HostSettings{}, geoip.Location{}, false, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,58 +267,58 @@ func TestHostChecks(t *testing.T) {
 
 	// adjust max duration so we pass the check
 	hs.MaxContractDuration = settingPeriod
-	_ = db.UpdateHost(context.Background(), hk, testNetworks, hs, geoip.Location{}, true, time.Now())
+	_ = db.UpdateHost(context.Background(), hk, hs, geoip.Location{}, true, time.Now())
 	assertCheckOK("MaxContractDuration")
 
 	// adjust max collateral so we pass the check
 	hs.MaxCollateral = hs.Prices.Collateral.Mul64(oneTB).Mul64(settingPeriod)
-	_ = db.UpdateHost(context.Background(), hk, testNetworks, hs, geoip.Location{}, true, time.Now())
+	_ = db.UpdateHost(context.Background(), hk, hs, geoip.Location{}, true, time.Now())
 	assertCheckOK("MaxCollateral")
 
 	// adjust protocol to pass the check
 	hs.ProtocolVersion = rhp.ProtocolVersion400
-	_ = db.UpdateHost(context.Background(), hk, testNetworks, hs, geoip.Location{}, true, time.Now())
+	_ = db.UpdateHost(context.Background(), hk, hs, geoip.Location{}, true, time.Now())
 	assertCheckOK("ProtocolVersion")
 
 	// adjust price validity so we pass the check
 	hs.Prices.ValidUntil = time.Now().Add(time.Second * 1801)
-	_ = db.UpdateHost(context.Background(), hk, testNetworks, hs, geoip.Location{}, true, time.Now())
+	_ = db.UpdateHost(context.Background(), hk, hs, geoip.Location{}, true, time.Now())
 	assertCheckOK("PriceValidity")
 
 	// adjust accepting contracts so we pass the check
 	hs.AcceptingContracts = true
-	_ = db.UpdateHost(context.Background(), hk, testNetworks, hs, geoip.Location{}, true, time.Now())
+	_ = db.UpdateHost(context.Background(), hk, hs, geoip.Location{}, true, time.Now())
 	assertCheckOK("AcceptingContracts")
 
 	// adjust contract price so we pass the check
 	hs.Prices.ContractPrice = oneSC.Sub(oneH)
-	_ = db.UpdateHost(context.Background(), hk, testNetworks, hs, geoip.Location{}, true, time.Now())
+	_ = db.UpdateHost(context.Background(), hk, hs, geoip.Location{}, true, time.Now())
 	assertCheckOK("ContractPrice")
 
 	// adjust collateral so we pass the check
 	hs.Prices.Collateral = hs.Prices.StoragePrice.Mul64(2)
 	hs.MaxCollateral = hs.Prices.Collateral.Mul64(oneTB).Mul64(settingPeriod)
-	_ = db.UpdateHost(context.Background(), hk, testNetworks, hs, geoip.Location{}, true, time.Now())
+	_ = db.UpdateHost(context.Background(), hk, hs, geoip.Location{}, true, time.Now())
 	assertCheckOK("Collateral")
 
 	// adjust storage price so we pass the check
 	hs.Prices.StoragePrice = settingMaxStoragePrice
-	_ = db.UpdateHost(context.Background(), hk, testNetworks, hs, geoip.Location{}, true, time.Now())
+	_ = db.UpdateHost(context.Background(), hk, hs, geoip.Location{}, true, time.Now())
 	assertCheckOK("StoragePrice")
 
 	// adjust egress price so we pass the check
 	hs.Prices.EgressPrice = settingMaxEgressPrice
-	_ = db.UpdateHost(context.Background(), hk, testNetworks, hs, geoip.Location{}, true, time.Now())
+	_ = db.UpdateHost(context.Background(), hk, hs, geoip.Location{}, true, time.Now())
 	assertCheckOK("EgressPrice")
 
 	// adjust ingress price so we pass the check
 	hs.Prices.IngressPrice = settingMaxIngressPrice
-	_ = db.UpdateHost(context.Background(), hk, testNetworks, hs, geoip.Location{}, true, time.Now())
+	_ = db.UpdateHost(context.Background(), hk, hs, geoip.Location{}, true, time.Now())
 	assertCheckOK("IngressPrice")
 
 	// adjust free sector price so we pass the check
 	hs.Prices.FreeSectorPrice = oneSC.Div64(sectorsPerTB)
-	_ = db.UpdateHost(context.Background(), hk, testNetworks, hs, geoip.Location{}, true, time.Now())
+	_ = db.UpdateHost(context.Background(), hk, hs, geoip.Location{}, true, time.Now())
 	assertCheckOK("FreeSectorPrice")
 
 	// assert host is usable
@@ -405,11 +398,11 @@ func TestHosts(t *testing.T) {
 		if !usable {
 			settings.AcceptingContracts = false
 		}
-		err := db.UpdateHost(context.Background(), hk, []string{"127.0.0.1/24"}, settings, geoip.Location{}, false, time.Now().Add(time.Hour))
+		err := db.UpdateHost(context.Background(), hk, settings, geoip.Location{}, false, time.Now().Add(time.Hour))
 		if err != nil {
 			t.Fatal(err)
 		}
-		err = db.UpdateHost(context.Background(), hk, []string{"127.0.0.1/24"}, settings, geoip.Location{}, true, time.Now().Add(time.Hour))
+		err = db.UpdateHost(context.Background(), hk, settings, geoip.Location{}, true, time.Now().Add(time.Hour))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -460,8 +453,6 @@ func TestHosts(t *testing.T) {
 				t.Fatal("host should have uptime")
 			} else if host.Addresses == nil {
 				t.Fatal("host should have an address")
-			} else if host.Networks == nil {
-				t.Fatal("host should have a network")
 			}
 
 			blocked := false
@@ -576,7 +567,7 @@ func TestUsableHosts(t *testing.T) {
 		if !usable {
 			settings.AcceptingContracts = false
 		}
-		if err := db.UpdateHost(context.Background(), hk, []string{"127.0.0.1/24"}, settings, loc, true, time.Now().Add(time.Hour)); err != nil {
+		if err := db.UpdateHost(context.Background(), hk, settings, loc, true, time.Now().Add(time.Hour)); err != nil {
 			t.Fatal(err)
 		}
 
@@ -769,7 +760,7 @@ func TestHostsForScanning(t *testing.T) {
 
 	// simulate scanning h1 successfully
 	nextScan := time.Now().Round(time.Microsecond).Add(time.Minute)
-	err = db.UpdateHost(context.Background(), hk1, testNetworks, proto4.HostSettings{}, geoip.Location{}, true, nextScan)
+	err = db.UpdateHost(context.Background(), hk1, proto4.HostSettings{}, geoip.Location{}, true, nextScan)
 	if err != nil {
 		t.Fatal("unexpected", err)
 	}
@@ -785,7 +776,7 @@ func TestHostsForScanning(t *testing.T) {
 	}
 
 	// simulate scanning h2 successfully
-	err = db.UpdateHost(context.Background(), hk2, testNetworks, proto4.HostSettings{}, geoip.Location{}, true, nextScan)
+	err = db.UpdateHost(context.Background(), hk2, proto4.HostSettings{}, geoip.Location{}, true, nextScan)
 	if err != nil {
 		t.Fatal("unexpected", err)
 	}
@@ -806,9 +797,7 @@ func TestHostsWithLostSectors(t *testing.T) {
 
 	// add account
 	account := proto4.Account{1}
-	if err := db.AddAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
-		t.Fatal("failed to add account:", err)
-	}
+	db.addTestAccount(t, types.PublicKey(account))
 
 	// add two hosts
 	hk1 := db.addTestHost(t)
@@ -897,9 +886,7 @@ func TestHostsWithUnpinnableSectors(t *testing.T) {
 
 	// add account
 	account := proto4.Account{1}
-	if err := db.AddAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
-		t.Fatal("failed to add account:", err)
-	}
+	db.addTestAccount(t, types.PublicKey(account))
 
 	// add hosts
 
@@ -971,14 +958,14 @@ func TestHostsRecentUptime(t *testing.T) {
 		if up {
 			for range n {
 				_, err1 := db.pool.Exec(context.Background(), `UPDATE hosts SET last_failed_scan = '0001-01-01 00:00:00+00'::timestamptz, last_successful_scan = NOW() - INTERVAL '24 hours'`)
-				if err := errors.Join(err1, db.UpdateHost(context.Background(), hk, testNetworks, newTestHostSettings(hk), geoip.Location{}, true, time.Time{})); err != nil {
+				if err := errors.Join(err1, db.UpdateHost(context.Background(), hk, newTestHostSettings(hk), geoip.Location{}, true, time.Time{})); err != nil {
 					t.Fatal(err)
 				}
 			}
 		} else {
 			for range n {
 				_, err1 := db.pool.Exec(context.Background(), `UPDATE hosts SET last_successful_scan = '0001-01-01 00:00:00+00'::timestamptz, last_failed_scan = NOW() - INTERVAL '24 hours'`)
-				if err := errors.Join(err1, db.UpdateHost(context.Background(), hk, testNetworks, proto4.HostSettings{}, geoip.Location{}, false, time.Time{})); err != nil {
+				if err := errors.Join(err1, db.UpdateHost(context.Background(), hk, proto4.HostSettings{}, geoip.Location{}, false, time.Time{})); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -1082,7 +1069,7 @@ func TestPruneHosts(t *testing.T) {
 	}
 
 	// simulate failed scan for h1
-	err = db.UpdateHost(context.Background(), h1, nil, proto4.HostSettings{}, geoip.Location{}, false, time.Now())
+	err = db.UpdateHost(context.Background(), h1, proto4.HostSettings{}, geoip.Location{}, false, time.Now())
 	if err != nil {
 		t.Fatal("unexpected", err)
 	}
@@ -1098,7 +1085,7 @@ func TestPruneHosts(t *testing.T) {
 	}
 
 	// simulate failed scan for h2
-	err = db.UpdateHost(context.Background(), h2, nil, proto4.HostSettings{}, geoip.Location{}, false, time.Now())
+	err = db.UpdateHost(context.Background(), h2, proto4.HostSettings{}, geoip.Location{}, false, time.Now())
 	if err != nil {
 		t.Fatal("unexpected", err)
 	}
@@ -1115,10 +1102,10 @@ func TestPruneHosts(t *testing.T) {
 	h1 = db.addTestHost(t)
 	h2 = db.addTestHost(t)
 	err = errors.Join(
-		db.UpdateHost(context.Background(), h1, testNetworks, proto4.HostSettings{}, geoip.Location{}, true, time.Now()),
-		db.UpdateHost(context.Background(), h1, testNetworks, proto4.HostSettings{}, geoip.Location{}, false, time.Now()),
-		db.UpdateHost(context.Background(), h2, testNetworks, proto4.HostSettings{}, geoip.Location{}, true, time.Now()),
-		db.UpdateHost(context.Background(), h2, testNetworks, proto4.HostSettings{}, geoip.Location{}, false, time.Now()),
+		db.UpdateHost(context.Background(), h1, proto4.HostSettings{}, geoip.Location{}, true, time.Now()),
+		db.UpdateHost(context.Background(), h1, proto4.HostSettings{}, geoip.Location{}, false, time.Now()),
+		db.UpdateHost(context.Background(), h2, proto4.HostSettings{}, geoip.Location{}, true, time.Now()),
+		db.UpdateHost(context.Background(), h2, proto4.HostSettings{}, geoip.Location{}, false, time.Now()),
 	)
 	if err != nil {
 		t.Fatal("unexpected", err)
@@ -1166,7 +1153,7 @@ func TestUpdateHost(t *testing.T) {
 
 	// assert [hosts.ErrNotFound] is returned
 	hk := types.GeneratePrivateKey().PublicKey()
-	err := db.UpdateHost(context.Background(), hk, nil, proto4.HostSettings{}, geoip.Location{}, false, time.Now())
+	err := db.UpdateHost(context.Background(), hk, proto4.HostSettings{}, geoip.Location{}, false, time.Now())
 	if !errors.Is(err, hosts.ErrNotFound) {
 		t.Fatal("expected [hosts.ErrNotFound], got", err)
 	}
@@ -1176,7 +1163,7 @@ func TestUpdateHost(t *testing.T) {
 
 	// assert host settings are not inserted if the scan failed
 	hs := newTestHostSettings(hk)
-	err = db.UpdateHost(context.Background(), hk, nil, hs, geoip.Location{}, false, time.Now())
+	err = db.UpdateHost(context.Background(), hk, hs, geoip.Location{}, false, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	} else if h, err := db.Host(context.Background(), hk); err != nil {
@@ -1190,7 +1177,7 @@ func TestUpdateHost(t *testing.T) {
 	}
 
 	// assert consecutive failed scans are incremented
-	err = db.UpdateHost(context.Background(), hk, nil, hs, geoip.Location{}, false, time.Now())
+	err = db.UpdateHost(context.Background(), hk, hs, geoip.Location{}, false, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	} else if h, err := db.Host(context.Background(), hk); err != nil {
@@ -1201,7 +1188,6 @@ func TestUpdateHost(t *testing.T) {
 
 	now := time.Now().Round(time.Minute)
 	nextScan := now.Add(time.Hour)
-	networks := []string{"1.2.3.4/32"}
 
 	location := geoip.Location{
 		CountryCode: "US",
@@ -1209,7 +1195,7 @@ func TestUpdateHost(t *testing.T) {
 		Longitude:   -20,
 	}
 	// assert host is properly updated on successful scan
-	err = db.UpdateHost(context.Background(), hk, networks, hs, location, true, nextScan)
+	err = db.UpdateHost(context.Background(), hk, hs, location, true, nextScan)
 	if err != nil {
 		t.Fatal(err)
 	} else if h, err := db.Host(context.Background(), hk); err != nil {
@@ -1224,10 +1210,6 @@ func TestUpdateHost(t *testing.T) {
 		t.Fatal("unexpected next scan", h.NextScan)
 	} else if h.RecentUptime == 0.895 {
 		t.Fatal("expected recent uptime to be updated")
-	} else if len(h.Networks) != 1 {
-		t.Fatal("unexpected networks", h.Networks)
-	} else if h.Networks[0] != networks[0] {
-		t.Fatal("unexpected network", h.Networks)
 	} else if h.CountryCode != location.CountryCode {
 		t.Fatal("unexpected country code", h.CountryCode)
 	} else if h.Latitude != location.Latitude {
@@ -1236,36 +1218,13 @@ func TestUpdateHost(t *testing.T) {
 		t.Fatal("unexpected Longitude", h.Longitude)
 	}
 
-	// assert networks are overwritten
-	networks = []string{"4.3.2.1/32"}
-	err = db.UpdateHost(context.Background(), hk, networks, hs, location, true, nextScan)
+	// assert updating with a failed scan doesn't affect the host's location or
+	// country code
+	err = db.UpdateHost(context.Background(), hk, hs, geoip.Location{}, false, nextScan)
 	if err != nil {
 		t.Fatal(err)
 	} else if h, err := db.Host(context.Background(), hk); err != nil {
 		t.Fatal(err)
-	} else if len(h.Networks) != 1 {
-		t.Fatal("unexpected networks", h.Networks)
-	} else if h.Networks[0] != networks[0] {
-		t.Fatal("unexpected network", h.Networks)
-	}
-
-	// assert successful scan needs networks
-	err = db.UpdateHost(context.Background(), hk, nil, hs, location, true, nextScan)
-	if !errors.Is(err, hosts.ErrNoNetworks) {
-		t.Fatalf("expected hosts.ErrNoNetworks, got %v", err)
-	}
-
-	// assert updating with a failed scan doesn't affect the host's networks
-	// or geolocation
-	err = db.UpdateHost(context.Background(), hk, []string{"9.9.9.9"}, hs, geoip.Location{}, false, nextScan)
-	if err != nil {
-		t.Fatal(err)
-	} else if h, err := db.Host(context.Background(), hk); err != nil {
-		t.Fatal(err)
-	} else if len(h.Networks) != 1 {
-		t.Fatal("unexpected networks", h.Networks)
-	} else if h.Networks[0] != networks[0] {
-		t.Fatal("unexpected network", h.Networks)
 	} else if h.CountryCode != location.CountryCode {
 		t.Fatal("unexpected country code", h.CountryCode)
 	} else if h.Latitude != location.Latitude {
@@ -1274,15 +1233,13 @@ func TestUpdateHost(t *testing.T) {
 		t.Fatal("unexpected Longitude", h.Longitude)
 	}
 
-	// assert updating with an empty location doesn't affect the host's
-	// geolocation
-	err = db.UpdateHost(context.Background(), hk, networks, hs, geoip.Location{}, true, nextScan)
+	// assert updating with a null location doesn't affect the host's location
+	// or country code
+	err = db.UpdateHost(context.Background(), hk, hs, geoip.Location{}, true, nextScan)
 	if err != nil {
 		t.Fatal(err)
 	} else if h, err := db.Host(context.Background(), hk); err != nil {
 		t.Fatal(err)
-	} else if len(h.Networks) != 1 {
-		t.Fatal("unexpected networks", h.Networks)
 	} else if h.CountryCode != location.CountryCode {
 		t.Fatal("unexpected country code", h.CountryCode)
 	} else if h.Latitude != location.Latitude {
@@ -1304,14 +1261,9 @@ func BenchmarkHosts(b *testing.B) {
 	// define parameters
 	const (
 		numHosts     = 10_000
-		numBlocklist = 1000
+		numBlocklist = 1_000
+		numContracts = 25 // ~40% is active
 	)
-
-	// prepare test variables
-	networks := []string{
-		"1.2.3.4/32",
-		"2.3.4.5/32",
-	}
 
 	// prepare database
 	hosts := make([]types.PublicKey, numHosts)
@@ -1320,7 +1272,12 @@ func BenchmarkHosts(b *testing.B) {
 		for i := range numHosts {
 			var hostID int64
 			hk := types.GeneratePrivateKey().PublicKey()
-			err := tx.QueryRow(context.Background(), `INSERT INTO hosts (public_key, last_announcement) VALUES ($1, NOW()) RETURNING id;`, sqlPublicKey(hk)).Scan(&hostID)
+			err := tx.QueryRow(context.Background(), `INSERT INTO hosts (public_key, lost_sectors, usage_account_funding, usage_total_spent, last_announcement) VALUES ($1, $2, $3, $4, NOW()) RETURNING id;`,
+				sqlPublicKey(hk),
+				frand.Uint64n(1e3), // random lost sectors
+				sqlCurrency(types.NewCurrency64(frand.Uint64n(1e6))), // random account funding
+				sqlCurrency(types.NewCurrency64(frand.Uint64n(1e6))), // random total spent
+			).Scan(&hostID)
 			if err != nil {
 				return err
 			}
@@ -1332,9 +1289,8 @@ func BenchmarkHosts(b *testing.B) {
 				return fmt.Errorf("failed to insert host address: %w", err)
 			}
 
-			_, err = tx.Exec(ctx, `INSERT INTO host_resolved_cidrs (host_id, cidr) VALUES ($1, $2), ($1, $3)`, hostID, networks[0], networks[1])
-			if err != nil {
-				return err
+			for range numContracts {
+				insertRandomContract(b, tx, hostID, hk)
 			}
 		}
 
@@ -1347,6 +1303,13 @@ func BenchmarkHosts(b *testing.B) {
 		}
 		return nil
 	}); err != nil {
+		b.Fatal(err)
+	}
+
+	// analyze tables to ensure query planner has up-to-date statistics
+	if _, err := store.pool.Exec(b.Context(), `VACUUM (ANALYZE) hosts;`); err != nil {
+		b.Fatal(err)
+	} else if _, err := store.pool.Exec(b.Context(), `VACUUM (ANALYZE) contracts;`); err != nil {
 		b.Fatal(err)
 	}
 
@@ -1370,6 +1333,20 @@ func BenchmarkHosts(b *testing.B) {
 					b.Fatal(err)
 				} else if len(hosts) != limit {
 					b.Fatalf("expected %d hosts, got %d", limit, len(hosts)) // sanity check
+				}
+			}
+		})
+	}
+
+	for _, limit := range []int{100, 500} {
+		b.Run(fmt.Sprintf("HostStats_%d", limit), func(b *testing.B) {
+			for b.Loop() {
+				offset := frand.Intn(numHosts - limit)
+				stats, err := store.HostStats(context.Background(), offset, limit)
+				if err != nil {
+					b.Fatal(err)
+				} else if len(stats) != limit {
+					b.Fatalf("expected %d host stats, got %d", limit, len(stats)) // sanity check
 				}
 			}
 		})
@@ -1402,7 +1379,7 @@ func BenchmarkHosts(b *testing.B) {
 		for b.Loop() {
 			hk := hosts[i%numHosts]
 			succeeded := frand.Intn(2) == 0
-			err := store.UpdateHost(context.Background(), hk, networks, hs, geoip.Location{}, succeeded, ts)
+			err := store.UpdateHost(context.Background(), hk, hs, geoip.Location{}, succeeded, ts)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -1452,11 +1429,6 @@ func BenchmarkUsableHosts(b *testing.B) {
 	randomProtocol := func() chain.Protocol {
 		protocols := []chain.Protocol{siamux.Protocol, quic.Protocol}
 		return protocols[frand.Intn(len(protocols))]
-	}
-
-	randomTime := func() time.Time {
-		maxOneHour := time.Duration(frand.Uint64n(60*60)) * time.Second
-		return time.Now().Add(-30 * time.Minute).Add(maxOneHour)
 	}
 
 	// define parameters
@@ -1545,36 +1517,8 @@ func BenchmarkUsableHosts(b *testing.B) {
 				return fmt.Errorf("failed to insert host address: %w", err)
 			}
 
-			// add CIDRs
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO host_resolved_cidrs (host_id, cidr) 
-				VALUES ($1, $2), ($1, $3)`, hostID, "1.2.3.4/32", "2.3.4.5/32"); err != nil {
-				return err
-			}
-
 			// add contract
-			revision := newTestRevision(hk)
-			revision.Filesize = frand.Uint64n(1e9)                                                            // random size
-			revision.Capacity = revision.Filesize + frand.Uint64n(1e3)                                        // random capacity
-			revision.RenterOutput.Value = types.Siacoins(100).Add(types.Siacoins(uint32(frand.Uint64n(100)))) // random allowance
-			if _, err := tx.Exec(ctx, `INSERT INTO contracts (host_id, contract_id, raw_revision, proof_height, expiration_height, contract_price, initial_allowance, miner_fee, total_collateral, remaining_allowance, state, good, size, capacity, last_broadcast_attempt, next_prune) VALUES ($1, $2, $3, 0, 0, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);`,
-				hostID,
-				sqlHash256(types.FileContractID(hk)),
-				sqlFileContract(revision),
-				sqlCurrency(types.ZeroCurrency),
-				sqlCurrency(types.ZeroCurrency),
-				sqlCurrency(types.ZeroCurrency),
-				sqlCurrency(revision.RemainingAllowance().Add(types.Siacoins(1))), // 1SC more than initial allowance
-				sqlCurrency(revision.RemainingAllowance()),
-				sqlContractState(uint8(frand.Uint64n(5))), // random contract state (40% active)
-				frand.Uint64n(2) == 0,                     // random good state (50% good)
-				revision.Filesize,
-				revision.Capacity,
-				randomTime(), // random last_broadcast_attempt
-				randomTime(), // random next_prune
-			); err != nil {
-				return err
-			}
+			insertRandomContract(b, tx, hostID, hk)
 		}
 		return nil
 	}); err != nil {
@@ -1669,9 +1613,7 @@ func TestHostsForPinning(t *testing.T) {
 
 	// add account
 	acc := proto4.Account{1}
-	if err := db.AddAccount(context.Background(), types.PublicKey(acc), accounts.AccountMeta{}); err != nil {
-		t.Fatal(err)
-	}
+	db.addTestAccount(t, types.PublicKey(acc))
 
 	// pin a slab with sector on both hosts
 	r1 := frand.Entropy256()
@@ -1752,9 +1694,7 @@ func TestHostsForPruning(t *testing.T) {
 
 	// add account
 	acc := proto4.Account{1}
-	if err := db.AddAccount(context.Background(), types.PublicKey(acc), accounts.AccountMeta{}); err != nil {
-		t.Fatal(err)
-	}
+	db.addTestAccount(t, types.PublicKey(acc))
 
 	// add contract for both hosts
 	fcid1 := db.addTestContract(t, hk1)
@@ -1810,9 +1750,7 @@ func BenchmarkHostsForPruning(b *testing.B) {
 
 	// add account
 	account := proto4.Account{1}
-	if err := store.AddAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
-		b.Fatal("failed to add account:", err)
-	}
+	store.addTestAccount(b, types.PublicKey(account))
 
 	const (
 		nHosts            = 1000
@@ -1820,13 +1758,7 @@ func BenchmarkHostsForPruning(b *testing.B) {
 		nBlocklistHosts   = 1000
 	)
 
-	randomTime := func() time.Time {
-		maxOneHour := time.Duration(frand.Uint64n(60*60)) * time.Second
-		return time.Now().Add(-30 * time.Minute).Add(maxOneHour)
-	}
-
 	// prepare database
-	hostToContractID := make(map[types.PublicKey]types.FileContractID, nHosts)
 	if err := store.transaction(context.Background(), func(ctx context.Context, tx *txn) error {
 		for range nHosts {
 			// add host
@@ -1838,27 +1770,9 @@ func BenchmarkHostsForPruning(b *testing.B) {
 			}
 
 			// add contracts
-			var fcid types.FileContractID
 			for range nContractsPerHost {
-				frand.Read(fcid[:])
-				if _, err := tx.Exec(ctx, `INSERT INTO contracts (host_id, contract_id, raw_revision, proof_height, expiration_height, contract_price, initial_allowance, miner_fee, total_collateral, remaining_allowance, state, good, next_prune) VALUES ($1, $2, $3, 0, 0, $4, $5, $6, $7, $8, $9, $10, $11);`,
-					hostID,
-					sqlHash256(fcid[:]),
-					sqlFileContract(newTestRevision(hk)),
-					sqlCurrency(types.ZeroCurrency),
-					sqlCurrency(types.ZeroCurrency),
-					sqlCurrency(types.ZeroCurrency),
-					sqlCurrency(types.ZeroCurrency),
-					sqlCurrency(types.ZeroCurrency),
-					sqlContractState(uint8(frand.Uint64n(5))), // random contract state (40% active)
-					frand.Uint64n(2) == 0,                     // random good state (50% good)
-					randomTime(),                              // random next prune time
-
-				); err != nil {
-					return err
-				}
+				insertRandomContract(b, tx, hostID, hk)
 			}
-			hostToContractID[hk] = fcid
 		}
 
 		// we LEFT JOIN the blocklist so we populate it with random entries
@@ -1895,9 +1809,7 @@ func TestHostsForIntegrityChecks(t *testing.T) {
 
 	// add account
 	acc := proto4.Account{1}
-	if err := db.AddAccount(context.Background(), types.PublicKey(acc), accounts.AccountMeta{}); err != nil {
-		t.Fatal(err)
-	}
+	db.addTestAccount(t, types.PublicKey(acc))
 
 	// helper to pin sector with a given checkTime
 	pinSector := func(hk types.PublicKey, root types.Hash256, nextCheck time.Time) {
@@ -1993,9 +1905,7 @@ func BenchmarkHostsForPinning(b *testing.B) {
 
 	// add account
 	account := proto4.Account{1}
-	if err := store.AddAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
-		b.Fatal("failed to add account:", err)
-	}
+	store.addTestAccount(b, types.PublicKey(account))
 
 	const (
 		dbBaseSize = 1 << 40 // 1TiB of sectors
@@ -2007,7 +1917,7 @@ func BenchmarkHostsForPinning(b *testing.B) {
 	)
 
 	// prepare database
-	hostToContractID := make(map[types.PublicKey]types.FileContractID, nHosts)
+	hostToContractIDs := make(map[types.PublicKey][]types.FileContractID, nHosts)
 	if err := store.transaction(context.Background(), func(ctx context.Context, tx *txn) error {
 		for range nHosts {
 			// add host
@@ -2019,28 +1929,9 @@ func BenchmarkHostsForPinning(b *testing.B) {
 			}
 
 			// add contracts
-			var fcid types.FileContractID
 			for range nContractsPerHost {
-				frand.Read(fcid[:])
-				size := frand.Uint64n(1e9)
-				if _, err := tx.Exec(ctx, `INSERT INTO contracts (host_id, contract_id, raw_revision, proof_height, expiration_height, contract_price, initial_allowance, miner_fee, total_collateral, remaining_allowance, state, good, size, capacity) VALUES ($1, $2, $3, 0, 0, $4, $5, $6, $7, $8, $9, $10, $11, $12);`,
-					hostID,
-					sqlHash256(fcid[:]),
-					sqlFileContract(newTestRevision(hk)),
-					sqlCurrency(types.ZeroCurrency),
-					sqlCurrency(types.ZeroCurrency),
-					sqlCurrency(types.ZeroCurrency),
-					sqlCurrency(types.ZeroCurrency),
-					sqlCurrency(types.NewCurrency64(frand.Uint64n(5))), // random remaining allowance
-					sqlContractState(uint8(frand.Uint64n(5))),          // random contract state (40% active)
-					frand.Uint64n(2) == 0,                              // random good state (50% good)
-					size,                                               // random size
-					size+frand.Uint64n(1e3),                            // random capacity
-				); err != nil {
-					return err
-				}
+				hostToContractIDs[hk] = append(hostToContractIDs[hk], insertRandomContract(b, tx, hostID, hk))
 			}
-			hostToContractID[hk] = fcid
 		}
 
 		// we LEFT JOIN the blocklist so we populate it with random entries
@@ -2057,8 +1948,12 @@ func BenchmarkHostsForPinning(b *testing.B) {
 	}
 
 	// add sectors
-	for hk, fcid := range hostToContractID {
+	for hk, fcids := range hostToContractIDs {
+		var idx int
 		for remainingSectors := nSectorsPerHost; remainingSectors > 0; {
+			fcid := fcids[idx%len(fcids)]
+			idx++
+
 			batchSize := min(remainingSectors, 10000)
 			remainingSectors -= batchSize
 			var sectors []slabs.PinnedSector
@@ -2102,9 +1997,7 @@ func BenchmarkHostsForIntegrityCheck(b *testing.B) {
 	store := initPostgres(b, zap.NewNop())
 	account := proto4.Account{1}
 
-	if err := store.AddAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
-		b.Fatal("failed to add account:", err)
-	}
+	store.addTestAccount(b, types.PublicKey(account))
 
 	const (
 		nHosts          = 10000
@@ -2165,9 +2058,7 @@ func BenchmarkHostsWithLostSectors(b *testing.B) {
 	store := initPostgres(b, zap.NewNop())
 	account := proto4.Account{1}
 
-	if err := store.AddAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
-		b.Fatal("failed to add account:", err)
-	}
+	store.addTestAccount(b, types.PublicKey(account))
 
 	const (
 		nHosts          = 10000
@@ -2221,9 +2112,7 @@ func BenchmarkHostsWithUnpinnableSectors(b *testing.B) {
 	store := initPostgres(b, zap.NewNop())
 	account := proto4.Account{1}
 
-	if err := store.AddAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
-		b.Fatal("failed to add account:", err)
-	}
+	store.addTestAccount(b, types.PublicKey(account))
 
 	const (
 		nHosts          = 1000

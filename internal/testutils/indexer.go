@@ -153,7 +153,7 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger, opts ...Indexer
 		t.Fatalf("failed to create contract manager: %v", err)
 	}
 
-	slabs, err := slabs.NewManager(am, hm, store, dialer, alerts.NewManager(), keys.DeriveKey(walletKey, "migration"), keys.DeriveKey(walletKey, "integrity"), cfg.slabOpts...)
+	slabs, err := slabs.NewManager(am, hm, store, dialer, alerts.NewManager(), keys.DerivePrivateKey(walletKey, "migration"), keys.DerivePrivateKey(walletKey, "integrity"), cfg.slabOpts...)
 	if err != nil {
 		t.Fatalf("failed to create slab manager: %v", err)
 	}
@@ -312,6 +312,30 @@ func (idx *Indexer) Tip() (types.ChainIndex, error) {
 // WalletAddr returns the address of the wallet.
 func (idx *Indexer) WalletAddr() types.Address {
 	return idx.wallet.Address()
+}
+
+// AddAccount creates a test app connect key if it does not already exist and
+// creates an account using it.
+func (idx *Indexer) AddAccount(t testing.TB, ak types.PublicKey) {
+	store := idx.Store()
+
+	const connectKey = "test"
+	if _, err := store.ValidAppConnectKey(t.Context(), connectKey); errors.Is(err, accounts.ErrKeyNotFound) {
+		_, err := store.AddAppConnectKey(t.Context(), accounts.UpdateAppConnectKey{
+			Key:           connectKey,
+			MaxPinnedData: 1e10,
+			RemainingUses: 10000,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.UseAppConnectKey(t.Context(), connectKey, ak, accounts.AccountMeta{}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // closeWithTimeout is a helper which closes a resource and panics if it takes
