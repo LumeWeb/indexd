@@ -1488,7 +1488,6 @@ func BenchmarkContracts(b *testing.B) {
 		maxOneHour := time.Duration(frand.Uint64n(60*60)) * time.Second
 		return time.Now().Add(-30 * time.Minute).Add(maxOneHour)
 	}
-	_ = randomTime
 
 	// prepare database
 	store := initPostgres(b, zap.NewNop())

@@ -334,7 +334,6 @@ CREATE INDEX contracts_capacity_size_contract_id_idx ON contracts (host_id, (cap
 			CREATE INDEX contracts_host_id_inactive_bad_idx ON contracts (host_id) WHERE state IN (2,3,4) AND NOT good;
 			CREATE INDEX contracts_last_broadcast_attempt_active_idx ON contracts (last_broadcast_attempt ASC, contract_id) WHERE state IN (0,1) AND renewed_to IS NULL;
 			CREATE INDEX contracts_host_id_remaining_allowance_active_idx ON contracts (host_id, remaining_allowance DESC, contract_id) WHERE state IN (0,1) AND renewed_to IS NULL AND good AND remaining_allowance > 0;
-			CREATE INDEX contracts_capacity_size_contract_id_idx ON contracts (host_id, (capacity - size) DESC, size, contract_id) WHERE state IN (0,1) AND renewed_to IS NULL AND good AND remaining_allowance > 0;
 			CREATE INDEX contracts_size_contract_id_idx ON contracts (host_id, size DESC, contract_id) INCLUDE(next_prune) WHERE state IN (0,1) AND renewed_to IS NULL AND good AND remaining_allowance > 0;
 			CREATE INDEX contracts_formation_pending_idx ON contracts(formation) WHERE state = 0;
 		`); err != nil {

@@ -320,7 +320,7 @@ LIMIT $2
 func (s *Store) ContractsForPinning(ctx context.Context, hk types.PublicKey, maxContractSize uint64) ([]types.FileContractID, error) {
 	var fcids []types.FileContractID
 	err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
-		// covered by index contracts_capacity_size_contract_id_idx
+		// covered by index contracts_host_id_active_good_idx
 		rows, err := tx.Query(ctx, `
 SELECT c.contract_id
 FROM contracts c
