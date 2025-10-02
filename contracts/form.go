@@ -82,13 +82,6 @@ func (s *formContractSigner) SignV2Inputs(txn *types.V2Transaction, toSign []int
 	s.w.SignV2Inputs(txn, toSign)
 }
 
-func maxCurrency(a, b types.Currency) types.Currency {
-	if a.Cmp(b) >= 0 {
-		return a
-	}
-	return b
-}
-
 // performContractFormation makes sure that we have at least 'wanted' good
 // contracts with good hosts that are sufficiently spaced apart.
 func (cm *ContractManager) performContractFormation(ctx context.Context, period uint64, wanted int64, log *zap.Logger) error {
