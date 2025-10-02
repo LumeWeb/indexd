@@ -47,7 +47,7 @@ type (
 	// AccountManager defines an interface that allows funding accounts on the
 	// host using a given set of contracts.
 	AccountManager interface {
-		FundTarget() types.Currency
+		FundTarget(ctx context.Context, minAllowance types.Currency) (types.Currency, error)
 		FundAccounts(ctx context.Context, host hosts.Host, contractIDs []types.FileContractID, force bool, log *zap.Logger) error
 	}
 

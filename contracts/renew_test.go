@@ -3,7 +3,6 @@ package contracts
 import (
 	"context"
 	"testing"
-	"time"
 
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
@@ -246,16 +245,14 @@ func TestRenewalAllowance(t *testing.T) {
 	cmMock.state.Index.Height++
 	blockHeight = cmMock.state.Index.Height
 
-	now := time.Now()
 	store.activeAccounts = 1000
 	if err := contracts.performContractRenewals(context.Background(), period, renewWindow, zap.NewNop()); err != nil {
 		t.Fatal(err)
 	}
 
-	activeAccounts, err := store.ActiveAccounts(context.Background(), now.Add(-7*24*time.Hour))
+	allowance, err := amMock.FundTarget(context.Background(), minAllowance)
 	if err != nil {
 		t.Fatal(err)
 	}
-	allowance := amMock.FundTarget().Mul64(activeAccounts)
 	assertRenewal(allowance, dialer.HostClient(good.PublicKey).renewCalls[0])
 }

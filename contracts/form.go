@@ -32,12 +32,6 @@ const (
 	// refreshes due to how long it would take to reasonably upload
 	// that amount of data with a 10 Gbps connection.
 	maxContractGrowthRate = 256 << 30
-
-	// accountActivityThreshold is the threshold for determining whether an
-	// account has been active recently.  An account is considered active if it
-	// has been used within the threshold period.  We multiply the funding per
-	// contract by the number of active accounts.
-	accountActivityThreshold = 24 * 7 * time.Hour
 )
 
 var (
@@ -222,11 +216,10 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 	}
 
 	// scale funding by number of active accounts
-	activeAccounts, err := cm.store.ActiveAccounts(ctx, time.Now().Add(-accountActivityThreshold))
+	target, err := cm.accounts.FundTarget(ctx, minAllowance)
 	if err != nil {
-		return fmt.Errorf("failed to get number of active accounts: %w", err)
+		return fmt.Errorf("failed to get fund target: %w", err)
 	}
-	target := maxCurrency(minAllowance, cm.accounts.FundTarget().Mul64(activeAccounts))
 
 	// randomize the candidate order to avoid preferring any host
 	cm.shuffle(len(candidates), func(i, j int) { candidates[i], candidates[j] = candidates[j], candidates[i] })
