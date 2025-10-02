@@ -206,6 +206,15 @@ func (s *Store) DeleteObject(ctx context.Context, account proto.Account, objectK
 		if err != nil {
 			return fmt.Errorf("failed to delete object: %w", err)
 		}
+
+		_, err = tx.Exec(ctx, `
+			UPDATE object_events SET was_deleted = TRUE, updated_at = NOW()
+			WHERE object_key = $1 AND account_id = $1`,
+			sqlHash256(objectKey), accountID)
+		if err != nil {
+			return fmt.Errorf("failed to update object event: %w", err)
+		}
+
 		return nil
 	})
 }
@@ -227,6 +236,14 @@ func (s *Store) SaveObject(ctx context.Context, account proto.Account, obj slabs
 			sqlHash256(obj.ID()), accountID, obj.EncryptedMasterKey, obj.EncryptedMetadata, sqlSignature(obj.Signature)).Scan(&objectID)
 		if err != nil {
 			return fmt.Errorf("failed to insert object: %w", err)
+		}
+
+		_, err = tx.Exec(ctx, `
+			INSERT INTO object_events (object_key, account_id, was_deleted, updated_at) VALUES ($1, $2, FALSE, NOW())
+			ON CONFLICT (account_id, object_key) DO UPDATE SET (was_deleted, updated_at) = (EXCLUDED.was_deleted, EXCLUDED.updated_at)`,
+			sqlHash256(obj.ID()), accountID)
+		if err != nil {
+			return fmt.Errorf("failed to insert object event: %w", err)
 		}
 
 		// check that this account has pinned these slabs

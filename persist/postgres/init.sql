@@ -300,6 +300,14 @@ CREATE INDEX object_slabs_slab_digest_idx ON object_slabs(slab_digest);
 -- speed up sorting by slab_index
 CREATE INDEX object_slabs_object_id_slab_index_idx ON object_slabs(object_id, slab_index ASC);
 
+CREATE TABLE object_events (
+    object_key BYTEA NOT NULL, -- not a FK since deletions need to hang around
+    account_id BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    was_deleted BOOLEAN NOT NULL, -- true if deleted, false otherwise
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), -- last time the object was created/updated/deleted
+    PRIMARY KEY (object_key, account_id)
+);
+
 CREATE TABLE account_slabs (
     account_id INTEGER REFERENCES accounts(id) NOT NULL, -- account that owns slab
     slab_id BIGSERIAL REFERENCES slabs(id) NOT NULL,
