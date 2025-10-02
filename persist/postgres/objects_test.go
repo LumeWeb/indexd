@@ -14,7 +14,6 @@ import (
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/chain"
 	"go.sia.tech/coreutils/rhp/v4/quic"
-	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/slabs"
 	"go.sia.tech/indexd/subscriber"
 	"go.uber.org/zap"
@@ -27,16 +26,13 @@ func TestObjects(t *testing.T) {
 	// create 2 accounts
 	acc1, acc2 := proto4.Account{1}, proto4.Account{2}
 	for _, acc := range []proto4.Account{acc1, acc2} {
-		err := store.AddAccount(context.Background(), types.PublicKey(acc), accounts.AccountMeta{})
-		if err != nil {
-			t.Fatal(err)
-		}
+		store.addTestAccount(t, types.PublicKey(acc))
 	}
 
 	// pin slab for both accounts
 	slab := slabs.SlabPinParams{MinShards: 1}
 	for _, acc := range []proto4.Account{acc1, acc2} {
-		_, err := store.PinSlab(context.Background(), acc, time.Time{}, slab)
+		_, err := store.PinSlabs(context.Background(), acc, time.Time{}, slab)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -74,12 +70,12 @@ func TestObjects(t *testing.T) {
 
 		var ss []slabs.SlabSlice
 		for _, p := range params {
-			id, err := store.PinSlab(context.Background(), acc, time.Time{}, p)
+			ids, err := store.PinSlabs(context.Background(), acc, time.Time{}, p)
 			if err != nil {
 				t.Fatal(err)
 			}
 			ss = append(ss, slabs.SlabSlice{
-				SlabID: id,
+				SlabID: ids[0],
 				Offset: 10,
 				Length: 120,
 			})
@@ -213,16 +209,11 @@ func TestListObjectsRegression(t *testing.T) {
 
 	// create account
 	acc := proto4.Account{1}
-	err := store.AddAccount(context.Background(), types.PublicKey(acc), accounts.AccountMeta{})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// pin slab for both accounts
+	store.addTestAccount(t, types.PublicKey(acc))
 
 	randomObject := func() slabs.SealedObject {
 		slab := slabs.SlabPinParams{EncryptionKey: frand.Entropy256(), MinShards: 1}
-		_, err = store.PinSlab(context.Background(), acc, time.Time{}, slab)
+		_, err := store.PinSlabs(context.Background(), acc, time.Time{}, slab)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -264,7 +255,7 @@ func TestListObjectsRegression(t *testing.T) {
 	})
 
 	ts := time.Now().Round(time.Second)
-	_, err = store.pool.Exec(context.Background(), "UPDATE objects SET updated_at = $1", ts)
+	_, err := store.pool.Exec(context.Background(), "UPDATE objects SET updated_at = $1", ts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,10 +279,7 @@ func TestSharedObjects(t *testing.T) {
 	// create 2 accounts
 	acc1, acc2 := proto4.Account{1}, proto4.Account{2}
 	for _, acc := range []proto4.Account{acc1, acc2} {
-		err := store.AddAccount(context.Background(), types.PublicKey(acc), accounts.AccountMeta{})
-		if err != nil {
-			t.Fatal(err)
-		}
+		store.addTestAccount(t, types.PublicKey(acc))
 	}
 
 	hostKeys := make([]types.PublicKey, 30)
@@ -317,18 +305,18 @@ func TestSharedObjects(t *testing.T) {
 			s.Sectors[i].Root = frand.Entropy256()
 		}
 
-		slabID, err := store.PinSlab(t.Context(), acc1, time.Time{}, s)
+		slabIDs, err := store.PinSlabs(t.Context(), acc1, time.Time{}, s)
 		if err != nil {
 			t.Fatal(err)
 		} else if id, err := s.Digest(); err != nil {
 			t.Fatal(err)
-		} else if id != slabID {
-			t.Fatalf("expected slab ID %v, got %v", id, slabID)
+		} else if id != slabIDs[0] {
+			t.Fatalf("expected slab ID %v, got %v", id, slabIDs[0])
 		}
 
 		so := slabs.SharedSlab{
 			PinnedSlab: slabs.PinnedSlab{
-				ID:            slabID,
+				ID:            slabIDs[0],
 				EncryptionKey: s.EncryptionKey,
 				MinShards:     s.MinShards,
 				Sectors:       make([]slabs.PinnedSector, len(s.Sectors)),
@@ -375,7 +363,7 @@ func TestSharedObjects(t *testing.T) {
 
 	// pin the slabs to the second account
 	for _, slab := range expectedSharedObj.Slabs {
-		_, err := store.PinSlab(t.Context(), acc2, time.Time{}, slabs.SlabPinParams{
+		_, err := store.PinSlabs(t.Context(), acc2, time.Time{}, slabs.SlabPinParams{
 			MinShards: slab.MinShards,
 			Sectors: func() []slabs.PinnedSector {
 				sps := make([]slabs.PinnedSector, len(slab.Sectors))
@@ -401,10 +389,7 @@ func BenchmarkSaveObject(b *testing.B) {
 	// create 2 accounts
 	acc1, acc2 := proto4.Account{1}, proto4.Account{2}
 	for _, acc := range []proto4.Account{acc1, acc2} {
-		err := store.AddAccount(context.Background(), types.PublicKey(acc), accounts.AccountMeta{})
-		if err != nil {
-			b.Fatal(err)
-		}
+		store.addTestAccount(b, types.PublicKey(acc))
 	}
 
 	hostKeys := make([]types.PublicKey, 30)
@@ -431,10 +416,11 @@ func BenchmarkSaveObject(b *testing.B) {
 			s.Sectors[i].Root = frand.Entropy256()
 		}
 
-		slabID, err := store.PinSlab(b.Context(), acc1, time.Time{}, s)
+		slabIDs, err := store.PinSlabs(b.Context(), acc1, time.Time{}, s)
 		if err != nil {
 			b.Fatal(err)
 		}
+		slabID := slabIDs[0]
 
 		id, err := s.Digest()
 		if err != nil {

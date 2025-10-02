@@ -8,7 +8,6 @@ import (
 
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
-	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/internal/testutils"
 	"go.sia.tech/indexd/slabs"
 )
@@ -24,19 +23,13 @@ func TestMigrations(t *testing.T) {
 
 	// add an account
 	a1 := types.GeneratePrivateKey()
-	err := indexer.Store().AddAccount(context.Background(), a1.PublicKey(), accounts.AccountMeta{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	indexer.AddAccount(t, a1.PublicKey())
 
 	// convenience variables
 	app := indexer.App(a1)
 
 	// fetch hosts
 	hosts := testutils.WaitForHosts(t, app, 7)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	// upload sectors to hosts
 	encryptionKey, shards, roots := slabs.NewTestShards(t, 2, 4)
@@ -52,7 +45,7 @@ func TestMigrations(t *testing.T) {
 	}
 
 	// pin the slab
-	slabID, err := app.PinSlab(context.Background(), slabs.SlabPinParams{
+	slabIDs, err := app.PinSlabs(context.Background(), slabs.SlabPinParams{
 		EncryptionKey: encryptionKey,
 		MinShards:     2,
 		Sectors: []slabs.PinnedSector{
@@ -67,6 +60,7 @@ func TestMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	slabID := slabIDs[0]
 
 	// assert sectors were pinned
 	time.Sleep(time.Second)
@@ -108,19 +102,13 @@ func TestUpdateLastUsed(t *testing.T) {
 
 	// add an account
 	a1 := types.GeneratePrivateKey()
-	err := indexer.Store().AddAccount(context.Background(), a1.PublicKey(), accounts.AccountMeta{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	indexer.AddAccount(t, a1.PublicKey())
 
 	// convenience variables
 	app := indexer.App(a1)
 
 	// fetch hosts
 	hosts := testutils.WaitForHosts(t, app, 3)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	// upload sectors to hosts
 	encryptionKey, shards, roots := slabs.NewTestShards(t, 1, 2)
@@ -147,7 +135,7 @@ func TestUpdateLastUsed(t *testing.T) {
 	}
 
 	// pin the slab
-	slabID, err := app.PinSlab(context.Background(), slabs.SlabPinParams{
+	slabIDs, err := app.PinSlabs(context.Background(), slabs.SlabPinParams{
 		EncryptionKey: encryptionKey,
 		MinShards:     1,
 		Sectors: []slabs.PinnedSector{
@@ -159,6 +147,7 @@ func TestUpdateLastUsed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	slabID := slabIDs[0]
 
 	// last used time should be time of PinSlab invocation and thus should be
 	// after `now` timestamp

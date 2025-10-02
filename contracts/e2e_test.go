@@ -9,7 +9,6 @@ import (
 
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
-	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/hosts"
 	"go.sia.tech/indexd/internal/testutils"
 	"go.sia.tech/indexd/slabs"
@@ -25,10 +24,7 @@ func TestContractPruning(t *testing.T) {
 
 	// add an account
 	a1 := types.GeneratePrivateKey()
-	err := indexer.Store().AddAccount(context.Background(), a1.PublicKey(), accounts.AccountMeta{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	indexer.AddAccount(t, a1.PublicKey())
 
 	// assert we have 3 usable hosts
 	time.Sleep(time.Second)
@@ -62,11 +58,10 @@ func TestContractPruning(t *testing.T) {
 	}
 
 	// pin the slab
-	slabID, err := client.PinSlab(context.Background(), params)
+	slabIDs, err := client.PinSlabs(context.Background(), params)
 	if err != nil {
 		t.Fatal(err)
 	}
-	slabIDs := []slabs.SlabID{slabID}
 
 	// assert the slab is pinned
 	time.Sleep(time.Second)
@@ -96,7 +91,7 @@ func TestContractPruning(t *testing.T) {
 	}
 
 	// unpin the slab
-	if err := client.UnpinSlab(context.Background(), slabID); err != nil {
+	if err := client.UnpinSlab(context.Background(), slabIDs[0]); err != nil {
 		t.Fatal(err)
 	}
 
@@ -129,10 +124,7 @@ func TestSectorPinning(t *testing.T) {
 
 	// add an account
 	a1 := types.GeneratePrivateKey()
-	err := indexer.Store().AddAccount(context.Background(), a1.PublicKey(), accounts.AccountMeta{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	indexer.AddAccount(t, a1.PublicKey())
 
 	// assert we have 3 usable hosts
 	time.Sleep(time.Second)
@@ -165,11 +157,11 @@ func TestSectorPinning(t *testing.T) {
 	}
 
 	// pin the slab
-	slabID, err := client.PinSlab(context.Background(), params)
+	slabIDs, err := client.PinSlabs(context.Background(), params)
 	if err != nil {
 		t.Fatal(err)
 	}
-	slabIDs := []slabs.SlabID{slabID}
+	slabID := slabIDs[0]
 
 	// assert the slab is pinned
 	time.Sleep(time.Second)

@@ -49,6 +49,7 @@ func (s *Store) ContractsStats(ctx context.Context) (resp admin.ContractsStatsRe
 			CROSS JOIN globals
 			WHERE
 				proof_height > globals.scanned_height AND
+				renewed_to IS NULL AND
 				(state = $1 OR state = $2)
 		`, contracts.ContractStatePending, contracts.ContractStateActive).
 			Scan(&numContracts, &numGood, &totalCapacity, &totalSize)
@@ -66,6 +67,7 @@ func (s *Store) ContractsStats(ctx context.Context) (resp admin.ContractsStatsRe
 			CROSS JOIN globals
 			WHERE
 				proof_height > globals.scanned_height AND
+				renewed_to IS NULL AND
 				(state = $1 OR state = $2) AND
 				globals.scanned_height + globals.contracts_renew_window >= proof_height
 		`, contracts.ContractStatePending, contracts.ContractStateActive).
@@ -316,12 +318,14 @@ LIMIT $3
 func (s *Store) ContractsForPinning(ctx context.Context, hk types.PublicKey, maxContractSize uint64) ([]types.FileContractID, error) {
 	var fcids []types.FileContractID
 	err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
+		// covered by index contracts_capacity_size_contract_id_idx
 		rows, err := tx.Query(ctx, `
 SELECT c.contract_id
 FROM contracts c
 INNER JOIN hosts h ON c.host_id = h.id
 WHERE h.public_key = $1 AND c.good = TRUE AND c.state <= $2 AND c.remaining_allowance > 0 AND c.size < $3
-ORDER BY c.capacity DESC, c.size DESC`, sqlPublicKey(hk), sqlContractState(contracts.ContractStateActive), maxContractSize)
+-- sort by empty capacity desc to prefer heavily pruned contracts 
+ORDER BY (c.capacity - c.size) DESC`, sqlPublicKey(hk), sqlContractState(contracts.ContractStateActive), maxContractSize)
 		if err != nil {
 			return fmt.Errorf("failed to fetch contracts for pinning: %w", err)
 		}

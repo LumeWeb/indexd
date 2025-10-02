@@ -11,7 +11,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
-	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/slabs"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
@@ -23,9 +22,7 @@ func TestSlab(t *testing.T) {
 	account := proto.Account{1}
 
 	// add account
-	if err := store.AddAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
-		t.Fatal(err)
-	}
+	store.addTestAccount(t, types.PublicKey(account))
 
 	// add hosts
 	hosts := make([]types.PublicKey, 30)
@@ -54,13 +51,13 @@ func TestSlab(t *testing.T) {
 	}
 
 	// pin slab
-	slabID, err := store.PinSlab(context.Background(), account, time.Time{}, params)
+	slabIDs, err := store.PinSlabs(context.Background(), account, time.Time{}, params)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// fetch slab
-	got, err := store.Slab(context.Background(), slabID)
+	got, err := store.Slab(context.Background(), slabIDs[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +90,7 @@ func TestSlab(t *testing.T) {
 	}
 
 	// fetch slab again
-	got, err = store.Slab(context.Background(), slabID)
+	got, err = store.Slab(context.Background(), slabIDs[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,9 +107,7 @@ func TestPinnedSlab(t *testing.T) {
 	account := proto.Account{1}
 
 	// add account
-	if err := store.AddAccount(context.Background(), types.PublicKey(account), accounts.AccountMeta{}); err != nil {
-		t.Fatal(err)
-	}
+	store.addTestAccount(t, types.PublicKey(account))
 
 	// add hosts
 	hosts := make([]types.PublicKey, 30)
@@ -145,10 +140,11 @@ func TestPinnedSlab(t *testing.T) {
 		expected.Sectors[i] = slabs.PinnedSector(sector)
 	}
 
-	slabID, err := store.PinSlab(context.Background(), account, time.Time{}, pinned)
+	slabIDs, err := store.PinSlabs(context.Background(), account, time.Time{}, pinned)
 	if err != nil {
 		t.Fatal(err)
 	}
+	slabID := slabIDs[0]
 
 	slab, err := store.PinnedSlab(context.Background(), account, slabID)
 	if err != nil {
@@ -193,22 +189,20 @@ func TestSlabPruning(t *testing.T) {
 	// create 2 accounts
 	acc1, acc2 := proto.Account{1}, proto.Account{2}
 	for _, acc := range []proto.Account{acc1, acc2} {
-		if err := store.AddAccount(context.Background(), types.PublicKey(acc), accounts.AccountMeta{}); err != nil {
-			t.Fatal(err)
-		}
+		store.addTestAccount(t, types.PublicKey(acc))
 	}
 
 	// pin slab for both accounts
 	slab1 := slabs.SlabPinParams{MinShards: 1}
 	for _, acc := range []proto.Account{acc1, acc2} {
-		if _, err := store.PinSlab(context.Background(), acc, time.Time{}, slab1); err != nil {
+		if _, err := store.PinSlabs(context.Background(), acc, time.Time{}, slab1); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	// pin second slab for first account
 	slab2 := slabs.SlabPinParams{MinShards: 2}
-	if _, err := store.PinSlab(context.Background(), acc1, time.Time{}, slab2); err != nil {
+	if _, err := store.PinSlabs(context.Background(), acc1, time.Time{}, slab2); err != nil {
 		t.Fatal(err)
 	}
 
