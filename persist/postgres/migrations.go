@@ -322,11 +322,11 @@ CREATE INDEX contracts_capacity_size_contract_id_idx ON contracts (host_id, (cap
 	// create object events table and inserting existing objects
 	func(ctx context.Context, t *txn, _ *zap.Logger) error {
 		_, err := t.Exec(ctx, `CREATE TABLE object_events (
-    object_key BYTEA NOT NULL, -- not a FK since deletions need to hang around
+    object_key BYTEA NOT NULL CHECK(LENGTH(object_key) = 32), -- not a FK since deletions need to hang around
     account_id BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     was_deleted BOOLEAN NOT NULL, -- true if deleted, false otherwise
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), -- last time the object was created/updated/deleted
-    PRIMARY KEY (object_key, account_id)
+    PRIMARY KEY (account_id, object_key)
 );`)
 		if err != nil {
 			return fmt.Errorf("failed to create object events table: %w", err)
@@ -338,11 +338,15 @@ SELECT o.object_key,
        o.account_id,
        FALSE,
        o.updated_at
-FROM objects o
-ON CONFLICT (object_key, account_id) DO NOTHING;
+FROM objects o;
 `)
 		if err != nil {
 			return fmt.Errorf("failed to insert object events: %w", err)
+		}
+
+		_, err = t.Exec(ctx, `CREATE INDEX object_events ON object_events(updated_at ASC, object_key ASC);`)
+		if err != nil {
+			return fmt.Errorf("failed to create object event index: %w", err)
 		}
 
 		return nil
