@@ -79,8 +79,9 @@ type hostClientMock struct {
 	renewCalls        []renewContractCall
 	sectorRootsCalls  []sectorRootsCall
 
-	sectorRoots    map[types.FileContractID][]types.Hash256
-	missingSectors map[types.Hash256]struct{}
+	maxPinnedPerAppend int
+	sectorRoots        map[types.FileContractID][]types.Hash256
+	missingSectors     map[types.Hash256]struct{}
 }
 
 func newHostClientMock() *hostClientMock {

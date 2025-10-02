@@ -62,6 +62,15 @@ type (
 		log *zap.Logger
 	}
 
+	// HostStats contains various statistics about a single host.
+	HostStats struct {
+		AccountUsage        types.Currency  `json:"accountUsage"`
+		ActiveContractsSize int64           `json:"activeContractsSize"`
+		PublicKey           types.PublicKey `json:"publicKey"`
+		LostSectors         int64           `json:"lostSectors"`
+		TotalUsage          types.Currency  `json:"totalUsage"`
+	}
+
 	// OnlineChecker defines an interface to check whether the indexer is online. It's
 	// used to ensure hosts aren't punished for failing a scan if the indexer is
 	// offline.
@@ -76,7 +85,8 @@ type (
 
 	// Scanner defines an interface to scan hosts.
 	Scanner interface {
-		Settings(context.Context, types.PublicKey, string) (proto4.HostSettings, error)
+		ScanSiamux(context.Context, types.PublicKey, string) (proto4.HostSettings, error)
+		ScanQuic(context.Context, types.PublicKey, string) (proto4.HostSettings, error)
 	}
 
 	// Store defines an interface to fetch hosts that need to be scanned and
@@ -84,6 +94,7 @@ type (
 	Store interface {
 		Host(ctx context.Context, hk types.PublicKey) (Host, error)
 		Hosts(ctx context.Context, offset, limit int, queryOpts ...HostQueryOpt) ([]Host, error)
+		HostStats(ctx context.Context, offset, limit int) ([]HostStats, error)
 
 		HostsForScanning(ctx context.Context) ([]types.PublicKey, error)
 		HostsForPruning(ctx context.Context) ([]types.PublicKey, error)
@@ -382,6 +393,11 @@ func (m *HostManager) UpdateChainState(tx UpdateTx, applied []chain.ApplyUpdate)
 	return nil
 }
 
+// Stats returns statistics about the hosts in the database.
+func (m *HostManager) Stats(ctx context.Context, offset, limit int) ([]HostStats, error) {
+	return m.store.HostStats(ctx, offset, limit)
+}
+
 // hostsForScanning returns the public keys of the hosts that need to be
 // scanned, if force is true, this method will return the public keys of all
 // hosts in the database.
@@ -483,18 +499,27 @@ loop:
 func fetchSettings(ctx context.Context, scanner Scanner, hk types.PublicKey, addresses []chain.NetAddress, log *zap.Logger) (proto4.HostSettings, error) {
 	var settings []proto4.HostSettings
 	for _, addr := range addresses {
-		if addr.Protocol == siamux.Protocol {
-			hs, err := scanner.Settings(ctx, hk, addr.Address)
-			if errors.Is(err, context.Canceled) {
-				return proto4.HostSettings{}, err
-			} else if err != nil {
-				log.Debug("failed to get host settings", zap.String("address", addr.Address), zap.Error(err))
-				settings = nil // require host to be available on all addresses
-				break
-			}
-			settings = append(settings, hs)
+		var hs proto4.HostSettings
+		var err error
+		switch addr.Protocol {
+		case siamux.Protocol:
+			hs, err = scanner.ScanSiamux(ctx, hk, addr.Address)
+		case quic.Protocol:
+			hs, err = scanner.ScanQuic(ctx, hk, addr.Address)
+		default:
+			continue // ignore
 		}
-		// TODO: add support for QUIC
+		if errors.Is(err, context.Canceled) {
+			return proto4.HostSettings{}, err
+		} else if err != nil {
+			log.Debug("failed to get host settings",
+				zap.String("address", addr.Address),
+				zap.String("protocol", string(addr.Protocol)),
+				zap.Error(err))
+			settings = nil // require host to be available on all addresses
+			break
+		}
+		settings = append(settings, hs)
 	}
 
 	// return a random setting to avoid the host cheating us by providing

@@ -62,7 +62,14 @@ type (
 	// contracts.
 	HostClient interface {
 		io.Closer
-		AppendSectors(ctx context.Context, hostPrices proto.HostPrices, contractID types.FileContractID, sectors []types.Hash256) (rhp.RPCAppendSectorsResult, error)
+		// AppendSectors appends the given sectors to the contract. If the contract
+		// cannot fit all sectors, as many as possible will be appended and the number of
+		// sectors attempted will be returned.
+		//
+		// The integer returned does not indicate the number of sectors that were
+		// appended, but rather the number of sectors that were attempted. Check the
+		// result for the actual number of sectors that were appended.
+		AppendSectors(ctx context.Context, hostPrices proto.HostPrices, contractID types.FileContractID, sectors []types.Hash256) (rhp.RPCAppendSectorsResult, int, error)
 		FormContract(ctx context.Context, settings proto.HostSettings, params proto.RPCFormContractParams) (rhp.RPCFormContractResult, error)
 		FreeSectors(ctx context.Context, hostPrices proto.HostPrices, contractID types.FileContractID, indices []uint64) (rhp.RPCFreeSectorsResult, error)
 		RefreshContract(ctx context.Context, settings proto.HostSettings, params proto.RPCRefreshContractParams) (rhp.RPCRefreshContractResult, error)
