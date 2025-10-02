@@ -91,7 +91,6 @@ func (s *Store) ContractsStats(ctx context.Context) (resp admin.ContractsStatsRe
 func (s *Store) UpdateContractRevision(ctx context.Context, contract rhp.ContractRevision, usage proto.Usage) error {
 	revision := contract.Revision
 	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
-		// update contract revision
 		query := `UPDATE contracts SET raw_revision = $1, revision_number = $2, capacity = $3, size = $4, remaining_allowance = $5, used_collateral = $6 WHERE contract_id = $7`
 		res, err := tx.Exec(ctx, query, sqlFileContract(revision), revision.RevisionNumber, revision.Capacity, revision.Filesize, sqlCurrency(revision.RenterOutput.Value), sqlCurrency(contract.Revision.RiskedCollateral()), sqlHash256(contract.ID))
 		if err != nil {
@@ -100,15 +99,7 @@ func (s *Store) UpdateContractRevision(ctx context.Context, contract rhp.Contrac
 			return fmt.Errorf("contract %q: %w", contract.ID, contracts.ErrNotFound)
 		}
 
-		// update host usage
-		query = `UPDATE hosts SET usage_account_funding = usage_account_funding + $1, usage_total_spent = usage_total_spent + $2 WHERE public_key = $3`
-		res, err = tx.Exec(ctx, query, sqlCurrency(usage.AccountFunding), sqlCurrency(usage.RenterCost()), sqlPublicKey(contract.Revision.HostPublicKey))
-		if err != nil {
-			return fmt.Errorf("failed to update host usage: %w", err)
-		} else if res.RowsAffected() != 1 {
-			return fmt.Errorf("host %q: %w", contract.Revision.HostPublicKey, hosts.ErrNotFound)
-		}
-		return nil
+		return updateHostUsage(ctx, tx, contract.Revision.HostPublicKey, usage)
 	})
 }
 
@@ -135,16 +126,7 @@ func (s *Store) AddFormedContract(ctx context.Context, hostKey types.PublicKey, 
 			return fmt.Errorf("expected 1 row to be affected, got %d", resp.RowsAffected())
 		}
 
-		// update host usage
-		query := `UPDATE hosts SET usage_account_funding = usage_account_funding + $1, usage_total_spent = usage_total_spent + $2 WHERE id = $3`
-		resp, err = tx.Exec(ctx, query, sqlCurrency(usage.AccountFunding), sqlCurrency(usage.RenterCost()), hostID)
-		if err != nil {
-			return fmt.Errorf("failed to update host usage: %w", err)
-		} else if resp.RowsAffected() != 1 {
-			return fmt.Errorf("host %q: %w", revision.HostPublicKey, hosts.ErrNotFound)
-		}
-
-		return nil
+		return updateHostUsage(ctx, tx, hostKey, usage)
 	})
 }
 
@@ -188,16 +170,7 @@ INSERT INTO contracts(host_id, contract_id, renewed_from, raw_revision, revision
 			return fmt.Errorf("failed to update contract sectors map, no entry found for contract %v", sqlHash256(renewedFrom))
 		}
 
-		// update host usage
-		query := `UPDATE hosts SET usage_account_funding = usage_account_funding + $1, usage_total_spent = usage_total_spent + $2 WHERE public_key = $3`
-		res, err = tx.Exec(ctx, query, sqlCurrency(usage.AccountFunding), sqlCurrency(usage.RenterCost()), sqlPublicKey(revision.HostPublicKey))
-		if err != nil {
-			return fmt.Errorf("failed to update host usage: %w", err)
-		} else if res.RowsAffected() != 1 {
-			return fmt.Errorf("host %q: %w", revision.HostPublicKey, hosts.ErrNotFound)
-		}
-
-		return nil
+		return updateHostUsage(ctx, tx, revision.HostPublicKey, usage)
 	})
 }
 
@@ -736,4 +709,15 @@ func scanContractElement(row scanner) (types.V2FileContractElement, error) {
 	var fce types.V2FileContractElement
 	err := row.Scan((*sqlHash256)(&fce.ID), (*sqlFileContract)(&fce.V2FileContract), &fce.StateElement.LeafIndex, (*sqlMerkleProof)(&fce.StateElement.MerkleProof))
 	return fce, err
+}
+
+func updateHostUsage(ctx context.Context, tx *txn, hostKey types.PublicKey, usage proto.Usage) error {
+	query := `UPDATE hosts SET usage_account_funding = usage_account_funding + $1, usage_total_spent = usage_total_spent + $2 WHERE public_key = $3`
+	resp, err := tx.Exec(ctx, query, sqlCurrency(usage.AccountFunding), sqlCurrency(usage.RenterCost()), sqlPublicKey(hostKey))
+	if err != nil {
+		return fmt.Errorf("failed to update host usage: %w", err)
+	} else if resp.RowsAffected() != 1 {
+		return fmt.Errorf("host %q: %w", hostKey, hosts.ErrNotFound)
+	}
+	return nil
 }
