@@ -240,7 +240,7 @@ CREATE INDEX contracts_last_broadcast_attempt_active_idx ON contracts (last_broa
 CREATE INDEX contracts_host_id_remaining_allowance_active_idx ON contracts (host_id, remaining_allowance DESC, contract_id) WHERE state IN (0,1) AND renewed_to IS NULL AND good AND remaining_allowance > 0;
 
 -- contracts for pinning
-CREATE INDEX contracts_capacity_size_contract_id_idx ON contracts (host_id, capacity DESC, size DESC, contract_id) WHERE state IN (0,1) AND renewed_to IS NULL AND good AND remaining_allowance > 0;
+CREATE INDEX contracts_capacity_size_contract_id_idx ON contracts (host_id, (capacity - size) DESC, size, contract_id) WHERE state IN (0,1) AND renewed_to IS NULL AND good AND remaining_allowance > 0;
 
 -- contracts for pruning
 CREATE INDEX contracts_size_contract_id_idx ON contracts (host_id, size DESC, contract_id) INCLUDE(next_prune) WHERE state IN (0,1) AND renewed_to IS NULL AND good AND remaining_allowance > 0;

@@ -61,7 +61,7 @@ loop:
 	return ctx.Err()
 }
 
-func (cm *ContractManager) performSectorPinningOnHost(ctx context.Context, host hosts.Host, hostLog *zap.Logger) error {
+func (cm *ContractManager) performSectorPinningOnHost(ctx context.Context, host hosts.Host, log *zap.Logger) error {
 	// check host is good
 	if !host.IsGood() {
 		return fmt.Errorf("host is bad: blocked=%t, usable=%t", host.Blocked, host.Usability.Usable())
@@ -82,19 +82,6 @@ func (cm *ContractManager) performSectorPinningOnHost(ctx context.Context, host 
 		return errors.New("no contracts for pinning")
 	}
 
-	var nPinned, nMissing uint64
-	defer func() {
-		if nPinned+nMissing > 0 {
-			hostLog.Debug(
-				"pinned sectors",
-				zap.Uint64("bytesPinned", nPinned*proto.SectorSize),
-				zap.Uint64("sectorsMissing", nMissing),
-			)
-		}
-	}()
-
-	const updateDBBatchSize = 1000
-
 	var exhausted bool
 	for !exhausted && ctx.Err() == nil {
 		roots, err := cm.store.UnpinnedSectors(ctx, host.PublicKey, proto.MaxSectorBatchSize)
@@ -104,82 +91,62 @@ func (cm *ContractManager) performSectorPinningOnHost(ctx context.Context, host 
 			exhausted = true
 		}
 
-		contractID, missing, err := pinSectors(ctx, client, host.Settings.Prices, contractIDs, roots, hostLog)
-		if err != nil {
+		if err := cm.pinSectors(ctx, client, host.PublicKey, host.Settings.Prices, contractIDs, roots, log); err != nil {
 			return fmt.Errorf("failed to pin sectors: %w", err)
 		}
-
-		if len(missing) > 0 {
-			for i := 0; i < len(missing); i += updateDBBatchSize {
-				end := min(i+updateDBBatchSize, len(missing))
-				if err := cm.store.MarkSectorsLost(ctx, host.PublicKey, missing[i:end]); err != nil {
-					return fmt.Errorf("failed to mark sectors as lost: %w", err)
-				}
-			}
-
-			isMissing := make(map[types.Hash256]struct{}, len(missing))
-			for _, sector := range missing {
-				isMissing[sector] = struct{}{}
-			}
-
-			filtered := roots[:0]
-			for _, root := range roots {
-				if _, missing := isMissing[root]; !missing {
-					filtered = append(filtered, root)
-				}
-			}
-			roots = filtered
-		}
-
-		err = cm.store.PinSectors(ctx, contractID, roots)
-		if err != nil {
-			return fmt.Errorf("failed to pin sectors: %w", err)
-		}
-
-		nMissing += uint64(len(missing))
-		nPinned += uint64(len(roots))
 	}
 
 	return ctx.Err()
 }
 
-// pinSectors pins a set of sectors using the given set of contracts The
-// contracts are tried in order, the contract ID that ends up being used is
-// returned, alongside with a list of missing sectors if any.
-func pinSectors(ctx context.Context, client HostClient, hostPrices proto.HostPrices, contractIDs []types.FileContractID, sectors []types.Hash256, log *zap.Logger) (usedContractID types.FileContractID, missing []types.Hash256, _ error) {
+// pinSectors pins a set of sectors using the given set of contracts. It will
+// attempt to pin all sectors, but may not be able to if the contracts run out of
+// space. It will try to pin sectors using the contracts in the order they are
+// provided. If the host refuses to pin a sector, it will be marked as lost.
+func (cm *ContractManager) pinSectors(ctx context.Context, client HostClient, hostKey types.PublicKey, hostPrices proto.HostPrices, contractIDs []types.FileContractID, sectors []types.Hash256, log *zap.Logger) error {
 	for _, contractID := range contractIDs {
-		contractLog := log.With(zap.Stringer("contractID", contractID))
+		if len(sectors) == 0 {
+			break
+		}
+		log := log.With(zap.Stringer("contractID", contractID))
 
 		// try to pin sectors to the contract
-		res, err := client.AppendSectors(ctx, hostPrices, contractID, sectors)
+		res, attempted, err := client.AppendSectors(ctx, hostPrices, contractID, sectors)
 		if err != nil {
-			contractLog.Debug("failed to pin sectors", zap.Error(err))
+			log.Debug("failed to pin sectors", zap.Error(err))
 			continue
 		} else if len(res.Sectors) == 0 {
-			contractLog.Debug("no sectors were pinned")
+			log.Debug("no sectors were pinned")
 			continue
 		}
 
-		// figure out which sectors were missing if necessary
-		if len(res.Sectors) != len(sectors) {
-			lookup := make(map[types.Hash256]struct{}, len(sectors))
-			for _, sector := range sectors {
+		if err := cm.store.PinSectors(ctx, contractID, res.Sectors); err != nil {
+			return fmt.Errorf("failed to pin sectors: %w", err)
+		}
+
+		// Only the sectors that were attempted should be marked
+		// as missing. So sectors that were not part of the append
+		// call can be pinned to other contracts.
+		if len(res.Sectors) != attempted {
+			lookup := make(map[types.Hash256]struct{}, attempted)
+			for _, sector := range sectors[:attempted] {
 				lookup[sector] = struct{}{}
 			}
 			for _, sector := range res.Sectors {
 				delete(lookup, sector)
 			}
+			missing := make([]types.Hash256, 0, len(lookup))
 			for sector := range lookup {
 				missing = append(missing, sector)
 			}
 
-			contractLog.Debug("some sectors were not pinned", zap.Int("pinned", len(res.Sectors)), zap.Int("missing", len(missing)))
+			if err := cm.store.MarkSectorsLost(ctx, hostKey, missing); err != nil {
+				return fmt.Errorf("failed to mark sectors as lost: %w", err)
+			}
+			log = log.With(zap.Int("missing", len(missing)))
 		}
-
-		// TODO: handle usage
-
-		usedContractID = contractID
-		return
+		sectors = sectors[attempted:] // pin the remaining sectors
+		log.Debug("pinned sectors", zap.Int("pinned", len(res.Sectors)), zap.Int("attempted", attempted))
 	}
-	return types.FileContractID{}, nil, errors.New("no usable contract found")
+	return nil
 }

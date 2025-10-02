@@ -393,10 +393,10 @@ func TestContractsForPinning(t *testing.T) {
 		t.Fatal(err)
 	} else if len(contractIDs) != 3 {
 		t.Fatalf("expected 3 contracts, got %d", len(contractIDs))
-	} else if contractIDs[0] != (types.FileContractID{6}) {
-		t.Fatalf("expected contract %v, got %v", types.FileContractID{6}, contractIDs[0])
-	} else if contractIDs[1] != (types.FileContractID{7}) {
-		t.Fatalf("expected contract %v, got %v", types.FileContractID{7}, contractIDs[1])
+	} else if contractIDs[0] != (types.FileContractID{7}) {
+		t.Fatalf("expected contract %v, got %v", types.FileContractID{7}, contractIDs[0])
+	} else if contractIDs[1] != (types.FileContractID{6}) {
+		t.Fatalf("expected contract %v, got %v", types.FileContractID{6}, contractIDs[1])
 	} else if contractIDs[2] != (types.FileContractID{5}) {
 		t.Fatalf("expected contract %v, got %v", types.FileContractID{5}, contractIDs[2])
 	}

@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -215,7 +214,6 @@ func (s *Store) Contracts(ctx context.Context, offset, limit int, queryOpts ...c
 	var contracts []contracts.Contract
 	if err := s.transaction(ctx, func(ctx context.Context, tx *txn) (err error) {
 		rows, err := tx.Query(ctx, `
-EXPLAIN (ANALYZE, BUFFERS, TIMING ON)
 SELECT c.contract_id, c.formation, h.public_key, c.proof_height, c.expiration_height, c.renewed_from, c.renewed_to, c.revision_number, c.state, c.capacity, c.size, c.contract_price, c.initial_allowance, c.remaining_allowance, c.miner_fee, c.used_collateral, c.total_collateral, c.good, c.append_sector_spending, c.free_sector_spending, c.fund_account_spending, c.sector_roots_spending, c.next_prune, c.last_broadcast_attempt
 FROM contracts c
 INNER JOIN hosts h ON c.host_id = h.id
@@ -234,20 +232,13 @@ LIMIT $3 OFFSET $4`, opts.Good, opts.Revisable, limit, offset)
 		}
 		defer rows.Close()
 
-		var sb strings.Builder
 		for rows.Next() {
-			var line string
-			rows.Scan(&line)
-			sb.WriteString(line + "\n")
-			continue
-
 			contract, err := scanContract(rows)
 			if err != nil {
 				return fmt.Errorf("failed to scan contract: %w", err)
 			}
 			contracts = append(contracts, contract)
 		}
-		fmt.Println(sb.String())
 		return rows.Err()
 	}); err != nil {
 		return nil, err
@@ -329,6 +320,7 @@ LIMIT $2
 func (s *Store) ContractsForPinning(ctx context.Context, hk types.PublicKey, maxContractSize uint64) ([]types.FileContractID, error) {
 	var fcids []types.FileContractID
 	err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
+		// covered by index contracts_capacity_size_contract_id_idx
 		rows, err := tx.Query(ctx, `
 SELECT c.contract_id
 FROM contracts c
@@ -339,7 +331,7 @@ WHERE
 	c.good AND
 	c.remaining_allowance > 0 AND
 	c.size < $2
-ORDER BY c.capacity DESC, c.size DESC`, sqlPublicKey(hk), maxContractSize)
+ORDER BY (c.capacity - c.size) DESC`, sqlPublicKey(hk), maxContractSize)
 		if err != nil {
 			return fmt.Errorf("failed to fetch contracts for pinning: %w", err)
 		}

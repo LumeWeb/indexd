@@ -301,6 +301,15 @@ ALTER TABLE objects ADD COLUMN signature BYTEA UNIQUE NOT NULL CHECK (LENGTH(sig
 		}
 		return nil
 	},
+	// changes the pinning ordering to prefer contracts with available capacity
+	func(ctx context.Context, t *txn, _ *zap.Logger) error {
+		const query = `
+DROP INDEX IF EXISTS contracts_capacity_size_contract_id_idx;
+CREATE INDEX contracts_capacity_size_contract_id_idx ON contracts (host_id, (capacity - size) DESC, size) WHERE good = true AND state <= 1 AND remaining_allowance > 0;`
+
+		_, err := t.Exec(ctx, query)
+		return err
+	},
 	// recreate all contracts indices
 	func(ctx context.Context, tx *txn, l *zap.Logger) error {
 		if _, err := tx.Exec(ctx, `
@@ -325,7 +334,7 @@ ALTER TABLE objects ADD COLUMN signature BYTEA UNIQUE NOT NULL CHECK (LENGTH(sig
 			CREATE INDEX contracts_host_id_inactive_bad_idx ON contracts (host_id) WHERE state IN (2,3,4) AND NOT good;
 			CREATE INDEX contracts_last_broadcast_attempt_active_idx ON contracts (last_broadcast_attempt ASC, contract_id) WHERE state IN (0,1) AND renewed_to IS NULL;
 			CREATE INDEX contracts_host_id_remaining_allowance_active_idx ON contracts (host_id, remaining_allowance DESC, contract_id) WHERE state IN (0,1) AND renewed_to IS NULL AND good AND remaining_allowance > 0;
-			CREATE INDEX contracts_capacity_size_contract_id_idx ON contracts (host_id, capacity DESC, size DESC, contract_id) WHERE state IN (0,1) AND renewed_to IS NULL AND good AND remaining_allowance > 0;
+			CREATE INDEX contracts_capacity_size_contract_id_idx ON contracts (host_id, (capacity - size) DESC, size, contract_id) WHERE state IN (0,1) AND renewed_to IS NULL AND good AND remaining_allowance > 0;
 			CREATE INDEX contracts_size_contract_id_idx ON contracts (host_id, size DESC, contract_id) INCLUDE(next_prune) WHERE state IN (0,1) AND renewed_to IS NULL AND good AND remaining_allowance > 0;
 			CREATE INDEX contracts_formation_pending_idx ON contracts(formation) WHERE state = 0;
 		`); err != nil {
