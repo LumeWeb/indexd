@@ -279,7 +279,7 @@ func (c *HostClient) WriteSector(ctx context.Context, settings proto.HostPrices,
 	return res, nil
 }
 
-func (c *HostClient) syncRevision(ctx context.Context, contractID types.FileContractID, revision types.V2FileContract, usage proto.Usage) (types.V2FileContract, bool, error) {
+func (c *HostClient) syncRevision(ctx context.Context, contractID types.FileContractID, revision types.V2FileContract) (types.V2FileContract, bool, error) {
 	// apply a sane timeout for syncing the revision
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
@@ -291,6 +291,14 @@ func (c *HostClient) syncRevision(ctx context.Context, contractID types.FileCont
 		return types.V2FileContract{}, false, fmt.Errorf("%w; failed to fetch latest revision", err)
 	} else if resp.Contract.RevisionNumber < revision.RevisionNumber {
 		return types.V2FileContract{}, false, errors.New("local revision is newer than host revision")
+	}
+
+	// attribute a lower remaining allowance to the usage, note: we don't know
+	// what it was spent on, we track it as storage so it comes up in total
+	// spending but not in account funding
+	var usage proto.Usage
+	if resp.Contract.RemainingAllowance().Cmp(revision.RemainingAllowance()) < 0 {
+		usage.Storage = revision.RemainingAllowance().Sub(resp.Contract.RemainingAllowance())
 	}
 
 	// update latest revision
@@ -328,7 +336,7 @@ func (c *HostClient) withRevision(ctx context.Context, contractID types.FileCont
 	// try and sync the revision if we got an error that indicates the revision is invalid
 	if err != nil && strings.Contains(err.Error(), proto.ErrInvalidSignature.Error()) {
 		c.log.Debug("syncing contract revision due to invalid signature", zap.Uint64("revisionNumber", contract.Revision.RevisionNumber), zap.Stringer("contractID", contractID), zap.Error(err))
-		contract.Revision, renewed, err = c.syncRevision(ctx, contractID, contract.Revision, usage)
+		contract.Revision, renewed, err = c.syncRevision(ctx, contractID, contract.Revision)
 		if err != nil {
 			return fmt.Errorf("failed to sync revision: %w", err)
 		} else if renewed {
