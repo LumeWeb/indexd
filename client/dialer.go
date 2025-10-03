@@ -13,8 +13,8 @@ import (
 
 const dialTimeout = 10 * time.Second
 
-// SiamuxDialer can be used to dial a host using the SiaMux protocol.
-type SiamuxDialer struct {
+// Dialer can be used to dial a host using the SiaMux protocol.
+type Dialer struct {
 	cm                       ChainManager
 	revisionSubmissionBuffer uint64
 	signer                   rhp.FormContractSigner
@@ -22,24 +22,24 @@ type SiamuxDialer struct {
 	log                      *zap.Logger
 }
 
-// SiamuxDialerOption is a functional option type for configuring the
-// SiamuxDialer.
-type SiamuxDialerOption func(*SiamuxDialer)
+// DialerOption is a functional option type for configuring the
+// Dialer.
+type DialerOption func(*Dialer)
 
 // WithRevisionSubmissionBuffer sets the revision submission buffer for the
-// SiamuxDialer.
-func WithRevisionSubmissionBuffer(buffer uint64) SiamuxDialerOption {
+// Dialer.
+func WithRevisionSubmissionBuffer(buffer uint64) DialerOption {
 	if buffer == 0 {
 		panic("revisionSubmissionBuffer mustn't be 0") // developer error
 	}
-	return func(c *SiamuxDialer) {
+	return func(c *Dialer) {
 		c.revisionSubmissionBuffer = buffer
 	}
 }
 
-// NewSiamuxDialer creates a new SiamuxDialer.
-func NewSiamuxDialer(cm ChainManager, signer rhp.FormContractSigner, store RevisionStore, log *zap.Logger, opts ...SiamuxDialerOption) *SiamuxDialer {
-	d := &SiamuxDialer{
+// NewDialer creates a new Dialer.
+func NewDialer(cm ChainManager, signer rhp.FormContractSigner, store RevisionStore, log *zap.Logger, opts ...DialerOption) *Dialer {
+	d := &Dialer{
 		cm:                       cm,
 		revisionSubmissionBuffer: defaultRevisionSubmissionBuffer,
 		signer:                   signer,
@@ -55,7 +55,7 @@ func NewSiamuxDialer(cm ChainManager, signer rhp.FormContractSigner, store Revis
 // DialHost dials the host and returns a Client that can be used to interact
 // with the host. It uses the SiaMux protocol to establish a connection and
 // returns a host client that exposes the RPC methods defined in the RHP.
-func (d *SiamuxDialer) DialHost(ctx context.Context, hk types.PublicKey, addr string) (*HostClient, error) {
+func (d *Dialer) DialHost(ctx context.Context, hk types.PublicKey, addr string) (*HostClient, error) {
 	ctx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
 

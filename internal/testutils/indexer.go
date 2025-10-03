@@ -56,7 +56,7 @@ type (
 		App   func(types.PrivateKey) *app.Client
 
 		cm        *chain.Manager
-		dialer    *client.SiamuxDialer
+		dialer    *client.Dialer
 		accounts  *accounts.AccountManager
 		contracts *contracts.ContractManager
 		hosts     *hosts.HostManager
@@ -139,7 +139,7 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger, opts ...Indexer
 	}
 
 	signer := contracts.NewFormContractSigner(wm, walletKey)
-	dialer := client.NewSiamuxDialer(c.cm, signer, store, log, client.WithRevisionSubmissionBuffer(1))
+	dialer := client.NewDialer(c.cm, signer, store, log, client.WithRevisionSubmissionBuffer(1))
 	am := accounts.NewManager(store, accounts.NewFunder(dialer), accounts.WithLogger(log.Named("accounts")))
 
 	contractOpts := []contracts.ContractManagerOpt{

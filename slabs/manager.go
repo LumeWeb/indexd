@@ -157,7 +157,7 @@ func WithLogger(l *zap.Logger) Option {
 }
 
 type wrapper struct {
-	d *client.SiamuxDialer
+	d *client.Dialer
 }
 
 // DialHost dials the host and returns a HostClient.
@@ -170,7 +170,7 @@ func (w *wrapper) DialHost(ctx context.Context, hostKey types.PublicKey, addr st
 }
 
 // NewManager creates a new slab manager.
-func NewManager(am AccountManager, hm HostManager, store Store, dialer *client.SiamuxDialer, alerter AlertsManager, migrationAccount, integrityAccount types.PrivateKey, opts ...Option) (*SlabManager, error) {
+func NewManager(am AccountManager, hm HostManager, store Store, dialer *client.Dialer, alerter AlertsManager, migrationAccount, integrityAccount types.PrivateKey, opts ...Option) (*SlabManager, error) {
 	sm, err := newSlabManager(am, hm, store, &wrapper{d: dialer}, alerter, migrationAccount, integrityAccount, opts...)
 	if err != nil {
 		return nil, err

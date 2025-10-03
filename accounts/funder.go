@@ -35,7 +35,7 @@ type (
 )
 
 type wrapper struct {
-	d *client.SiamuxDialer
+	d *client.Dialer
 }
 
 // DialHost dials the host and returns a HostClient.
@@ -48,7 +48,7 @@ func (w *wrapper) DialHost(ctx context.Context, hostKey types.PublicKey, addr st
 }
 
 // NewFunder creates a new Funder.
-func NewFunder(dialer *client.SiamuxDialer) *Funder {
+func NewFunder(dialer *client.Dialer) *Funder {
 	return &Funder{dialer: &wrapper{d: dialer}}
 }
 

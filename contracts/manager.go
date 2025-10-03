@@ -246,7 +246,7 @@ func WithSyncPollInterval(interval time.Duration) ContractManagerOpt {
 }
 
 type wrapper struct {
-	d *client.SiamuxDialer
+	d *client.Dialer
 }
 
 // DialHost dials the host and returns a HostClient.
@@ -443,7 +443,7 @@ func newContractManager(renterKey types.PublicKey, accounts AccountManager, chai
 // NewManager creates a new contract manager. It is responsible for forming and
 // renewing contracts as well as any interactions with hosts that require
 // contracts.
-func NewManager(renterKey types.PrivateKey, accountManager AccountManager, chainManager ChainManager, store Store, dialer *client.SiamuxDialer, hm HostManager, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) (*ContractManager, error) {
+func NewManager(renterKey types.PrivateKey, accountManager AccountManager, chainManager ChainManager, store Store, dialer *client.Dialer, hm HostManager, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) (*ContractManager, error) {
 	cm := newContractManager(renterKey.PublicKey(), accountManager, chainManager, store, &wrapper{d: dialer}, hm, syncer, wallet, opts...)
 
 	ctx, cancel, err := cm.tg.AddContext(context.Background())
