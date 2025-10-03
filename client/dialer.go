@@ -55,34 +55,40 @@ func NewDialer(cm ChainManager, signer rhp.FormContractSigner, store RevisionSto
 }
 
 // DialHost dials the host and returns a Client that can be used to interact
-// with the host. It uses the SiaMux protocol to establish a connection and
-// returns a host client that exposes the RPC methods defined in the RHP.
+// with the host. It tries SiaMux first, then QUIC, and returns a host client
+// that exposes the RPC methods defined in the RHP.
 func (d *Dialer) DialHost(ctx context.Context, hk types.PublicKey, addrs []chain.NetAddress) (*HostClient, error) {
 	ctx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
 
-	var tc rhp.TransportClient
-	for _, addr := range addrs {
-		if addr.Protocol == siamux.Protocol {
-			var err error
-			tc, err = siamux.Dial(ctx, addr.Address, hk)
-			if err != nil {
-				d.log.Debug("failed to dial host over siamux", zap.Stringer("pk", hk), zap.String("addr", addr.Address), zap.Error(err))
-				break
+	tryDial := func(proto chain.Protocol, dial func(addr string) (rhp.TransportClient, error)) rhp.TransportClient {
+		for _, addr := range addrs {
+			if addr.Protocol != proto {
+				continue
 			}
-			break
+			tc, err := dial(addr.Address)
+			if err != nil {
+				d.log.Debug("failed to dial host",
+					zap.String("protocol", string(proto)),
+					zap.Stringer("hostKey", hk),
+					zap.String("addr", addr.Address),
+					zap.Error(err),
+				)
+				continue
+			}
+			return tc
 		}
+		return nil
 	}
-	for _, addr := range addrs {
-		if addr.Protocol == quic.Protocol {
-			var err error
-			tc, err = quic.Dial(ctx, addr.Address, hk)
-			if err != nil {
-				d.log.Debug("failed to dial host over QUIC", zap.Stringer("pk", hk), zap.String("addr", addr.Address), zap.Error(err))
-				break
-			}
-			break
-		}
+
+	var tc rhp.TransportClient
+	tc = tryDial(siamux.Protocol, func(addr string) (rhp.TransportClient, error) {
+		return siamux.Dial(ctx, addr, hk)
+	})
+	if tc == nil {
+		tc = tryDial(quic.Protocol, func(addr string) (rhp.TransportClient, error) {
+			return quic.Dial(ctx, addr, hk)
+		})
 	}
 	if tc == nil {
 		return nil, errors.New("host has no valid addresses")
