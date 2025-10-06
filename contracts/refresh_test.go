@@ -246,7 +246,7 @@ func TestRefreshAllowance(t *testing.T) {
 		revision.ProofHeight = proofHeight
 		revision.ExpirationHeight = expirationHeight
 		revision.TotalCollateral = totalCollateral
-		err := store.AddFormedContract(context.Background(), hostKey, contractID, revision, types.Siacoins(1), initialAllowance, types.Siacoins(3))
+		err := store.AddFormedContract(context.Background(), hostKey, contractID, revision, types.Siacoins(1), initialAllowance, types.Siacoins(3), proto.Usage{})
 		if err != nil {
 			t.Fatal(err)
 		}
