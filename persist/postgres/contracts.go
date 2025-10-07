@@ -38,8 +38,8 @@ func (s *Store) ContractsStats(ctx context.Context) (resp admin.ContractsStatsRe
 		var numContracts, numGood, totalCapacity, totalSize uint64
 		err := tx.QueryRow(ctx, `
 			WITH globals AS (
-    			SELECT scanned_height FROM global_settings
-       		)
+				SELECT scanned_height FROM global_settings
+			)
 			SELECT
 				COUNT(*),       				-- non-expired contracts
 				COALESCE(SUM(good::int), 0), 	-- good contracts
@@ -48,11 +48,10 @@ func (s *Store) ContractsStats(ctx context.Context) (resp admin.ContractsStatsRe
 			FROM contracts
 			CROSS JOIN globals
 			WHERE
-				proof_height > globals.scanned_height AND
+				state IN (0,1) AND
 				renewed_to IS NULL AND
-				(state = $1 OR state = $2)
-		`, contracts.ContractStatePending, contracts.ContractStateActive).
-			Scan(&numContracts, &numGood, &totalCapacity, &totalSize)
+				proof_height > globals.scanned_height
+		`).Scan(&numContracts, &numGood, &totalCapacity, &totalSize)
 		if err != nil {
 			return err
 		}
@@ -66,12 +65,11 @@ func (s *Store) ContractsStats(ctx context.Context) (resp admin.ContractsStatsRe
 			FROM contracts
 			CROSS JOIN globals
 			WHERE
-				proof_height > globals.scanned_height AND
+				state IN (0,1) AND
 				renewed_to IS NULL AND
-				(state = $1 OR state = $2) AND
+				proof_height > globals.scanned_height AND
 				globals.scanned_height + globals.contracts_renew_window >= proof_height
-		`, contracts.ContractStatePending, contracts.ContractStateActive).
-			Scan(&numRenewing)
+		`).Scan(&numRenewing)
 		if err != nil {
 			return err
 		}
@@ -213,8 +211,8 @@ WHERE
 	-- active filter
 	(
 		$2::boolean IS NULL OR
-		($2::boolean = TRUE AND c.state <= 1 AND c.renewed_to IS NULL) OR
-		($2::boolean = FALSE AND c.state > 1)
+		($2::boolean = TRUE AND c.state IN (0,1) AND c.renewed_to IS NULL) OR
+		($2::boolean = FALSE AND c.state IN (2,3,4))
 	)
 LIMIT $3 OFFSET $4`, opts.Good, opts.Revisable, limit, offset)
 		if err != nil {
@@ -245,11 +243,11 @@ func (s *Store) ContractsForBroadcasting(ctx context.Context, minBroadcast time.
 	var fcids []types.FileContractID
 	err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
 		rows, err := tx.Query(ctx, `
-SELECT c.contract_id
-FROM contracts c
-WHERE c.renewed_to IS NULL AND c.state <= $1 AND c.last_broadcast_attempt < $2
-ORDER BY c.last_broadcast_attempt ASC
-LIMIT $3`, sqlContractState(contracts.ContractStateActive), minBroadcast, limit)
+			SELECT c.contract_id
+			FROM contracts c
+			WHERE c.state IN (0, 1) AND c.renewed_to IS NULL AND c.last_broadcast_attempt < $1
+			ORDER BY c.last_broadcast_attempt ASC
+			LIMIT $2`, minBroadcast, limit)
 		if err != nil {
 			return fmt.Errorf("failed to fetch contracts for broadcasting: %w", err)
 		}
@@ -277,11 +275,15 @@ func (s *Store) ContractsForFunding(ctx context.Context, hk types.PublicKey, lim
 		rows, err := tx.Query(ctx, `
 SELECT c.contract_id
 FROM contracts c
-INNER JOIN hosts h ON c.host_id = h.id
-WHERE h.public_key = $1 AND c.good = TRUE AND c.state <= $2 AND c.remaining_allowance > 0
+WHERE
+	c.host_id = (SELECT id FROM hosts WHERE public_key = $1) AND
+	c.state IN (0, 1) AND
+	c.renewed_to IS NULL AND
+	c.good AND
+	c.remaining_allowance > 0
 ORDER BY c.remaining_allowance DESC
-LIMIT $3
-`, sqlPublicKey(hk), sqlContractState(contracts.ContractStateActive), limit)
+LIMIT $2
+`, sqlPublicKey(hk), limit)
 		if err != nil {
 			return fmt.Errorf("failed to fetch contracts for funding: %w", err)
 		}
@@ -306,14 +308,18 @@ LIMIT $3
 func (s *Store) ContractsForPinning(ctx context.Context, hk types.PublicKey, maxContractSize uint64) ([]types.FileContractID, error) {
 	var fcids []types.FileContractID
 	err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
-		// covered by index contracts_capacity_size_contract_id_idx
+		// covered by index contracts_host_id_active_good_idx
 		rows, err := tx.Query(ctx, `
 SELECT c.contract_id
 FROM contracts c
-INNER JOIN hosts h ON c.host_id = h.id
-WHERE h.public_key = $1 AND c.good = TRUE AND c.state <= $2 AND c.remaining_allowance > 0 AND c.size < $3
--- sort by empty capacity desc to prefer heavily pruned contracts 
-ORDER BY (c.capacity - c.size) DESC`, sqlPublicKey(hk), sqlContractState(contracts.ContractStateActive), maxContractSize)
+WHERE
+	c.host_id = (SELECT id FROM hosts WHERE public_key = $1) AND
+	c.state IN (0, 1) AND
+	c.renewed_to IS NULL AND
+	c.good AND
+	c.remaining_allowance > 0 AND
+	c.size < $2
+ORDER BY (c.capacity - c.size) DESC`, sqlPublicKey(hk), maxContractSize)
 		if err != nil {
 			return fmt.Errorf("failed to fetch contracts for pinning: %w", err)
 		}
@@ -340,9 +346,14 @@ func (s *Store) ContractsForPruning(ctx context.Context, hk types.PublicKey) ([]
 		rows, err := tx.Query(ctx, `
 SELECT c.contract_id
 FROM contracts c
-INNER JOIN hosts h ON c.host_id = h.id
-WHERE h.public_key = $1 AND c.good = TRUE AND c.state <= $2 AND c.remaining_allowance > 0 AND c.next_prune < NOW()
-ORDER BY c.size DESC`, sqlPublicKey(hk), sqlContractState(contracts.ContractStateActive))
+WHERE
+	c.host_id = (SELECT id FROM hosts WHERE public_key = $1) AND
+	c.state IN (0, 1) AND
+	c.renewed_to IS NULL AND
+	c.good AND
+	c.remaining_allowance > 0 AND
+	c.next_prune < NOW()
+ORDER BY c.size DESC`, sqlPublicKey(hk))
 		if err != nil {
 			return fmt.Errorf("failed to fetch contracts for pruning: %w", err)
 		}
@@ -392,8 +403,7 @@ SELECT
 FROM contract_elements fces
 INNER JOIN contracts c ON fces.contract_id = c.contract_id
 CROSS JOIN current_height
-WHERE current_height.scanned_height >= c.expiration_height + $1;
-`, maxBlocksSinceExpiry)
+WHERE current_height.scanned_height >= c.expiration_height + $1;`, maxBlocksSinceExpiry)
 		if err != nil {
 			return err
 		}
@@ -568,8 +578,7 @@ func (s *Store) MarkUnrenewableContractsBad(ctx context.Context, minProofHeight 
 // pending and have a formation height older than 'maxFormation'.
 func (s *Store) RejectPendingContracts(ctx context.Context, maxFormation time.Time) error {
 	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
-		_, err := tx.Exec(ctx, `UPDATE contracts SET state = $1 WHERE state = $2 AND formation < $3`,
-			sqlContractState(contracts.ContractStateRejected), sqlContractState(contracts.ContractStatePending), maxFormation)
+		_, err := tx.Exec(ctx, `UPDATE contracts SET state = 4 WHERE state = 0 AND formation < $1`, maxFormation)
 		return err
 	})
 }
