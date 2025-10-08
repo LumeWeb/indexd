@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 
+	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/alerts"
 	"go.sia.tech/indexd/api"
 	"go.uber.org/zap"
@@ -45,6 +46,18 @@ type ContractQueryParameterOption api.URLQueryParameterOption
 func WithRevisable(revisable bool) ContractQueryParameterOption {
 	return func(q url.Values) {
 		q.Set("revisable", fmt.Sprint(revisable))
+	}
+}
+
+// WithIDs sets the 'id' parameter (multiple times if there is more than one
+// contract ID provided).
+func WithIDs(ids []types.FileContractID) ContractQueryParameterOption {
+	return func(q url.Values) {
+		strs := make([]string, len(ids))
+		for i := range ids {
+			strs[i] = ids[i].String()
+		}
+		q["id"] = strs
 	}
 }
 
