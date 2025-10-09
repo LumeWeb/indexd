@@ -168,7 +168,7 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 			// host should be good
 			log.Debug("host is not usable due to bad usability", zap.String("reasons", host.Usability.FailedChecks()))
 			return false
-		} else if spaced := set.CanAddHost(host); !spaced && !force {
+		} else if spaced := set.CanAddHost(host.Info()); !spaced && !force {
 			// host should be sufficiently spaced from other hosts
 			return false
 		} else if host.Settings.RemainingStorage < minRemainingStorage {
@@ -203,7 +203,7 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 		}
 
 		// contract is good
-		set.Add(host)
+		set.Add(host.Info())
 		wanted--
 	}
 
@@ -240,7 +240,7 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 			allowance, collateral := contractFunding(host.Settings, 0, target, minHostCollateral, period)
 			formationCtx, cancel := context.WithTimeout(ctx, 2*time.Minute) // note: broadcasting on the host-side can block for up to a minute by default
 			defer cancel()
-			hc, err := cm.dialer.DialHost(formationCtx, host.PublicKey, host.SiamuxAddr())
+			hc, err := cm.dialer.DialHost(formationCtx, host.PublicKey, host.RHP4Addrs())
 			if err != nil {
 				return fmt.Errorf("failed to dial host: %w", err)
 			}
@@ -273,7 +273,7 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, period 
 			}
 
 			// contract formed successfully
-			set.Add(host)
+			set.Add(host.Info())
 			wanted--
 
 			log.Debug("formed contract")
