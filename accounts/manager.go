@@ -14,14 +14,14 @@ import (
 )
 
 const (
-	accountFundBatch            = proto.MaxAccountBatchSize // equals max batch size used in replenish RPC
-	accountFundInterval         = time.Hour
-	accountExpBackoffMaxMinutes = 128
+	AccountFundBatch            = proto.MaxAccountBatchSize // equals max batch size used in replenish RPC
+	AccountFundInterval         = time.Hour
+	AccountExpBackoffMaxMinutes = 128
 )
 
 var (
-	// defaultFundTarget is the target amount of funds per account per host.
-	defaultFundTarget = types.Siacoins(1)
+	// DefaultFundTarget is the target amount of funds per account per host.
+	DefaultFundTarget = types.Siacoins(1)
 
 	// accountActivityThreshold is the threshold for determining whether an
 	// account has been active recently for the purposes of contract funding.
@@ -117,10 +117,10 @@ func (m *AccountManager) FundAccounts(ctx context.Context, host hosts.Host, cont
 
 	var exhausted bool
 	for !exhausted {
-		accounts, err := m.store.HostAccountsForFunding(ctx, host.PublicKey, accountFundBatch)
+		accounts, err := m.store.HostAccountsForFunding(ctx, host.PublicKey, AccountFundBatch)
 		if err != nil {
 			return fmt.Errorf("failed to fetch accounts for funding: %w", err)
-		} else if len(accounts) < accountFundBatch {
+		} else if len(accounts) < AccountFundBatch {
 			exhausted = true
 		}
 		if len(accounts) == 0 {
@@ -134,14 +134,14 @@ func (m *AccountManager) FundAccounts(ctx context.Context, host hosts.Host, cont
 		}
 
 		// update funded accounts
-		updateFundedAccounts(accounts, funded)
+		UpdateFundedAccounts(accounts, funded)
 		err = m.store.UpdateHostAccounts(ctx, accounts)
 		if err != nil {
 			return fmt.Errorf("failed to update accounts: %w", err)
 		}
 
 		// update service accounts
-		if err := m.updateServiceAccounts(ctx, accounts[:funded], m.fundTarget); err != nil {
+		if err := m.UpdateServiceAccounts(ctx, accounts[:funded], m.fundTarget); err != nil {
 			m.log.Warn("failed to update service account balance", zap.Error(err))
 		}
 
@@ -192,17 +192,17 @@ func (am *AccountManager) FundTarget(ctx context.Context, minAllowance types.Cur
 	return target, nil
 }
 
-func updateFundedAccounts(accounts []HostAccount, n int) {
+func UpdateFundedAccounts(accounts []HostAccount, n int) {
 	if n > len(accounts) {
 		panic("illegal number of funded accounts") // developer error
 	}
 	for i := range n {
 		accounts[i].ConsecutiveFailedFunds = 0
-		accounts[i].NextFund = time.Now().Add(accountFundInterval)
+		accounts[i].NextFund = time.Now().Add(AccountFundInterval)
 	}
 	for i := n; i < len(accounts); i++ {
 		accounts[i].ConsecutiveFailedFunds++
-		accounts[i].NextFund = time.Now().Add(time.Duration(min(math.Pow(2, float64(accounts[i].ConsecutiveFailedFunds)), accountExpBackoffMaxMinutes)) * time.Minute)
+		accounts[i].NextFund = time.Now().Add(time.Duration(min(math.Pow(2, float64(accounts[i].ConsecutiveFailedFunds)), AccountExpBackoffMaxMinutes)) * time.Minute)
 	}
 }
 
@@ -212,7 +212,7 @@ func NewManager(store Store, funder AccountFunder, opts ...Option) *AccountManag
 		serviceAccounts: make(map[proto.Account]struct{}),
 		store:           store,
 		funder:          funder,
-		fundTarget:      defaultFundTarget,
+		fundTarget:      DefaultFundTarget,
 		log:             zap.NewNop(),
 	}
 	for _, opt := range opts {

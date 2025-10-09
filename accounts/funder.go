@@ -31,7 +31,7 @@ type (
 
 	// Funder dials a host and replenish a set of ephemeral accounts.
 	Funder struct {
-		dialer Dialer
+		Dialer Dialer
 	}
 )
 
@@ -50,7 +50,7 @@ func (w *wrapper) DialHost(ctx context.Context, hostKey types.PublicKey, addrs [
 
 // NewFunder creates a new Funder.
 func NewFunder(dialer *client.Dialer) *Funder {
-	return &Funder{dialer: &wrapper{d: dialer}}
+	return &Funder{Dialer: &wrapper{d: dialer}}
 }
 
 // FundAccounts tops up the provided accounts to the target balance using the
@@ -71,7 +71,7 @@ func (f *Funder) FundAccounts(ctx context.Context, host hosts.Host, contractIDs 
 	}
 
 	// dial the host
-	hc, err := f.dialer.DialHost(ctx, host.PublicKey, host.RHP4Addrs())
+	hc, err := f.Dialer.DialHost(ctx, host.PublicKey, host.RHP4Addrs())
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to dial host %s: %w", host.PublicKey, err)
 	}
