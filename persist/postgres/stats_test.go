@@ -149,6 +149,11 @@ func TestSectorStats(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertStats(1, 0, 0, 2)
+
+	if err := store.MarkSectorsLost(t.Context(), hk1, []types.Hash256{root}); err != nil {
+		t.Fatal(err)
+	}
+	assertStats(0, 0, 1, 2)
 }
 
 func TestAccountStatsRegistered(t *testing.T) {

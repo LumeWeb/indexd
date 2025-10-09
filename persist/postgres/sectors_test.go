@@ -251,6 +251,22 @@ func TestRecordIntegrityCheck(t *testing.T) {
 		}
 	}
 
+	assertSectorStats := func(expectedPinned, expectedUnpinned, expectedUnpinnable int64) {
+		t.Helper()
+		var pinned, unpinned, unpinnable int64
+		err := store.pool.QueryRow(context.Background(), `
+			SELECT num_pinned_sectors, num_unpinned_sectors, num_unpinnable_sectors
+			FROM stats
+			WHERE id = 0`,
+		).Scan(&pinned, &unpinned, &unpinnable)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pinned != expectedPinned || unpinned != expectedUnpinned || unpinnable != expectedUnpinnable {
+			t.Fatalf("unexpected sector stats: pinned=%d (want %d) unpinned=%d (want %d) unpinnable=%d (want %d)", pinned, expectedPinned, unpinned, expectedUnpinned, unpinnable, expectedUnpinnable)
+		}
+	}
+
 	record := func(success bool, nextCheck time.Time, roots []types.Hash256) {
 		t.Helper()
 		err := store.RecordIntegrityCheck(context.Background(), success, nextCheck, hk, roots)
@@ -294,12 +310,14 @@ func TestRecordIntegrityCheck(t *testing.T) {
 	if err := store.MarkFailingSectorsLost(context.Background(), hk, 3); err != nil {
 		t.Fatal(err)
 	}
+	assertSectorStats(0, 2, 0)
 	assertFailingSectors([]types.Hash256{root1}, 2)
 
 	// one more time with threshold of 1
 	if err := store.MarkFailingSectorsLost(context.Background(), hk, 2); err != nil {
 		t.Fatal(err)
 	}
+	assertSectorStats(0, 1, 1)
 	assertFailingSectors([]types.Hash256{}, 2)
 
 	// host should have lost sector
@@ -2255,8 +2273,8 @@ func TestMarkSectorsLost(t *testing.T) {
 	hk2 := store.addTestHost(t)
 
 	// add a contract for each host
-	store.addTestContract(t, hk1)
-	store.addTestContract(t, hk2)
+	fcid1 := store.addTestContract(t, hk1)
+	_ = store.addTestContract(t, hk2)
 
 	// pin a slab that adds 2 sectors to each host
 	root1 := frand.Entropy256()
@@ -2288,6 +2306,29 @@ func TestMarkSectorsLost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	assertSectorStats := func(expectedPinned, expectedUnpinned, expectedUnpinnable int64) {
+		t.Helper()
+		var pinned, unpinned, unpinnable int64
+		err := store.pool.QueryRow(context.Background(), `
+			SELECT num_pinned_sectors, num_unpinned_sectors, num_unpinnable_sectors
+			FROM stats
+			WHERE id = 0`,
+		).Scan(&pinned, &unpinned, &unpinnable)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pinned != expectedPinned || unpinned != expectedUnpinned || unpinnable != expectedUnpinnable {
+			t.Fatalf("unexpected sector stats: pinned=%d (want %d) unpinned=%d (want %d) unpinnable=%d (want %d)", pinned, expectedPinned, unpinned, expectedUnpinned, unpinnable, expectedUnpinnable)
+		}
+	}
+
+	assertSectorStats(0, 4, 0)
+
+	if err := store.PinSectors(context.Background(), fcid1, []types.Hash256{root1, root2}); err != nil {
+		t.Fatal(err)
+	}
+	assertSectorStats(2, 2, 0)
 
 	assertSectorLost := func(root types.Hash256, lost bool) {
 		t.Helper()
@@ -2328,7 +2369,9 @@ func TestMarkSectorsLost(t *testing.T) {
 
 	// mark sectors 1 to 3 lost
 	markSectorLost(hk1, []types.Hash256{root1, root2})
+	assertSectorStats(0, 2, 2)
 	markSectorLost(hk2, []types.Hash256{root3})
+	assertSectorStats(0, 1, 3)
 
 	assertLostSectors(hk1, 2)
 	assertLostSectors(hk2, 1)
@@ -2339,6 +2382,7 @@ func TestMarkSectorsLost(t *testing.T) {
 
 	// mark last sector lost as well
 	markSectorLost(hk2, []types.Hash256{root4})
+	assertSectorStats(0, 0, 4)
 
 	assertLostSectors(hk1, 2)
 	assertLostSectors(hk2, 2)
