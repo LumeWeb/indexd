@@ -11,7 +11,7 @@ RUN go mod download
 COPY . .
 
 # install git lfs
-RUN apt-get -y update && apt-get install -y --no-install-recommends git-lfs
+RUN apt-get -y update && apt-get install -y --no-install-recommends git-lfs && rm -rf /var/lib/apt/lists/*
 
 # mark as safe in git
 RUN git config --global --add safe.directory .
