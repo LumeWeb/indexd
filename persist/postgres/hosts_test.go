@@ -592,8 +592,8 @@ func TestHosts(t *testing.T) {
 	for _, tc := range sortCases {
 		updateHost(hk1, tc.column, tc.low)
 		updateHost(hk2, tc.column, tc.higher)
-		assertHostsOrder([]types.PublicKey{hk1, hk2}, 0, 2, withHKFilter, hosts.WithSorting(tc.name, "ASC"))
-		assertHostsOrder([]types.PublicKey{hk2, hk1}, 0, 2, withHKFilter, hosts.WithSorting(tc.name, "DESC"))
+		assertHostsOrder([]types.PublicKey{hk1, hk2}, 0, 2, withHKFilter, hosts.WithSorting(tc.name, false))
+		assertHostsOrder([]types.PublicKey{hk2, hk1}, 0, 2, withHKFilter, hosts.WithSorting(tc.name, true))
 	}
 }
 

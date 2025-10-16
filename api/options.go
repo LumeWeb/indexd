@@ -105,8 +105,8 @@ func ParseOffsetLimit(jc jape.Context) (offset int, limit int, ok bool) {
 // SortOption represents a single sorting configuration parsed from request
 // parameters.
 type SortOption struct {
-	Field     string
-	Direction string
+	Field      string
+	Descending bool
 }
 
 // ParseSortOptions parses 'sortby' and 'sortdir' query parameters from the
@@ -131,8 +131,8 @@ func ParseSortOptions(jc jape.Context) (sorts []SortOption, ok bool) {
 			return nil, false
 		}
 		sorts[i] = SortOption{
-			Field:     sortBy[i],
-			Direction: dir,
+			Field:      sortBy[i],
+			Descending: dir == SortDirectionDesc,
 		}
 	}
 	return sorts, true

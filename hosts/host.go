@@ -49,8 +49,8 @@ type (
 
 	// HostSortOpt specifies a sorting option for querying hosts.
 	HostSortOpt struct {
-		Field     string
-		Direction string
+		Field      string
+		Descending bool
 	}
 
 	hostsQueryOpts struct {
@@ -64,11 +64,11 @@ type (
 
 // WithSorting adds a sorting option to the host query. Multiple sorting options
 // can be provided and will be applied in the order they were added.
-func WithSorting(field, direction string) HostQueryOpt {
+func WithSorting(field string, descending bool) HostQueryOpt {
 	return func(opts *hostsQueryOpts) {
 		opts.Sorting = append(opts.Sorting, HostSortOpt{
-			Field:     field,
-			Direction: direction,
+			Field:      field,
+			Descending: descending,
 		})
 	}
 }

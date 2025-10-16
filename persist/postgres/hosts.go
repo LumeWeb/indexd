@@ -144,7 +144,7 @@ func (s *Store) Hosts(ctx context.Context, offset, limit int, queryOpts ...hosts
 
 	var hosts []hosts.Host
 	if err := s.transaction(ctx, func(ctx context.Context, tx *txn) (err error) {
-		rows, err := tx.Query(ctx, `
+		rows, err := tx.Query(ctx, fmt.Sprintf(`
 WITH globals AS (
     SELECT
 		contracts_period,
@@ -210,7 +210,7 @@ WHERE
 	-- active contracts filter
 	AND (($5::boolean IS NULL) OR ($5::boolean = EXISTS (SELECT 1 FROM contracts WHERE host_id = hosts.id AND state >= $6 AND state <= $7)))
 	-- public key filter
-	AND ((CARDINALITY($8::bytea[]) = 0) OR (public_key = ANY($8)))`+"\n"+orderClause+"\n"+`LIMIT $1 OFFSET $2`, limit, offset, opts.Good, opts.Blocked, opts.ActiveContracts, contracts.ContractStatePending, contracts.ContractStateActive, hks)
+	AND ((CARDINALITY($8::bytea[]) = 0) OR (public_key = ANY($8))) %s LIMIT $1 OFFSET $2`, orderClause), limit, offset, opts.Good, opts.Blocked, opts.ActiveContracts, contracts.ContractStatePending, contracts.ContractStateActive, hks)
 		if err != nil {
 			return fmt.Errorf("failed to query hosts: %w", err)
 		}
@@ -936,13 +936,16 @@ func buildHostOrderByClause(sorts []hosts.HostSortOpt) (string, error) {
 
 	parts := make([]string, 0, len(sorts))
 	for _, sort := range sorts {
-		// validate column, note: we don't validate direction here, the API
-		// handler does that
 		column, ok := sortMapping[sort.Field]
 		if !ok {
 			return "", fmt.Errorf("%w: invalid sort column: %q, must be one of %v", hosts.ErrInvalidSortField, sort.Field, slices.Collect(maps.Keys(sortMapping)))
 		}
-		parts = append(parts, fmt.Sprintf("%s %s", column, sort.Direction))
+
+		if sort.Descending {
+			parts = append(parts, fmt.Sprintf("%s DESC", column))
+		} else {
+			parts = append(parts, fmt.Sprintf("%s ASC", column))
+		}
 	}
 
 	return "ORDER BY " + strings.Join(parts, ", "), nil

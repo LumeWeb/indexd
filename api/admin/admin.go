@@ -683,7 +683,7 @@ func (a *admin) handleGETHosts(jc jape.Context) {
 		opts = append(opts, hosts.WithPublicKeys(hks))
 	}
 	for _, sort := range sorts {
-		opts = append(opts, hosts.WithSorting(sort.Field, sort.Direction))
+		opts = append(opts, hosts.WithSorting(sort.Field, sort.Descending))
 	}
 
 	res, err := a.hosts.Hosts(jc.Request.Context(), offset, limit, opts...)
