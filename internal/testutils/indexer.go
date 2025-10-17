@@ -25,7 +25,6 @@ import (
 	"go.sia.tech/indexd/client"
 	"go.sia.tech/indexd/contracts"
 	"go.sia.tech/indexd/hosts"
-	"go.sia.tech/indexd/persist/postgres"
 	"go.sia.tech/indexd/subscriber"
 	"go.sia.tech/jape"
 	"go.uber.org/zap"
@@ -61,7 +60,7 @@ type (
 		contracts *contracts.ContractManager
 		hosts     *hosts.HostManager
 		alerter   *alerts.Manager
-		store     *postgres.Store
+		store     TestStore
 		syncer    *Syncer
 		wallet    *wallet.SingleAddressWallet
 	}
@@ -300,7 +299,7 @@ func (idx *Indexer) Alerter() *alerts.Manager {
 }
 
 // Store returns the underlying store.
-func (idx *Indexer) Store() *postgres.Store {
+func (idx *Indexer) Store() TestStore {
 	return idx.store
 }
 
