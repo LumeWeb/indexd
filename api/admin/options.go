@@ -3,6 +3,7 @@ package admin
 import (
 	"fmt"
 	"net/url"
+	"strconv"
 
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/alerts"
@@ -103,7 +104,7 @@ func WithPublicKeys(hks []types.PublicKey) HostQueryParameterOption {
 func WithSort(sortby string, desc bool) HostQueryParameterOption {
 	return func(q url.Values) {
 		q.Add("sortby", sortby)
-		q.Add("desc", fmt.Sprint(desc))
+		q.Add("desc", strconv.FormatBool(desc))
 	}
 }
 
