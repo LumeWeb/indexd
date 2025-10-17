@@ -203,7 +203,7 @@ func (s *Store) ScheduleAccountForFunding(ctx context.Context, hostKey types.Pub
 	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
 		_, err := tx.Exec(ctx, `
 			UPDATE account_hosts
-			SET next_fund = NOW()
+			SET next_fund = '1970-01-01 00:00:00+00' -- make sure it's at the front of the queue
 			WHERE account_id = (SELECT id FROM accounts WHERE public_key = $1)
 			AND host_id = (SELECT id FROM hosts WHERE public_key = $2)
 		`, sqlPublicKey(account), sqlPublicKey(hostKey))
