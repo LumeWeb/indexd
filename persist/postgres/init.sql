@@ -275,7 +275,6 @@ CREATE TABLE slabs (
     min_shards SMALLINT NOT NULL CHECK(min_shards > 0),
 
     consecutive_failed_repairs SMALLINT NOT NULL DEFAULT 0 CHECK (consecutive_failed_repairs >= 0),
-    last_repair_attempt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     next_repair_attempt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 
 );
@@ -283,7 +282,7 @@ CREATE INDEX slabs_digest_idx ON slabs(digest);
 CREATE INDEX slabs_pinned_at_idx ON slabs(pinned_at ASC);
 
 -- speeds up lookup of unhealthy slabs
-CREATE INDEX slabs_id_last_repair_attempt_idx ON slabs(last_repair_attempt ASC, consecutive_failed_repairs ASC) INCLUDE (next_repair_attempt);
+CREATE INDEX slabs_id_next_repair_attempt_idx ON slabs(next_repair_attempt ASC);
 
 CREATE TABLE objects (
     id BIGSERIAL PRIMARY KEY,

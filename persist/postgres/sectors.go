@@ -15,6 +15,12 @@ import (
 	"go.sia.tech/indexd/slabs"
 )
 
+const (
+	maxConsecutiveRepairFailures = 10
+	minRepairBackoff             = time.Hour
+	maxRepairBackoff             = 24 * time.Hour
+)
+
 // MarkSectorsLost marks the sectors as lost by setting both the contract ID and
 // host ID to NULL. This is meant to be used in 2 cases:
 // - The host reports that the sector is lost (e.g. when pinning it, during the integrity check or when fetching it for migration)
@@ -669,6 +675,76 @@ func (s *Store) UnpinnedSectors(ctx context.Context, hostKey types.PublicKey, li
 		return rows.Err()
 	})
 	return roots, err
+}
+
+// UnhealthySlabs returns the IDs of slabs which have at least one sector that
+// needs to be migrated and have not been abandoned.
+//
+// The condition for such a sector is that it's either not stored on a host or
+// it's not pinned to a good contract.
+//
+// NOTE: Subsequent calls to this function do not return the same slabs because
+// a minimum of 1 hour must pass between consecutive migration attempts. The
+// caller is expected to update the slab with the repair result after the
+// migration was attempted.
+//
+// NOTE: For the sake of scalability, we don't prioritize slabs based on their
+// health but simply return the slabs that have been waiting the longest for a
+// repair first.
+func (s *Store) UnhealthySlabs(ctx context.Context, limit int) (unhealthy []slabs.SlabID, err error) {
+	err = s.transaction(ctx, func(ctx context.Context, tx *txn) error {
+		rows, err := tx.Query(ctx, `
+			WITH bad_csm AS (
+				SELECT csm.id
+				FROM contracts c
+				JOIN contract_sectors_map csm ON csm.contract_id = c.contract_id
+				WHERE (NOT c.good) OR (c.state NOT IN ($2,$3))
+			)
+			SELECT s.id, s.digest, s.encryption_key, s.min_shards, s.pinned_at
+			FROM slabs s
+			WHERE s.next_repair_attempt < NOW()
+				AND s.consecutive_failed_repairs < $1
+				AND EXISTS (
+					SELECT 1
+					FROM slab_sectors ss
+					JOIN sectors sec ON sec.id = ss.sector_id
+					WHERE ss.slab_id = s.id
+						AND (
+							sec.host_id IS NULL
+							OR EXISTS (SELECT 1 FROM bad_csm bad WHERE bad.id = sec.contract_sectors_map_id)
+						)
+				)
+			ORDER BY s.next_repair_attempt ASC
+			LIMIT $4;`, maxConsecutiveRepairFailures, sqlContractState(contracts.ContractStateActive), sqlContractState(contracts.ContractStatePending), limit)
+		if err != nil {
+			return fmt.Errorf("failed to query unhealthy slabs: %w", err)
+		}
+		defer rows.Close()
+
+		var slab slabs.Slab
+		var slabIDs []int64
+		for rows.Next() {
+			var slabID int64
+			if err := rows.Scan(&slabID, (*sqlHash256)(&slab.ID), (*sqlHash256)(&slab.EncryptionKey), &slab.MinShards, &slab.PinnedAt); err != nil {
+				return fmt.Errorf("failed to scan unhealthy slab: %w", err)
+			}
+			unhealthy = append(unhealthy, slab.ID)
+			slabIDs = append(slabIDs, slabID)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("failed to get unhealthy slabs: %w", err)
+		}
+
+		// update next repair attempt time
+		_, err = tx.Exec(ctx, `UPDATE slabs SET next_repair_attempt = $1 WHERE id = ANY($2)`, time.Now().Add(minRepairBackoff), slabIDs)
+		if err != nil {
+			return fmt.Errorf("failed to update next repair attempt: %w", err)
+		}
+
+		return nil
+	})
+	return
 }
 
 // MigrateSector updates a sector that was just migrated in the database to be
