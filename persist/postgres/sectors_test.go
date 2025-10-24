@@ -1469,7 +1469,16 @@ func BenchmarkSlabs(b *testing.B) {
 	// 30 hosts to simulate default redundancy
 	var hks []types.PublicKey
 	for i := byte(0); i < 30; i++ {
-		hks = append(hks, store.addTestHost(b, types.PublicKey{i}))
+		hk := types.PublicKey{i}
+		store.addTestHost(b, hk)
+		// needed for host to be considered good by PinSlabs
+		store.addTestContract(b, hk, types.FileContractID(hk))
+
+		hks = append(hks, hk)
+	}
+	// add 500 other hosts to reflect mainnet
+	for range 500 {
+		store.addTestHost(b)
 	}
 
 	// helper to create slabs
@@ -1521,7 +1530,19 @@ func BenchmarkSlabs(b *testing.B) {
 	}
 
 	// insert 40MiB of slab data
-	b.Run("PinSlab", func(b *testing.B) {
+	b.Run("PinSlab_checkHosts", func(b *testing.B) {
+		b.SetBytes(slabSize)
+		b.ResetTimer()
+		for b.Loop() {
+			_, err := store.PinSlabs(context.Background(), proto.Account{1}, time.Time{}, true, newSlab())
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	// insert 40MiB of slab data
+	b.Run("PinSlab_noCheckHosts", func(b *testing.B) {
 		b.SetBytes(slabSize)
 		b.ResetTimer()
 		for b.Loop() {
