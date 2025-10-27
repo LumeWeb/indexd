@@ -119,7 +119,10 @@ outer:
 				m.markSectorLost(ctx, host, slab.Sectors[sectorIdx].Root, logger)
 				return
 			} else if err != nil {
-				logger.Debug("failed to download shard", zap.Bool("timed out", time.Now().After(start.Add(m.shardTimeout))), zap.Error(err))
+				logger.Debug("failed to download shard",
+					zap.Bool("timeout", time.Now().After(start.Add(m.shardTimeout))),
+					zap.Error(err),
+				)
 				return
 			}
 
