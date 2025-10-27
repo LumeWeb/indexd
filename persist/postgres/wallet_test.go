@@ -33,7 +33,7 @@ func TestVerifyWalletKey(t *testing.T) {
 	hash2 := types.Hash256(frand.Entropy256())
 
 	if err := store.VerifyWalletKey(hash2); err == nil || !errors.Is(err, wallet.ErrDifferentSeed) {
-		t.Fatal(err)
+		t.Fatalf("expected error %v, got %v", wallet.ErrDifferentSeed, err)
 	}
 
 	// initial hash should still succeed
