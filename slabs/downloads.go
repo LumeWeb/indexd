@@ -120,7 +120,7 @@ outer:
 				return
 			} else if err != nil {
 				logger.Debug("failed to download shard",
-					zap.Bool("timeout", time.Now().After(start.Add(m.shardTimeout))),
+					zap.Bool("timeout", time.Since(start) > m.shardTimeout),
 					zap.Error(err),
 				)
 				return
