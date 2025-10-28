@@ -32,9 +32,10 @@ func TestSlab(t *testing.T) {
 
 	// pin slab
 	params := slabs.SlabPinParams{
-		EncryptionKey: frand.Entropy256(),
-		MinShards:     10,
-		Sectors:       make([]slabs.PinnedSector, 0, len(hosts)),
+		IgnoreBadHosts: true,
+		EncryptionKey:  frand.Entropy256(),
+		MinShards:      10,
+		Sectors:        make([]slabs.PinnedSector, 0, len(hosts)),
 	}
 	var expectedSectors []slabs.Sector
 	for _, host := range hosts {
@@ -51,7 +52,7 @@ func TestSlab(t *testing.T) {
 	}
 
 	// pin slab
-	slabIDs, err := store.PinSlabs(context.Background(), account, time.Time{}, false, params)
+	slabIDs, err := store.PinSlabs(context.Background(), account, time.Time{}, params)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,9 +117,10 @@ func TestPinnedSlab(t *testing.T) {
 	}
 
 	pinned := slabs.SlabPinParams{
-		EncryptionKey: frand.Entropy256(),
-		MinShards:     10,
-		Sectors:       make([]slabs.PinnedSector, 0, len(hosts)),
+		IgnoreBadHosts: true,
+		EncryptionKey:  frand.Entropy256(),
+		MinShards:      10,
+		Sectors:        make([]slabs.PinnedSector, 0, len(hosts)),
 	}
 	for _, host := range hosts {
 		pinned.Sectors = append(pinned.Sectors, slabs.PinnedSector{
@@ -140,7 +142,7 @@ func TestPinnedSlab(t *testing.T) {
 		expected.Sectors[i] = slabs.PinnedSector(sector)
 	}
 
-	slabIDs, err := store.PinSlabs(context.Background(), account, time.Time{}, false, pinned)
+	slabIDs, err := store.PinSlabs(context.Background(), account, time.Time{}, pinned)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,16 +195,16 @@ func TestSlabPruning(t *testing.T) {
 	}
 
 	// pin slab for both accounts
-	slab1 := slabs.SlabPinParams{MinShards: 1}
+	slab1 := slabs.SlabPinParams{IgnoreBadHosts: true, MinShards: 1}
 	for _, acc := range []proto.Account{acc1, acc2} {
-		if _, err := store.PinSlabs(context.Background(), acc, time.Time{}, false, slab1); err != nil {
+		if _, err := store.PinSlabs(context.Background(), acc, time.Time{}, slab1); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	// pin second slab for first account
-	slab2 := slabs.SlabPinParams{MinShards: 2}
-	if _, err := store.PinSlabs(context.Background(), acc1, time.Time{}, false, slab2); err != nil {
+	slab2 := slabs.SlabPinParams{IgnoreBadHosts: true, MinShards: 2}
+	if _, err := store.PinSlabs(context.Background(), acc1, time.Time{}, slab2); err != nil {
 		t.Fatal(err)
 	}
 

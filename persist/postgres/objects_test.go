@@ -30,9 +30,9 @@ func TestObjects(t *testing.T) {
 	}
 
 	// pin slab for both accounts
-	slab := slabs.SlabPinParams{MinShards: 1}
+	slab := slabs.SlabPinParams{IgnoreBadHosts: true, MinShards: 1}
 	for _, acc := range []proto4.Account{acc1, acc2} {
-		_, err := store.PinSlabs(context.Background(), acc, time.Time{}, false, slab)
+		_, err := store.PinSlabs(context.Background(), acc, time.Time{}, slab)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -72,8 +72,9 @@ func TestObjects(t *testing.T) {
 		s := make([]slabs.SlabPinParams, n)
 		for i := range s {
 			s[i] = slabs.SlabPinParams{
-				EncryptionKey: frand.Entropy256(),
-				MinShards:     1,
+				IgnoreBadHosts: true,
+				EncryptionKey:  frand.Entropy256(),
+				MinShards:      1,
 			}
 		}
 		return s
@@ -84,7 +85,7 @@ func TestObjects(t *testing.T) {
 
 		var ss []slabs.SlabSlice
 		for _, p := range params {
-			ids, err := store.PinSlabs(context.Background(), acc, time.Time{}, false, p)
+			ids, err := store.PinSlabs(context.Background(), acc, time.Time{}, p)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -243,8 +244,8 @@ func TestListObjectsRegression(t *testing.T) {
 	store.addTestAccount(t, types.PublicKey(acc))
 
 	randomObject := func() slabs.SealedObject {
-		slab := slabs.SlabPinParams{EncryptionKey: frand.Entropy256(), MinShards: 1}
-		_, err := store.PinSlabs(context.Background(), acc, time.Time{}, false, slab)
+		slab := slabs.SlabPinParams{IgnoreBadHosts: true, EncryptionKey: frand.Entropy256(), MinShards: 1}
+		_, err := store.PinSlabs(context.Background(), acc, time.Time{}, slab)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -331,16 +332,17 @@ func TestSharedObjects(t *testing.T) {
 		t.Helper()
 
 		s := slabs.SlabPinParams{
-			MinShards:     uint(frand.Intn(255)) + 1,
-			EncryptionKey: frand.Entropy256(),
-			Sectors:       make([]slabs.PinnedSector, 30),
+			IgnoreBadHosts: true,
+			MinShards:      uint(frand.Intn(255)) + 1,
+			EncryptionKey:  frand.Entropy256(),
+			Sectors:        make([]slabs.PinnedSector, 30),
 		}
 		for i := range s.Sectors {
 			s.Sectors[i].HostKey = hostKeys[i%len(hostKeys)]
 			s.Sectors[i].Root = frand.Entropy256()
 		}
 
-		slabIDs, err := store.PinSlabs(t.Context(), acc1, time.Time{}, false, s)
+		slabIDs, err := store.PinSlabs(t.Context(), acc1, time.Time{}, s)
 		if err != nil {
 			t.Fatal(err)
 		} else if id, err := s.Digest(); err != nil {
@@ -398,8 +400,9 @@ func TestSharedObjects(t *testing.T) {
 
 	// pin the slabs to the second account
 	for _, slab := range expectedSharedObj.Slabs {
-		_, err := store.PinSlabs(t.Context(), acc2, time.Time{}, false, slabs.SlabPinParams{
-			MinShards: slab.MinShards,
+		_, err := store.PinSlabs(t.Context(), acc2, time.Time{}, slabs.SlabPinParams{
+			IgnoreBadHosts: true,
+			MinShards:      slab.MinShards,
 			Sectors: func() []slabs.PinnedSector {
 				sps := make([]slabs.PinnedSector, len(slab.Sectors))
 				for i := range slab.Sectors {
@@ -442,16 +445,17 @@ func BenchmarkSaveObject(b *testing.B) {
 		b.Helper()
 
 		s := slabs.SlabPinParams{
-			MinShards:     uint(frand.Intn(255)) + 1,
-			EncryptionKey: frand.Entropy256(),
-			Sectors:       make([]slabs.PinnedSector, 30),
+			IgnoreBadHosts: true,
+			MinShards:      uint(frand.Intn(255)) + 1,
+			EncryptionKey:  frand.Entropy256(),
+			Sectors:        make([]slabs.PinnedSector, 30),
 		}
 		for i := range s.Sectors {
 			s.Sectors[i].HostKey = hostKeys[i%len(hostKeys)]
 			s.Sectors[i].Root = frand.Entropy256()
 		}
 
-		slabIDs, err := store.PinSlabs(b.Context(), acc1, time.Time{}, false, s)
+		slabIDs, err := store.PinSlabs(b.Context(), acc1, time.Time{}, s)
 		if err != nil {
 			b.Fatal(err)
 		}

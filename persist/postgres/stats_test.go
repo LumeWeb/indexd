@@ -25,8 +25,9 @@ func TestSectorStatsNumSlabs(t *testing.T) {
 	// helper to create slabs
 	newSlab := func(i byte) slabs.SlabPinParams {
 		slab := slabs.SlabPinParams{
-			EncryptionKey: [32]byte{i},
-			MinShards:     10,
+			IgnoreBadHosts: true,
+			EncryptionKey:  [32]byte{i},
+			MinShards:      10,
 			Sectors: []slabs.PinnedSector{
 				{
 					Root:    frand.Entropy256(),
@@ -57,7 +58,7 @@ func TestSectorStatsNumSlabs(t *testing.T) {
 	// pin some slabs
 	var pinned []slabs.SlabID
 	for i := range byte(10) {
-		slabIDs, err := store.PinSlabs(context.Background(), account, time.Now(), false, newSlab(i))
+		slabIDs, err := store.PinSlabs(context.Background(), account, time.Now(), newSlab(i))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -107,15 +108,16 @@ func TestSectorStats(t *testing.T) {
 	}
 
 	params := slabs.SlabPinParams{
-		EncryptionKey: frand.Entropy256(),
-		MinShards:     1,
+		IgnoreBadHosts: true,
+		EncryptionKey:  frand.Entropy256(),
+		MinShards:      1,
 		Sectors: []slabs.PinnedSector{
 			{HostKey: hk1, Root: roots[0]},
 			{HostKey: hk2, Root: roots[1]},
 			{HostKey: hk3, Root: roots[2]},
 		},
 	}
-	if _, err := store.PinSlabs(t.Context(), account, time.Time{}, false, params); err != nil {
+	if _, err := store.PinSlabs(t.Context(), account, time.Time{}, params); err != nil {
 		t.Fatal(err)
 	}
 	assertStats(0, 3, 0, 0)

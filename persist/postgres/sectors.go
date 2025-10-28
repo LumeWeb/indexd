@@ -193,7 +193,7 @@ func (s *Store) markFailingSectorsLostBatch(ctx context.Context, hostKey types.P
 
 // PinSlabs adds slabs to the database for pinning. The slabs are associated
 // with the provided account.
-func (s *Store) PinSlabs(ctx context.Context, account proto.Account, nextIntegrityCheck time.Time, checkHosts bool, toPin ...slabs.SlabPinParams) ([]slabs.SlabID, error) {
+func (s *Store) PinSlabs(ctx context.Context, account proto.Account, nextIntegrityCheck time.Time, toPin ...slabs.SlabPinParams) ([]slabs.SlabID, error) {
 	var digests []slabs.SlabID
 	err := s.transaction(ctx, func(ctx context.Context, tx *txn) error {
 		var accountID int64
@@ -205,21 +205,19 @@ func (s *Store) PinSlabs(ctx context.Context, account proto.Account, nextIntegri
 			return err
 		}
 
-		goodHosts := make(map[types.PublicKey]struct{})
-		if checkHosts {
-			hostRows, err := tx.Query(ctx, `SELECT h.public_key FROM contracts c INNER JOIN hosts h ON c.host_id = h.id WHERE state IN (0,1) AND renewed_to IS NULL AND good`)
-			if err != nil {
-				return fmt.Errorf("failed to get good hosts: %w", err)
-			}
-			defer hostRows.Close()
+		hostRows, err := tx.Query(ctx, `SELECT h.public_key FROM contracts c INNER JOIN hosts h ON c.host_id = h.id WHERE state IN (0,1) AND renewed_to IS NULL AND good`)
+		if err != nil {
+			return fmt.Errorf("failed to get good hosts: %w", err)
+		}
+		defer hostRows.Close()
 
-			for hostRows.Next() {
-				var hk types.PublicKey
-				if err := hostRows.Scan((*sqlPublicKey)(&hk)); err != nil {
-					return fmt.Errorf("failed to scan host key: %w", err)
-				}
-				goodHosts[hk] = struct{}{}
+		goodHosts := make(map[types.PublicKey]struct{})
+		for hostRows.Next() {
+			var hk types.PublicKey
+			if err := hostRows.Scan((*sqlPublicKey)(&hk)); err != nil {
+				return fmt.Errorf("failed to scan host key: %w", err)
 			}
+			goodHosts[hk] = struct{}{}
 		}
 
 		for _, slab := range toPin {
@@ -314,7 +312,7 @@ func (s *Store) PinSlabs(ctx context.Context, account proto.Account, nextIntegri
 			}
 			br.Close()
 
-			if checkHosts {
+			if !slab.IgnoreBadHosts {
 				// if more than 20% of parity shards are on bad hosts, don't allow slab to be pinned
 				parityShards := max(0, len(slab.Sectors)-int(slab.MinShards))
 				if badHosts > (parityShards / 5) {
