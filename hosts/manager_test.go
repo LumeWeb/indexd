@@ -90,6 +90,10 @@ func (s *mockStore) UpdateUsabilitySettings(_ context.Context, us UsabilitySetti
 	return nil
 }
 
+func (s *mockStore) HostsForFunding(ctx context.Context) ([]types.PublicKey, error) {
+	return nil, nil
+}
+
 func (s *mockStore) HostsForPruning(ctx context.Context) ([]types.PublicKey, error) {
 	return nil, nil
 }

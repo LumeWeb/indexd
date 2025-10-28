@@ -87,6 +87,16 @@ func (s *storeMock) ContractsForFunding(_ context.Context, hk types.PublicKey, l
 	return out, nil
 }
 
+func (s *storeMock) HostsForFunding(_ context.Context) ([]types.PublicKey, error) {
+	var hks []types.PublicKey
+	for hk, host := range s.hosts {
+		if host.Usability == hosts.GoodUsability && !host.Blocked {
+			hks = append(hks, hk)
+		}
+	}
+	return hks, nil
+}
+
 func TestPerformAccountFunding(t *testing.T) {
 	amMock := &accountsManagerMock{}
 	store := newStoreMock()
