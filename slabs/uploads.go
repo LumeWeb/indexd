@@ -83,9 +83,14 @@ loop:
 				uploadMu.Unlock()
 
 				// upload the shard
+				start := time.Now()
 				usage, root, err := m.uploadShard(ctx, host, shard, pool)
 				if err != nil {
-					logger.Debug("failed to upload shard", zap.Stringer("hostKey", host.PublicKey), zap.Error(err))
+					logger.Debug("failed to upload shard",
+						zap.Bool("timeout", time.Since(start) > m.shardTimeout),
+						zap.Stringer("hostKey", host.PublicKey),
+						zap.Error(err),
+					)
 					continue
 				} else if root != shardRoot {
 					uploadMu.Lock()
