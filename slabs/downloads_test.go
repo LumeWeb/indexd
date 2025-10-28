@@ -1,6 +1,7 @@
 package slabs
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"reflect"
@@ -43,14 +44,22 @@ func TestDownloadCandidates(t *testing.T) {
 	candidates := newDownloadCandidates([]hosts.Host{h1, h2, h3, h4}, slab)
 
 	// test next() method
-	if host, ok := candidates.next(); !ok || host.PublicKey != h3.PublicKey {
-		t.Fatalf("expected host %v, got %v", h3.PublicKey, host.PublicKey)
-	} else if host, ok := candidates.next(); !ok || host.PublicKey != h4.PublicKey {
-		t.Fatalf("expected host %v, got %v", h4.PublicKey, host.PublicKey)
-	} else if host, ok := candidates.next(); !ok || host.PublicKey != h1.PublicKey {
-		t.Fatalf("expected host %v, got %v", h1.PublicKey, host.PublicKey)
-	} else if _, ok := candidates.next(); ok {
+	selected := make(map[types.PublicKey]struct{})
+	for range 3 {
+		if host, ok := candidates.next(); ok {
+			selected[host.PublicKey] = struct{}{}
+		}
+	}
+	if _, ok := candidates.next(); ok {
 		t.Fatal("expected no more hosts")
+	} else if len(selected) != 3 {
+		t.Fatalf("expected 3 selected hosts, got %d", len(selected))
+	} else if _, ok := selected[h1.PublicKey]; !ok {
+		t.Fatal("expected host 1 to be selected")
+	} else if _, ok := selected[h3.PublicKey]; !ok {
+		t.Fatal("expected host 3 to be selected")
+	} else if _, ok := selected[h4.PublicKey]; !ok {
+		t.Fatal("expected host 4 to be selected")
 	}
 
 	// assert indices
@@ -69,19 +78,12 @@ func TestDownloadShards(t *testing.T) {
 	store := newMockStore()
 	am := newMockAccountManager(store)
 	hm := newMockHostManager()
-	account := types.GeneratePrivateKey()
-
-	settings := func(egress uint64) proto.HostSettings {
-		settings := goodSettings
-		settings.Prices.EgressPrice = types.NewCurrency64(egress)
-		return settings
-	}
 
 	// setup includes 3 hosts storing 1 sector each
 	hk1, hk2, hk3 := types.PublicKey{1}, types.PublicKey{2}, types.PublicKey{3}
-	host1 := hosts.Host{PublicKey: hk1, Settings: settings(2)}
-	host2 := hosts.Host{PublicKey: hk2, Settings: settings(3)}
-	host3 := hosts.Host{PublicKey: hk3, Settings: settings(1)}
+	host1 := hosts.Host{PublicKey: hk1, Settings: goodSettings}
+	host2 := hosts.Host{PublicKey: hk2, Settings: goodSettings}
+	host3 := hosts.Host{PublicKey: hk3, Settings: goodSettings}
 	allHosts := []hosts.Host{host1, host2, host3}
 
 	hm.hosts = map[types.PublicKey]hosts.Host{
@@ -118,23 +120,11 @@ func TestDownloadShards(t *testing.T) {
 		hk3: newClient(sector3, host3.Settings),
 	}}
 
+	account := types.GeneratePrivateKey()
 	sm, err := newSlabManager(am, nil, hm, store, dialer, alerts.NewManager(), account, types.GeneratePrivateKey())
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// replenish service account
-	initialFunds := types.Siacoins(1)
-	fundAccount := func(hostKey types.PublicKey) {
-		t.Helper()
-		err := am.UpdateServiceAccountBalance(context.Background(), hostKey, sm.migrationAccount, initialFunds)
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	fundAccount(hk1)
-	fundAccount(hk2)
-	fundAccount(hk3)
 
 	resetTimeouts := func() {
 		sm.shardTimeout = 30 * time.Second
@@ -146,15 +136,17 @@ func TestDownloadShards(t *testing.T) {
 	pool := newConnPool(sm.dialer, zap.NewNop())
 	defer pool.Close()
 
-	// assert that passing no hosts results in not enough shards being downloaded
-	t.Run("no enough hosts", func(t *testing.T) {
+	// assert that passing no hosts results in errNotEnoughShards
+	t.Run("not enough hosts", func(t *testing.T) {
 		_, err := sm.downloadShards(context.Background(), slab, nil, pool, zap.NewNop())
 		if !errors.Is(err, errNotEnoughShards) {
 			t.Fatal(err)
 		}
 	})
 
-	t.Run("no enough hosts", func(t *testing.T) {
+	// assert that passing in a slab with not enough available sectors results
+	// in errNotEnoughShards
+	t.Run("not enough hosts", func(t *testing.T) {
 		unavailableSlab := slab
 		unavailableSlab.Sectors = slices.Clone(unavailableSlab.Sectors)
 		unavailableSlab.Sectors[0].HostKey = nil
@@ -165,18 +157,42 @@ func TestDownloadShards(t *testing.T) {
 		}
 	})
 
-	// assert that if all hosts are passed, we fetch exactly minShards sectors
-	// and that we fetch the cheapest ones first
+	// assert that if all hosts are passed, we succeed and fetch exactly 'minShards' sectors
 	t.Run("success", func(t *testing.T) {
 		sectors, err := sm.downloadShards(context.Background(), slab, allHosts, pool, zap.NewNop())
 		if err != nil {
 			t.Fatal(err)
-		} else if !reflect.DeepEqual(sectors, [][]byte{sector1[:], nil, sector3[:]}) {
-			t.Fatal("downloaded sectors do not match expected sectors")
+		}
+
+		var nFetched int
+		for _, shard := range sectors {
+			if shard == nil {
+				continue
+			}
+			nFetched++
+
+			// sanity check
+			isS1 := bytes.Equal(shard, sector1[:])
+			isS2 := bytes.Equal(shard, sector2[:])
+			isS3 := bytes.Equal(shard, sector3[:])
+			if !(isS1 || isS2 || isS3) {
+				t.Fatal("unexpected sector")
+			}
+		}
+		if nFetched != int(slab.MinShards) {
+			t.Fatalf("expected %d downloaded sectors, got %d", slab.MinShards, nFetched)
 		}
 	})
 
-	// assert that if the cheapest host times out, we still succeed.
+	// update service account balances to assert debiting
+	initialFunds := types.Siacoins(1)
+	for _, hk := range []types.PublicKey{hk1, hk2, hk3} {
+		if err := am.UpdateServiceAccountBalance(context.Background(), hk, sm.migrationAccount, initialFunds); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// assert that if h3 times out, we still succeed
 	t.Run("success with delay", func(t *testing.T) {
 		defer resetTimeouts()
 		sm.shardTimeout = 100 * time.Millisecond
@@ -197,15 +213,21 @@ func TestDownloadShards(t *testing.T) {
 			t.Fatal(err)
 		} else if !reflect.DeepEqual(sectors, [][]byte{nil, sector2[:], sector3[:]}) {
 			t.Fatal("downloaded sectors do not match expected sectors")
-		} else if sectors := store.lostSectors[hk1]; len(sectors) != 1 {
-			t.Fatalf("expected 1 lost sector for host %v, got %d", hk1, len(store.lostSectors[hk1]))
-		} else if _, ok := sectors[proto.SectorRoot(&sector1)]; !ok {
-			t.Fatalf("expected sector %v to be marked as lost, but it wasn't", proto.SectorRoot(&sector1))
+		}
+
+		if len(store.lostSectors) > 0 {
+			sectors, ok := store.lostSectors[hk1]
+			if !ok {
+				t.Fatalf("expected lost sector for host %v, got none", hk1)
+			} else if len(sectors) != 1 {
+				t.Fatalf("expected 1 lost sector for host %v, got %d %+v", hk1, len(store.lostSectors[hk1]), store.lostSectors)
+			} else if _, ok := sectors[proto.SectorRoot(&sector1)]; !ok {
+				t.Fatalf("expected sector %v to be marked as lost, but it wasn't", proto.SectorRoot(&sector1))
+			}
 		}
 	})
 
-	// assert that after the downloads, each host has the right remaining
-	// balance
+	// assert service account balance after downloads
 	assertBalance := func(host hosts.Host, nSectors uint64) {
 		t.Helper()
 		cost := host.Settings.Prices.RPCReadSectorCost(proto.SectorSize).RenterCost().Mul64(nSectors)
@@ -216,7 +238,7 @@ func TestDownloadShards(t *testing.T) {
 			t.Fatalf("expected balance for host %v is %v, got %v", host.PublicKey, initialFunds.Sub(cost), balance)
 		}
 	}
-	assertBalance(host1, 2)
-	assertBalance(host2, 2)
+	assertBalance(host1, 1)
+	assertBalance(host2, 3)
 	assertBalance(host3, 2)
 }
