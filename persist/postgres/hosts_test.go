@@ -1775,8 +1775,8 @@ func TestHostsForPinning(t *testing.T) {
 	}
 
 	// add contract for both hosts
-	fcid1 := db.addTestContract(t, hk1, types.FileContractID(hk1))
-	_ = db.addTestContract(t, hk2, types.FileContractID(hk2))
+	fcid1 := db.addTestContract(t, hk1)
+	_ = db.addTestContract(t, hk2)
 
 	// assert both hosts are returned now
 	hks, err = db.HostsForPinning(context.Background())
