@@ -320,6 +320,7 @@ func TestSharedObjects(t *testing.T) {
 	hostKeys := make([]types.PublicKey, 30)
 	for i := range hostKeys {
 		hostKeys[i] = store.addTestHost(t)
+		store.addTestContract(t, hostKeys[i])
 	}
 
 	pinRandomSlab := func(t *testing.T) slabs.SharedSlab {

@@ -32,8 +32,8 @@ func TestContracts(t *testing.T) {
 	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
 
 	// add a host with three contracts
-	hk1 := store.addHost(t)
-	hk2 := store.addHost(t)
+	hk1 := store.addTestHost(t)
+	hk2 := store.addTestHost(t)
 	fcid1 := store.addTestContract(t, hk1, types.FileContractID{1})
 	fcid2 := store.addTestContract(t, hk1, types.FileContractID{2})
 	fcid3 := store.addTestContract(t, hk2, types.FileContractID{3})
@@ -398,7 +398,7 @@ func TestContractsForBroadcasting(t *testing.T) {
 	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
 
 	// add a host with two contracts
-	hk := store.addHost(t)
+	hk := store.addTestHost(t)
 	fcid1 := store.addTestContract(t, hk, types.FileContractID{1})
 	fcid2 := store.addTestContract(t, hk, types.FileContractID{2})
 
@@ -554,8 +554,8 @@ func TestContractsForPinning(t *testing.T) {
 	}
 
 	// add two hosts
-	hk1 := store.addHost(t)
-	hk2 := store.addHost(t)
+	hk1 := store.addTestHost(t)
+	hk2 := store.addTestHost(t)
 
 	// add contracts for h1
 	const maxContractSize = 499
@@ -742,7 +742,7 @@ func TestPruneExpiredContractElements(t *testing.T) {
 	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
 
 	// add a host
-	hk := store.addHost(t)
+	hk := store.addTestHost(t)
 
 	addContract := func(expirationHeight uint64) types.FileContractID {
 		t.Helper()
@@ -836,7 +836,7 @@ func TestPruneContractSectorsMap(t *testing.T) {
 	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
 
 	// add a host
-	hk := store.addHost(t)
+	hk := store.addTestHost(t)
 
 	addContract := func(expirationHeight uint64) types.FileContractID {
 		t.Helper()
@@ -1364,7 +1364,7 @@ func TestUpdateNextPruned(t *testing.T) {
 	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
 
 	// add a host with one contract
-	hk := store.addHost(t)
+	hk := store.addTestHost(t)
 	fcid := store.addTestContract(t, hk, types.FileContractID(hk))
 
 	// assert contract is marked to be pruned within 24h
@@ -1601,7 +1601,7 @@ func TestContractsStats(t *testing.T) {
 	fcid3 := types.FileContractID{3}
 	fcid4 := types.FileContractID{4}
 
-	store.addHost(t, hk)
+	store.addTestHost(t, hk)
 	store.addTestContract(t, hk, fcid1)
 	store.addTestContract(t, hk, fcid2)
 	store.addTestContract(t, hk, fcid3)
@@ -2056,8 +2056,18 @@ func BenchmarkPrunableContractRoots(b *testing.B) {
 	}
 }
 
-func (s *Store) addTestContract(t testing.TB, hk types.PublicKey, fcid types.FileContractID) types.FileContractID {
+func (s *Store) addTestContract(t testing.TB, hk types.PublicKey, fcids ...types.FileContractID) types.FileContractID {
 	t.Helper()
+
+	var fcid types.FileContractID
+	switch len(fcids) {
+	case 0:
+		fcid = types.FileContractID(hk)
+	case 1:
+		fcid = fcids[0]
+	default:
+		panic("developer error")
+	}
 
 	err := s.AddFormedContract(context.Background(), hk, fcid, newTestRevision(hk), types.ZeroCurrency, types.ZeroCurrency, types.ZeroCurrency, proto.Usage{})
 	if err != nil {

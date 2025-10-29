@@ -174,6 +174,7 @@ func TestRecordIntegrityCheck(t *testing.T) {
 
 	// add host
 	hk := store.addTestHost(t)
+	store.addTestContract(t, hk)
 
 	// pin a slab to add 2 sectors
 	pinTime := time.Now().Round(time.Microsecond)
@@ -334,6 +335,7 @@ func TestSectorsForIntegrityCheck(t *testing.T) {
 
 	// add host
 	hk := store.addTestHost(t)
+	store.addTestContract(t, hk)
 
 	// pin a slab to add a few sectors to the database
 	root1 := frand.Entropy256()
@@ -419,6 +421,8 @@ func TestSlabIDs(t *testing.T) {
 	// add two hosts
 	hk1 := store.addTestHost(t)
 	hk2 := store.addTestHost(t)
+	store.addTestContract(t, hk1)
+	store.addTestContract(t, hk2)
 
 	// helper to create slab pin params
 	params := func() slabs.SlabPinParams {
@@ -509,6 +513,8 @@ func TestPinSlabs(t *testing.T) {
 	// add two hosts
 	hk1 := store.addTestHost(t)
 	hk2 := store.addTestHost(t)
+	store.addTestContract(t, hk1)
+	store.addTestContract(t, hk2)
 
 	// helper to create slabs
 	newSlab := func(i byte) (slabs.SlabID, slabs.SlabPinParams) {
@@ -743,11 +749,11 @@ func TestPinSlabsBadHost(t *testing.T) {
 	store.addTestAccount(t, types.PublicKey(account))
 
 	// this host is good because it has an active good contract on it
-	hk1 := store.addHost(t)
-	store.addTestContract(t, hk1, types.FileContractID{1})
+	hk1 := store.addTestHost(t)
+	store.addTestContract(t, hk1)
 	// this host is considered bad by PinSlabs because there are no
 	// contracts formed on it
-	hk2 := store.addHost(t)
+	hk2 := store.addTestHost(t)
 
 	// helper to create slabs
 	newSlab := func(i byte, hks ...types.PublicKey) (slabs.SlabID, slabs.SlabPinParams) {
@@ -790,6 +796,7 @@ func TestPinSlabsConflict(t *testing.T) {
 
 	store.addTestAccount(t, types.PublicKey(account))
 	hk := store.addTestHost(t)
+	store.addTestContract(t, hk)
 
 	// helper to create slabs
 	newSlab := func() (slabs.SlabID, slabs.SlabPinParams) {
@@ -881,6 +888,7 @@ func TestUnpinSlab(t *testing.T) {
 
 	// add host
 	hk := store.addTestHost(t)
+	store.addTestContract(t, hk)
 
 	// precreate 3 slabs, 2 sectors each
 	var params []slabs.SlabPinParams
@@ -997,7 +1005,7 @@ func TestPinSectors(t *testing.T) {
 	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
 
 	// create host and account
-	hk := store.addHost(t)
+	hk := store.addTestHost(t)
 	account := proto.Account{1}
 	store.addTestAccount(t, types.PublicKey(account))
 
@@ -1138,7 +1146,7 @@ func TestUnhealthySlabs(t *testing.T) {
 	store.addTestAccount(t, types.PublicKey(account))
 
 	// add a host and a contract
-	hk := store.addHost(t)
+	hk := store.addTestHost(t)
 	contractID := store.addTestContract(t, hk, types.FileContractID(hk))
 
 	// add two slabs & immediately reset the LRA-time
@@ -1300,7 +1308,7 @@ func TestMarkSectorsUnpinnable(t *testing.T) {
 	store.addTestAccount(t, types.PublicKey(account))
 
 	// add host with a contract
-	hk := store.addHost(t)
+	hk := store.addTestHost(t)
 	store.addTestContract(t, hk, types.FileContractID(hk))
 
 	// pin a slab to add a few sectors to the database
@@ -1385,7 +1393,7 @@ func TestUnpinnedSectors(t *testing.T) {
 	// create host with account and contract
 	account := proto.Account{1}
 	store.addTestAccount(t, types.PublicKey(account))
-	hk := store.addHost(t)
+	hk := store.addTestHost(t)
 	store.addTestContract(t, hk, types.FileContractID(hk))
 
 	// create 4 sectors

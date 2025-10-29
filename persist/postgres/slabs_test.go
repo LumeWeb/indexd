@@ -28,6 +28,7 @@ func TestSlab(t *testing.T) {
 	hosts := make([]types.PublicKey, 30)
 	for i := range hosts {
 		hosts[i] = store.addTestHost(t)
+		store.addTestContract(t, hosts[i], frand.Entropy256())
 	}
 
 	// pin slab
@@ -113,6 +114,7 @@ func TestPinnedSlab(t *testing.T) {
 	hosts := make([]types.PublicKey, 30)
 	for i := range hosts {
 		hosts[i] = store.addTestHost(t)
+		store.addTestContract(t, hosts[i])
 	}
 
 	pinned := slabs.SlabPinParams{

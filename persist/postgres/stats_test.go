@@ -21,6 +21,7 @@ func TestSectorStatsNumSlabs(t *testing.T) {
 	account := proto.Account{1}
 	store.addTestAccount(t, types.PublicKey(account))
 	hk := store.addTestHost(t)
+	store.addTestContract(t, hk)
 
 	// helper to create slabs
 	newSlab := func(i byte) slabs.SlabPinParams {
@@ -97,6 +98,8 @@ func TestSectorStats(t *testing.T) {
 	hk2 := store.addTestHost(t)
 	hk3 := store.addTestHost(t)
 	hk4 := store.addTestHost(t)
+	store.addTestContract(t, hk2)
+	store.addTestContract(t, hk3)
 	fcidHK1 := store.addTestContract(t, hk1, types.FileContractID{1})
 	fcidHK4 := store.addTestContract(t, hk4, types.FileContractID{2})
 
@@ -263,9 +266,9 @@ func TestHostStats(t *testing.T) {
 	}
 
 	// add three hosts
-	hk1 := store.addHost(t)
-	hk2 := store.addHost(t)
-	hk3 := store.addHost(t)
+	hk1 := store.addTestHost(t)
+	hk2 := store.addTestHost(t)
+	hk3 := store.addTestHost(t)
 
 	// assert empty stats
 	stats, err := store.HostStats(t.Context(), 0, 10)
