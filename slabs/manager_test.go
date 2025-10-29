@@ -93,8 +93,8 @@ func (s *mockStore) Hosts(ctx context.Context, offset, limit int, queryOpts ...h
 
 	var hosts []hosts.Host
 	for _, h := range s.hosts {
-		if opt.Good != nil {
-			if *opt.Good != h.Usability.Usable() {
+		if opt.Usable != nil {
+			if *opt.Usable != h.Usability.Usable() {
 				continue
 			}
 		}
