@@ -22,12 +22,22 @@ func TestUploadShards(t *testing.T) {
 	hm := newMockHostManager()
 	account := types.GeneratePrivateKey()
 
-	// prepare dialer
+	// prepare hosts
 	h1 := newTestHost(types.PublicKey{1})
 	h2 := newTestHost(types.PublicKey{2})
 	h3 := newTestHost(types.PublicKey{3})
 	h4 := newTestHost(types.PublicKey{4})
-	dialer := newMockDialer([]hosts.Host{h1, h2, h3, h4})
+
+	// prepare dialer
+	allHosts := []hosts.Host{h1, h2, h3, h4}
+	dialer := newMockDialer(allHosts)
+
+	// assert hosts have non-zero write costs
+	for _, host := range allHosts {
+		if host.Settings.Prices.RPCWriteSectorCost(proto.SectorSize).RenterCost().IsZero() {
+			t.Fatal("host has zero write cost")
+		}
+	}
 
 	// prepare shards
 	root1, sector1 := newTestSector()
@@ -55,7 +65,7 @@ func TestUploadShards(t *testing.T) {
 	defer pool.Close()
 
 	// set balance to 1SC
-	for _, h := range []hosts.Host{h1, h2, h3, h4} {
+	for _, h := range allHosts {
 		err = am.UpdateServiceAccountBalance(context.Background(), h.PublicKey, sm.migrationAccount, types.Siacoins(1))
 		if err != nil {
 			t.Fatal(err)
@@ -94,7 +104,7 @@ func TestUploadShards(t *testing.T) {
 
 	// assert hosts are tried until one succeeds
 	dialer.clients[h1.PublicKey].delay = time.Second
-	uploaded, err = sm.uploadShards(context.Background(), slab, shards, []hosts.Host{h1, h2, h3, h4}, pool, zap.NewNop())
+	uploaded, err = sm.uploadShards(context.Background(), slab, shards, allHosts, pool, zap.NewNop())
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	} else if len(uploaded) != 3 {
@@ -104,7 +114,7 @@ func TestUploadShards(t *testing.T) {
 	// assert the upload fails upon a root mismatch
 	corrupted := Slab{Sectors: slices.Clone(slab.Sectors)}
 	corrupted.Sectors[1].Root = types.Hash256{}
-	_, err = sm.uploadShards(context.Background(), corrupted, shards, []hosts.Host{h1, h2, h3, h4}, pool, zap.NewNop())
+	_, err = sm.uploadShards(context.Background(), corrupted, shards, allHosts, pool, zap.NewNop())
 	if !errors.Is(err, errRootMismatch) {
 		t.Fatalf("expected [errRootMismatch] got %v", err)
 	}
