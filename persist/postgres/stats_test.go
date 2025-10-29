@@ -25,9 +25,8 @@ func TestSectorStatsNumSlabs(t *testing.T) {
 	// helper to create slabs
 	newSlab := func(i byte) slabs.SlabPinParams {
 		slab := slabs.SlabPinParams{
-			IgnoreBadHosts: true,
-			EncryptionKey:  [32]byte{i},
-			MinShards:      10,
+			EncryptionKey: [32]byte{i},
+			MinShards:     10,
 			Sectors: []slabs.PinnedSector{
 				{
 					Root:    frand.Entropy256(),
@@ -108,9 +107,8 @@ func TestSectorStats(t *testing.T) {
 	}
 
 	params := slabs.SlabPinParams{
-		IgnoreBadHosts: true,
-		EncryptionKey:  frand.Entropy256(),
-		MinShards:      1,
+		EncryptionKey: frand.Entropy256(),
+		MinShards:     1,
 		Sectors: []slabs.PinnedSector{
 			{HostKey: hk1, Root: roots[0]},
 			{HostKey: hk2, Root: roots[1]},
@@ -265,9 +263,9 @@ func TestHostStats(t *testing.T) {
 	}
 
 	// add three hosts
-	hk1 := store.addTestHost(t)
-	hk2 := store.addTestHost(t)
-	hk3 := store.addTestHost(t)
+	hk1 := store.addHost(t)
+	hk2 := store.addHost(t)
+	hk3 := store.addHost(t)
 
 	// assert empty stats
 	stats, err := store.HostStats(t.Context(), 0, 10)

@@ -69,10 +69,9 @@ type (
 
 	// SlabPinParams is the input to PinSlabs
 	SlabPinParams struct {
-		IgnoreBadHosts bool           `json:"ignoreBadHosts"`
-		EncryptionKey  [32]byte       `json:"encryptionKey"`
-		MinShards      uint           `json:"minShards"`
-		Sectors        []PinnedSector `json:"sectors"`
+		EncryptionKey [32]byte       `json:"encryptionKey"`
+		MinShards     uint           `json:"minShards"`
+		Sectors       []PinnedSector `json:"sectors"`
 	}
 
 	// A PinnedSlab is a slab that has been pinned to hosts.

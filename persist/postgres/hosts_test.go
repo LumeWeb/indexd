@@ -170,10 +170,9 @@ func TestHost(t *testing.T) {
 	r1 := types.Hash256{1}
 	db.addTestAccount(t, hk)
 	if _, err := db.PinSlabs(context.Background(), proto4.Account(hk), time.Now(), slabs.SlabPinParams{
-		IgnoreBadHosts: true,
-		EncryptionKey:  [32]byte{},
-		MinShards:      1,
-		Sectors:        []slabs.PinnedSector{{Root: r1, HostKey: hk}},
+		EncryptionKey: [32]byte{},
+		MinShards:     1,
+		Sectors:       []slabs.PinnedSector{{Root: r1, HostKey: hk}},
 	}); err != nil {
 		t.Fatal(err)
 	} else if err := db.MarkSectorsLost(context.Background(), hk, []types.Hash256{r1}); err != nil {
@@ -440,7 +439,7 @@ func TestHosts(t *testing.T) {
 	addHost := func(i byte, usable, blocked bool, contract bool) types.PublicKey {
 		t.Helper()
 		hk := types.PublicKey{i}
-		db.addTestHost(t, hk)
+		db.addHost(t, hk)
 
 		// "scan" host - first scan fails
 		settings := newSettings(hk)
@@ -674,7 +673,7 @@ func TestUsableHosts(t *testing.T) {
 		t.Helper()
 
 		hk := types.PublicKey{i}
-		db.addTestHost(t, hk)
+		db.addHost(t, hk)
 
 		var netAddrs []chain.NetAddress
 		for _, protocol := range protocols {
@@ -929,9 +928,8 @@ func TestHostsWithLostSectors(t *testing.T) {
 	root3 := frand.Entropy256()
 	root4 := frand.Entropy256()
 	_, err := db.PinSlabs(context.Background(), account, time.Time{}, slabs.SlabPinParams{
-		IgnoreBadHosts: true,
-		EncryptionKey:  [32]byte{},
-		MinShards:      10,
+		EncryptionKey: [32]byte{},
+		MinShards:     10,
 		Sectors: []slabs.PinnedSector{
 			{
 				Root:    root1,
@@ -1008,34 +1006,41 @@ func TestHostsWithUnpinnableSectors(t *testing.T) {
 	// add hosts
 
 	// host1 has no contracts and no sectors -> not returned
-	db.addTestHost(t)
+	db.addHost(t)
 
 	// host2 has a contract but no sectors -> not returned
-	hk2 := db.addTestHost(t)
+	hk2 := db.addHost(t)
 	db.addTestContract(t, hk2, types.FileContractID(hk2))
 
 	// host3 has no contracts but a sector -> returned
-	hk3 := db.addTestHost(t)
+	hk3 := db.addHost(t)
 
 	// host4 has a contract and a pinned sector -> not returned
-	hk4 := db.addTestHost(t)
+	hk4 := db.addHost(t)
 	db.addTestContract(t, hk4, types.FileContractID(hk4))
 
 	_, err := db.PinSlabs(context.Background(), account, time.Time{}, slabs.SlabPinParams{
-		IgnoreBadHosts: true,
-		EncryptionKey:  [32]byte{},
-		MinShards:      1,
+		EncryptionKey: [32]byte{},
+		MinShards:     1,
 		Sectors: []slabs.PinnedSector{
 			{
 				Root:    types.Hash256(hk3),
 				HostKey: hk3,
 			},
 			{
-				Root:    frand.Entropy256(),
-				HostKey: hk3,
+				Root:    types.Hash256(hk4),
+				HostKey: hk4,
 			},
 			{
-				Root:    types.Hash256(hk4),
+				Root:    frand.Entropy256(),
+				HostKey: hk4,
+			},
+			{
+				Root:    frand.Entropy256(),
+				HostKey: hk4,
+			},
+			{
+				Root:    frand.Entropy256(),
 				HostKey: hk4,
 			},
 			{
@@ -1163,8 +1168,8 @@ func TestPruneHosts(t *testing.T) {
 	db := initPostgres(t, log.Named("postgres"))
 
 	// add two hosts
-	db.addTestHost(t)
-	db.addTestHost(t)
+	db.addHost(t)
+	db.addHost(t)
 
 	// assert both get pruned when no params are given
 	n, err := db.PruneHosts(context.Background(), time.Time{}, 0)
@@ -1175,8 +1180,8 @@ func TestPruneHosts(t *testing.T) {
 	}
 
 	// re-add the hosts
-	h1 := db.addTestHost(t)
-	h2 := db.addTestHost(t)
+	h1 := db.addHost(t)
+	h2 := db.addHost(t)
 
 	// assert none get pruned when we require at least one failed scan
 	n, err = db.PruneHosts(context.Background(), time.Now().Add(time.Second), 1)
@@ -1217,8 +1222,8 @@ func TestPruneHosts(t *testing.T) {
 	}
 
 	// re-add both hosts, simulate both a successful and failed scan
-	h1 = db.addTestHost(t)
-	h2 = db.addTestHost(t)
+	h1 = db.addHost(t)
+	h2 = db.addHost(t)
 	err = errors.Join(
 		db.UpdateHost(context.Background(), h1, proto4.HostSettings{}, geoip.Location{}, true, time.Now()),
 		db.UpdateHost(context.Background(), h1, proto4.HostSettings{}, geoip.Location{}, false, time.Now()),
@@ -1725,19 +1730,22 @@ func TestHostsForPinning(t *testing.T) {
 	db := initPostgres(t, log.Named("postgres"))
 
 	// add two hosts
-	hk1 := db.addTestHost(t)
-	hk2 := db.addTestHost(t)
+	hk1 := db.addHost(t)
+	hk2 := db.addHost(t)
 
 	// add account
 	acc := proto4.Account{1}
 	db.addTestAccount(t, types.PublicKey(acc))
 
+	// add contract to hosts so can satisfy PinSlab rules on hosts
+	db.addTestContract(t, hk1, frand.Entropy256())
+	db.addTestContract(t, hk2, frand.Entropy256())
+
 	// pin a slab with sector on both hosts
 	r1 := frand.Entropy256()
 	if _, err := db.PinSlabs(context.Background(), acc, time.Now(), slabs.SlabPinParams{
-		IgnoreBadHosts: true,
-		EncryptionKey:  [32]byte{},
-		MinShards:      1,
+		EncryptionKey: [32]byte{},
+		MinShards:     1,
 		Sectors: []slabs.PinnedSector{
 			{
 				Root:    r1,
@@ -1749,6 +1757,11 @@ func TestHostsForPinning(t *testing.T) {
 			},
 		},
 	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// remove contracts to avoid interfering with rest of test
+	if _, err := db.pool.Exec(context.Background(), `DELETE FROM contract_sectors_map; DELETE FROM contracts;`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1933,9 +1946,8 @@ func TestHostsForIntegrityChecks(t *testing.T) {
 	pinSector := func(hk types.PublicKey, root types.Hash256, nextCheck time.Time) {
 		t.Helper()
 		_, err := db.PinSlabs(context.Background(), acc, nextCheck, slabs.SlabPinParams{
-			IgnoreBadHosts: true,
-			EncryptionKey:  [32]byte{},
-			MinShards:      1,
+			EncryptionKey: [32]byte{},
+			MinShards:     1,
 			Sectors: []slabs.PinnedSector{
 				{
 					Root:    root,
@@ -2087,10 +2099,9 @@ func BenchmarkHostsForPinning(b *testing.B) {
 				roots = append(roots, root)
 			}
 			if _, err := store.PinSlabs(context.Background(), account, time.Now().Add(time.Hour), slabs.SlabPinParams{
-				IgnoreBadHosts: true,
-				MinShards:      1,
-				EncryptionKey:  frand.Entropy256(),
-				Sectors:        sectors,
+				MinShards:     1,
+				EncryptionKey: frand.Entropy256(),
+				Sectors:       sectors,
 			}); err != nil {
 				b.Fatal(err)
 			}
@@ -2143,10 +2154,9 @@ func BenchmarkHostsForIntegrityCheck(b *testing.B) {
 				})
 			}
 			if _, err := store.PinSlabs(context.Background(), account, time.Now().Add(time.Hour), slabs.SlabPinParams{
-				IgnoreBadHosts: true,
-				MinShards:      1,
-				EncryptionKey:  frand.Entropy256(),
-				Sectors:        sectors,
+				MinShards:     1,
+				EncryptionKey: frand.Entropy256(),
+				Sectors:       sectors,
 			}); err != nil {
 				b.Fatal(err)
 			}
@@ -2205,10 +2215,9 @@ func BenchmarkHostsWithLostSectors(b *testing.B) {
 				})
 			}
 			if _, err := store.PinSlabs(context.Background(), account, time.Now().Add(time.Hour), slabs.SlabPinParams{
-				IgnoreBadHosts: true,
-				MinShards:      1,
-				EncryptionKey:  frand.Entropy256(),
-				Sectors:        sectors,
+				MinShards:     1,
+				EncryptionKey: frand.Entropy256(),
+				Sectors:       sectors,
 			}); err != nil {
 				b.Fatal(err)
 			}
@@ -2260,10 +2269,9 @@ func BenchmarkHostsWithUnpinnableSectors(b *testing.B) {
 				})
 			}
 			if _, err := store.PinSlabs(context.Background(), account, time.Now().Add(time.Hour), slabs.SlabPinParams{
-				IgnoreBadHosts: true,
-				MinShards:      1,
-				EncryptionKey:  frand.Entropy256(),
-				Sectors:        sectors,
+				MinShards:     1,
+				EncryptionKey: frand.Entropy256(),
+				Sectors:       sectors,
 			}); err != nil {
 				b.Fatal(err)
 			}
@@ -2285,7 +2293,33 @@ func BenchmarkHostsWithUnpinnableSectors(b *testing.B) {
 	}
 }
 
+// addTestHost adds a host to the database and forms a contract with it so it
+// passes the tests in PinSlabs requiring hosts to have active good contracts
 func (s *Store) addTestHost(t testing.TB, hks ...types.PublicKey) types.PublicKey {
+	t.Helper()
+
+	var hk types.PublicKey
+	switch len(hks) {
+	case 0:
+		hk = types.GeneratePrivateKey().PublicKey() // generate a random host key
+	case 1:
+		hk = hks[0]
+	default:
+		panic("developer error")
+	}
+
+	ha := chain.NetAddress{Protocol: quic.Protocol, Address: "[::]:4848"}
+	if err := s.UpdateChainState(context.Background(), func(tx subscriber.UpdateTx) error {
+		return tx.AddHostAnnouncement(hk, chain.V2HostAnnouncement{ha}, time.Now())
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.addTestContract(t, hk, types.FileContractID(frand.Entropy256()))
+	return hk
+}
+
+// addHost simply adds a host to the database without adding a test contract
+func (s *Store) addHost(t testing.TB, hks ...types.PublicKey) types.PublicKey {
 	t.Helper()
 
 	var hk types.PublicKey

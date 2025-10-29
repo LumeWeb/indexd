@@ -30,7 +30,7 @@ func TestObjects(t *testing.T) {
 	}
 
 	// pin slab for both accounts
-	slab := slabs.SlabPinParams{IgnoreBadHosts: true, MinShards: 1}
+	slab := slabs.SlabPinParams{MinShards: 1}
 	for _, acc := range []proto4.Account{acc1, acc2} {
 		_, err := store.PinSlabs(context.Background(), acc, time.Time{}, slab)
 		if err != nil {
@@ -72,9 +72,8 @@ func TestObjects(t *testing.T) {
 		s := make([]slabs.SlabPinParams, n)
 		for i := range s {
 			s[i] = slabs.SlabPinParams{
-				IgnoreBadHosts: true,
-				EncryptionKey:  frand.Entropy256(),
-				MinShards:      1,
+				EncryptionKey: frand.Entropy256(),
+				MinShards:     1,
 			}
 		}
 		return s
@@ -244,7 +243,7 @@ func TestListObjectsRegression(t *testing.T) {
 	store.addTestAccount(t, types.PublicKey(acc))
 
 	randomObject := func() slabs.SealedObject {
-		slab := slabs.SlabPinParams{IgnoreBadHosts: true, EncryptionKey: frand.Entropy256(), MinShards: 1}
+		slab := slabs.SlabPinParams{EncryptionKey: frand.Entropy256(), MinShards: 1}
 		_, err := store.PinSlabs(context.Background(), acc, time.Time{}, slab)
 		if err != nil {
 			t.Fatal(err)
@@ -320,22 +319,16 @@ func TestSharedObjects(t *testing.T) {
 
 	hostKeys := make([]types.PublicKey, 30)
 	for i := range hostKeys {
-		hostKeys[i] = types.GeneratePrivateKey().PublicKey()
-		if err := store.UpdateChainState(context.Background(), func(tx subscriber.UpdateTx) error {
-			return tx.AddHostAnnouncement(hostKeys[i], chain.V2HostAnnouncement{{Protocol: quic.Protocol, Address: "[::]:4848"}}, time.Now())
-		}); err != nil {
-			t.Fatal(err)
-		}
+		hostKeys[i] = store.addTestHost(t)
 	}
 
 	pinRandomSlab := func(t *testing.T) slabs.SharedSlab {
 		t.Helper()
 
 		s := slabs.SlabPinParams{
-			IgnoreBadHosts: true,
-			MinShards:      uint(frand.Intn(255)) + 1,
-			EncryptionKey:  frand.Entropy256(),
-			Sectors:        make([]slabs.PinnedSector, 30),
+			MinShards:     uint(frand.Intn(255)) + 1,
+			EncryptionKey: frand.Entropy256(),
+			Sectors:       make([]slabs.PinnedSector, 30),
 		}
 		for i := range s.Sectors {
 			s.Sectors[i].HostKey = hostKeys[i%len(hostKeys)]
@@ -401,8 +394,7 @@ func TestSharedObjects(t *testing.T) {
 	// pin the slabs to the second account
 	for _, slab := range expectedSharedObj.Slabs {
 		_, err := store.PinSlabs(t.Context(), acc2, time.Time{}, slabs.SlabPinParams{
-			IgnoreBadHosts: true,
-			MinShards:      slab.MinShards,
+			MinShards: slab.MinShards,
 			Sectors: func() []slabs.PinnedSector {
 				sps := make([]slabs.PinnedSector, len(slab.Sectors))
 				for i := range slab.Sectors {
@@ -445,10 +437,9 @@ func BenchmarkSaveObject(b *testing.B) {
 		b.Helper()
 
 		s := slabs.SlabPinParams{
-			IgnoreBadHosts: true,
-			MinShards:      uint(frand.Intn(255)) + 1,
-			EncryptionKey:  frand.Entropy256(),
-			Sectors:        make([]slabs.PinnedSector, 30),
+			MinShards:     uint(frand.Intn(255)) + 1,
+			EncryptionKey: frand.Entropy256(),
+			Sectors:       make([]slabs.PinnedSector, 30),
 		}
 		for i := range s.Sectors {
 			s.Sectors[i].HostKey = hostKeys[i%len(hostKeys)]

@@ -32,10 +32,9 @@ func TestSlab(t *testing.T) {
 
 	// pin slab
 	params := slabs.SlabPinParams{
-		IgnoreBadHosts: true,
-		EncryptionKey:  frand.Entropy256(),
-		MinShards:      10,
-		Sectors:        make([]slabs.PinnedSector, 0, len(hosts)),
+		EncryptionKey: frand.Entropy256(),
+		MinShards:     10,
+		Sectors:       make([]slabs.PinnedSector, 0, len(hosts)),
 	}
 	var expectedSectors []slabs.Sector
 	for _, host := range hosts {
@@ -117,10 +116,9 @@ func TestPinnedSlab(t *testing.T) {
 	}
 
 	pinned := slabs.SlabPinParams{
-		IgnoreBadHosts: true,
-		EncryptionKey:  frand.Entropy256(),
-		MinShards:      10,
-		Sectors:        make([]slabs.PinnedSector, 0, len(hosts)),
+		EncryptionKey: frand.Entropy256(),
+		MinShards:     10,
+		Sectors:       make([]slabs.PinnedSector, 0, len(hosts)),
 	}
 	for _, host := range hosts {
 		pinned.Sectors = append(pinned.Sectors, slabs.PinnedSector{
@@ -195,7 +193,7 @@ func TestSlabPruning(t *testing.T) {
 	}
 
 	// pin slab for both accounts
-	slab1 := slabs.SlabPinParams{IgnoreBadHosts: true, MinShards: 1}
+	slab1 := slabs.SlabPinParams{MinShards: 1}
 	for _, acc := range []proto.Account{acc1, acc2} {
 		if _, err := store.PinSlabs(context.Background(), acc, time.Time{}, slab1); err != nil {
 			t.Fatal(err)
@@ -203,7 +201,7 @@ func TestSlabPruning(t *testing.T) {
 	}
 
 	// pin second slab for first account
-	slab2 := slabs.SlabPinParams{IgnoreBadHosts: true, MinShards: 2}
+	slab2 := slabs.SlabPinParams{MinShards: 2}
 	if _, err := store.PinSlabs(context.Background(), acc1, time.Time{}, slab2); err != nil {
 		t.Fatal(err)
 	}

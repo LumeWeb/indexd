@@ -312,12 +312,10 @@ func (s *Store) PinSlabs(ctx context.Context, account proto.Account, nextIntegri
 			}
 			br.Close()
 
-			if !slab.IgnoreBadHosts {
-				// if more than 20% of parity shards are on bad hosts, don't allow slab to be pinned
-				parityShards := max(0, len(slab.Sectors)-int(slab.MinShards))
-				if badHosts > (parityShards / 5) {
-					return slabs.ErrBadHosts
-				}
+			// if more than 20% of parity shards are on bad hosts, don't allow slab to be pinned
+			parityShards := max(0, len(slab.Sectors)-int(slab.MinShards))
+			if float64(badHosts) > 0.2*float64(parityShards) {
+				return slabs.ErrBadHosts
 			}
 
 			// update number of unpinned sectors
