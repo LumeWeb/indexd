@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -784,7 +783,7 @@ func TestPinSlabsBadHost(t *testing.T) {
 	}
 
 	_, slab2 := newSlab(1, hk2)
-	if _, err := store.PinSlabs(context.Background(), proto.Account{1}, nextCheck, slab2); err == nil || !strings.Contains(err.Error(), "bad host") {
+	if _, err := store.PinSlabs(context.Background(), proto.Account{1}, nextCheck, slab2); err == nil || !errors.Is(err, slabs.ErrBadHosts) {
 		t.Fatal(err)
 	}
 }
