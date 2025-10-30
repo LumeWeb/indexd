@@ -580,6 +580,14 @@ func TestPinSlabs(t *testing.T) {
 	assertPinnedData(account2, 0)
 	assertUnpinnedSectors(4)
 
+	// check that pinning with too large MinShards fails
+	_, slab3 := newSlab(3)
+	slab3.MinShards = 100
+	_, err = store.PinSlabs(context.Background(), proto.Account{1}, nextCheck, slab3)
+	if err == nil || !errors.Is(err, slabs.ErrMinShards) {
+		t.Fatalf("expected error %v, got %v", slabs.ErrMinShards, err)
+	}
+
 	sectorUploadedAt := func(root types.Hash256) (uploadedAt time.Time) {
 		t.Helper()
 
@@ -730,7 +738,7 @@ func TestPinSlabs(t *testing.T) {
 	assertUnpinnedSectors(4)
 
 	// pinning one more slab should fail
-	_, slab3 := newSlab(3)
+	_, slab3 = newSlab(3)
 	_, err = store.PinSlabs(context.Background(), account, nextCheck, slab3)
 	if !errors.Is(err, accounts.ErrStorageLimitExceeded) {
 		t.Fatal("expected ErrStorageLimitExceeded, got", err)
@@ -784,7 +792,7 @@ func TestPinSlabsBadHost(t *testing.T) {
 
 	_, slab2 := newSlab(1, hk2)
 	if _, err := store.PinSlabs(context.Background(), proto.Account{1}, nextCheck, slab2); err == nil || !errors.Is(err, slabs.ErrBadHosts) {
-		t.Fatal(err)
+		t.Fatalf("expected error %v, got %v", slabs.ErrBadHosts, err)
 	}
 }
 

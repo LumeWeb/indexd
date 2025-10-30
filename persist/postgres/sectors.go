@@ -15,6 +15,12 @@ import (
 	"go.sia.tech/indexd/slabs"
 )
 
+const (
+	// maxBadParityShards is the maximum proportion of parity shards that can be
+	// on bad hosts when pinning a slab.
+	maxBadParityShards = 0.2
+)
+
 // MarkSectorsLost marks the sectors as lost by setting both the contract ID and
 // host ID to NULL. This is meant to be used in 2 cases:
 // - The host reports that the sector is lost (e.g. when pinning it, during the integrity check or when fetching it for migration)
@@ -320,8 +326,8 @@ func (s *Store) PinSlabs(ctx context.Context, account proto.Account, nextIntegri
 			br.Close()
 
 			// if more than 20% of parity shards are on bad hosts, don't allow slab to be pinned
-			parityShards := max(0, len(slab.Sectors)-int(slab.MinShards))
-			if float64(badHosts) > 0.2*float64(parityShards) {
+			parityShards := len(slab.Sectors) - int(slab.MinShards)
+			if float64(badHosts) > maxBadParityShards*float64(parityShards) {
 				return slabs.ErrBadHosts
 			}
 
