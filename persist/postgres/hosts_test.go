@@ -1734,6 +1734,14 @@ func TestHostsForFunding(t *testing.T) {
 		return hks
 	}
 
+	// updateContractGood updates the 'good' field of the given contract.
+	updateContractGood := func(fcid types.FileContractID, good bool) {
+		t.Helper()
+		if _, err := store.pool.Exec(context.Background(), `UPDATE contracts SET good = $1 WHERE contract_id = $2`, good, sqlHash256(fcid)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	// updateContractState updates the state of the given contract.
 	updateContractState := func(fcid types.FileContractID, state contracts.ContractState) {
 		t.Helper()
@@ -1778,9 +1786,17 @@ func TestHostsForFunding(t *testing.T) {
 	assertNumHostsForFunding(1)
 
 	// assert good is taken into account
-	if _, err := store.pool.Exec(context.Background(), `UPDATE contracts SET good = FALSE WHERE contract_id = $1`, sqlHash256(fcid1)); err != nil {
+	updateContractGood(fcid1, false)
+	assertNumHostsForFunding(0)
+	updateContractGood(fcid1, true)
+	assertNumHostsForFunding(1)
+
+	// assert renewed_to is taken into account
+	fcid3 := types.FileContractID{3}
+	if err := store.AddRenewedContract(t.Context(), fcid1, fcid3, newTestRevision(hk1), types.ZeroCurrency, types.ZeroCurrency, proto4.Usage{}); err != nil {
 		t.Fatal(err)
 	}
+	updateContractGood(fcid3, false)
 	assertNumHostsForFunding(0)
 }
 
