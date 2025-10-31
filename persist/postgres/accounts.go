@@ -141,8 +141,8 @@ func (s *Store) UpdateAccount(ctx context.Context, oldAK, newAK types.PublicKey)
 	})
 }
 
-// HostAccountsForFunding returns up to limit accounts for the given host key
-// that are due for funding.
+// HostAccountsForFunding returns up to `limit` active (after the `threshold`
+// time) accounts for the given host key that are due for funding.
 func (s *Store) HostAccountsForFunding(ctx context.Context, hk types.PublicKey, threshold time.Time, limit int) ([]accounts.HostAccount, error) {
 	if limit < 0 {
 		return nil, errors.New("limit can not be negative")
