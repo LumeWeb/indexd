@@ -110,11 +110,17 @@ func TestMarkSlabRepaired(t *testing.T) {
 	account := proto.Account{1}
 	store.addTestAccount(t, types.PublicKey(account))
 
+	// add host
+	host := store.addTestHost(t)
+	store.addTestContract(t, host)
+
 	// add slab
 	slabIDs, err := store.PinSlabs(context.Background(), account, time.Time{}, slabs.SlabPinParams{
 		EncryptionKey: frand.Entropy256(),
 		MinShards:     1,
-		Sectors:       nil,
+		Sectors: []slabs.PinnedSector{
+			{Root: frand.Entropy256(), HostKey: host},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
