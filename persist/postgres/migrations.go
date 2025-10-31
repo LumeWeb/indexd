@@ -451,4 +451,13 @@ FROM objects o;
 		_, err := tx.Exec(ctx, `ALTER TABLE global_settings ADD COLUMN wallet_hash BYTEA CHECK(wallet_hash IS NULL OR LENGTH(wallet_hash) = 32);`)
 		return err
 	},
+	// add connect_key to accounts
+	func(ctx context.Context, tx *txn, _ *zap.Logger) error {
+		_, err := tx.Exec(ctx, `
+-- add connect key column and create index
+ALTER TABLE accounts ADD COLUMN connect_key TEXT REFERENCES app_connect_keys(app_key);
+CREATE INDEX accounts_connect_key_idx ON accounts(connect_key);
+`)
+		return err
+	},
 }

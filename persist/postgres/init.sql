@@ -1,16 +1,3 @@
-CREATE TABLE accounts (
-    id SERIAL PRIMARY KEY,
-    public_key BYTEA UNIQUE NOT NULL CHECK (LENGTH(public_key) = 32),
-    pinned_data BIGINT NOT NULL DEFAULT 0 CHECK (pinned_data >= 0), -- total pinned data in bytes
-    max_pinned_data BIGINT NOT NULL CHECK (max_pinned_data >= 0), -- max pinned data in bytes
-    service_account BOOLEAN NOT NULL DEFAULT FALSE, -- true if this is a service account
-    description TEXT NOT NULL DEFAULT '',
-    logo_url TEXT NOT NULL DEFAULT '',
-    service_url TEXT NOT NULL DEFAULT '',
-    last_used TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
-);
-CREATE INDEX accounts_last_used_idx ON accounts(last_used);
-
 CREATE TABLE app_connect_keys (
     app_key TEXT PRIMARY KEY,
     use_description TEXT NOT NULL,
@@ -21,6 +8,22 @@ CREATE TABLE app_connect_keys (
     last_used TIMESTAMP WITH TIME ZONE,
     max_pinned_data BIGINT NOT NULL CHECK (max_pinned_data >= 0)
 );
+
+CREATE TABLE accounts (
+    id SERIAL PRIMARY KEY,
+    public_key BYTEA UNIQUE NOT NULL CHECK (LENGTH(public_key) = 32),
+    connect_key TEXT REFERENCES app_connect_keys(app_key),
+
+    pinned_data BIGINT NOT NULL DEFAULT 0 CHECK (pinned_data >= 0), -- total pinned data in bytes
+    max_pinned_data BIGINT NOT NULL CHECK (max_pinned_data >= 0), -- max pinned data in bytes
+    service_account BOOLEAN NOT NULL DEFAULT FALSE, -- true if this is a service account
+    description TEXT NOT NULL DEFAULT '',
+    logo_url TEXT NOT NULL DEFAULT '',
+    service_url TEXT NOT NULL DEFAULT '',
+    last_used TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+CREATE INDEX accounts_last_used_idx ON accounts(last_used);
+CREATE INDEX accounts_connect_key_idx ON accounts(connect_key);
 
 CREATE TABLE hosts (
     id SERIAL PRIMARY KEY,

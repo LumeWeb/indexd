@@ -34,7 +34,7 @@ func (s *Store) Accounts(ctx context.Context, offset, limit int, opts ...account
 
 	if err := s.transaction(ctx, func(ctx context.Context, tx *txn) (err error) {
 		rows, err := tx.Query(ctx, `
-			SELECT public_key, service_account, max_pinned_data, pinned_data, description, logo_url, service_url, last_used
+			SELECT public_key, connect_key, service_account, max_pinned_data, pinned_data, description, logo_url, service_url, last_used
 			FROM accounts
 			WHERE ($1::boolean IS NULL OR service_account = $1::boolean)
 			LIMIT $2 OFFSET $3
@@ -64,7 +64,7 @@ func (s *Store) Account(ctx context.Context, ak types.PublicKey) (accounts.Accou
 	var account accounts.Account
 	account.AccountKey = proto.Account(ak) // no need to fetch key
 	err := s.transaction(ctx, func(ctx context.Context, tx *txn) (err error) {
-		account, err = scanAccount(tx.QueryRow(ctx, `SELECT public_key, service_account, max_pinned_data, pinned_data, description, logo_url, service_url, last_used FROM accounts WHERE public_key = $1`, sqlPublicKey(ak)))
+		account, err = scanAccount(tx.QueryRow(ctx, `SELECT public_key, connect_key, service_account, max_pinned_data, pinned_data, description, logo_url, service_url, last_used FROM accounts WHERE public_key = $1`, sqlPublicKey(ak)))
 		return err
 	})
 	return account, err
@@ -74,7 +74,7 @@ func (s *Store) Account(ctx context.Context, ak types.PublicKey) (accounts.Accou
 // account key.
 func (s *Store) AddServiceAccount(ctx context.Context, ak types.PublicKey, meta accounts.AccountMeta, opts ...accounts.AddAccountOption) error {
 	return s.transaction(ctx, func(ctx context.Context, tx *txn) error {
-		return addAccount(ctx, tx, ak, true, meta, opts...)
+		return addAccount(ctx, tx, nil, ak, true, meta, opts...)
 	})
 }
 
@@ -306,14 +306,14 @@ func (s *Store) ServiceAccountBalance(ctx context.Context, hostKey types.PublicK
 	return balance, err
 }
 
-func addAccount(ctx context.Context, tx *txn, account types.PublicKey, serviceAccount bool, meta accounts.AccountMeta, opts ...accounts.AddAccountOption) error {
+func addAccount(ctx context.Context, tx *txn, connectKey *string, account types.PublicKey, serviceAccount bool, meta accounts.AccountMeta, opts ...accounts.AddAccountOption) error {
 	aao := accounts.AddAccountOptions{
 		MaxPinnedData: math.MaxInt64, // no limit by default
 	}
 	for _, opt := range opts {
 		opt(&aao)
 	}
-	res, err := tx.Exec(ctx, `INSERT INTO accounts (public_key, service_account, max_pinned_data, description, logo_url, service_url) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING`, sqlPublicKey(account), serviceAccount, aao.MaxPinnedData, meta.Description, meta.LogoURL, meta.ServiceURL)
+	res, err := tx.Exec(ctx, `INSERT INTO accounts (public_key, connect_key, service_account, max_pinned_data, description, logo_url, service_url) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING`, sqlPublicKey(account), connectKey, serviceAccount, aao.MaxPinnedData, meta.Description, meta.LogoURL, meta.ServiceURL)
 	if err != nil {
 		return fmt.Errorf("failed to add account: %w", err)
 	} else if res.RowsAffected() == 0 {
@@ -383,6 +383,6 @@ LIMIT $2`, hostID, limit)
 }
 
 func scanAccount(s scanner) (account accounts.Account, err error) {
-	err = s.Scan((*sqlPublicKey)(&account.AccountKey), &account.ServiceAccount, &account.MaxPinnedData, &account.PinnedData, &account.Description, &account.LogoURL, &account.ServiceURL, &account.LastUsed)
+	err = s.Scan((*sqlPublicKey)(&account.AccountKey), &account.ConnectKey, &account.ServiceAccount, &account.MaxPinnedData, &account.PinnedData, &account.Description, &account.LogoURL, &account.ServiceURL, &account.LastUsed)
 	return
 }
