@@ -198,25 +198,37 @@ func sectorsToMigrate(slab Slab, allHosts []hosts.Host, goodContracts []contract
 
 	// determine whether the sector needs to be migrated. That's the case if
 	// one of the following is true:
-	// - the sector was marked lost (contract ID and host key are nil)
+	// - the sector is stored on a bad host
+	// - the sector is lost (host key is nil)
 	// - the sector is stored on a bad contract
 	var toMigrate []int
 	for i, sector := range slab.Sectors {
-		isLost := sector.ContractID == nil && sector.HostKey == nil
-		goodContract := sector.ContractID != nil && goodContractMap[*sector.ContractID] != contracts.Contract{}
-		if isLost || !goodContract {
+		if sector.HostKey == nil {
+			// sector is lost
 			toMigrate = append(toMigrate, i)
 			continue
 		}
 
-		// remove contract from the map since we don't want to use it again
-		delete(goodContractMap, *sector.ContractID)
-
-		// add the host to the spaced set to ensure we don't use hosts that are
-		// too close to existing hosts
-		if host, ok := hostsMap[*sector.HostKey]; ok {
-			set.Add(host.Info())
+		host, ok := hostsMap[*sector.HostKey]
+		if !ok {
+			// sector is on a bad host
+			toMigrate = append(toMigrate, i)
+			continue
 		}
+
+		if sector.ContractID != nil {
+			if _, ok := goodContractMap[*sector.ContractID]; !ok {
+				// sector is on a bad contract
+				toMigrate = append(toMigrate, i)
+				continue
+			}
+			delete(goodContractMap, *sector.ContractID)
+		}
+
+		// sector will not be migrated. Remove it from the hosts map
+		// and add it to the spaced set.
+		delete(hostsMap, *sector.HostKey)
+		set.Add(host.Info())
 	}
 
 	// return all hosts with contracts that are good, currently not in use and
