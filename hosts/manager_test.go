@@ -137,7 +137,7 @@ func (bs *blockingScanner) ScanQuic(ctx context.Context, hk types.PublicKey, add
 }
 
 func TestScanTimeout(t *testing.T) {
-	runTest := func(t *testing.T, addr chain.NetAddress, scanner hosts.Scanner) {
+	runTest := func(t *testing.T, addr chain.NetAddress, scanner hosts.Scanner, release *string) {
 		db := testutils.NewDB(t, contracts.DefaultMaintenanceSettings, zaptest.NewLogger(t))
 		defer db.Close()
 
@@ -157,26 +157,48 @@ func TestScanTimeout(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 		defer cancel()
 
-		_, err = mgr.ScanHost(ctx, hostKey)
-		if err == nil || !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("expected error %v, got %v", context.DeadlineExceeded, err)
+		host, err := mgr.ScanHost(ctx, hostKey)
+		if release == nil {
+			// we are expecting it to fail with "deadline exceeded"
+			if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("expected error %v, got %v", context.DeadlineExceeded, err)
+			}
+		} else if err != nil {
+			t.Fatal(err)
+		} else if host.Settings.Release != *release {
+			t.Fatal("unexpected", host.Settings)
 		}
 	}
 
-	t.Run("siamux", func(t *testing.T) {
+	t.Run("siamux_fail", func(t *testing.T) {
 		scanner := &blockingScanner{
 			delayMux: 500 * time.Millisecond,
-			settings: proto4.HostSettings{
-				Release: "delayedSiamuxScan",
-			},
 		}
-		runTest(t, chain.NetAddress{Address: "1.1.1.1:1111", Protocol: siamux.Protocol}, scanner)
+		runTest(t, chain.NetAddress{Address: "1.1.1.1:1111", Protocol: siamux.Protocol}, scanner, nil)
 	})
 
-	t.Run("quic", func(t *testing.T) {
+	t.Run("quic_fail", func(t *testing.T) {
 		scanner := &blockingScanner{
 			delayQuic: 500 * time.Millisecond,
 		}
-		runTest(t, chain.NetAddress{Address: "1.1.1.1:1111", Protocol: quic.Protocol}, scanner)
+		runTest(t, chain.NetAddress{Address: "1.1.1.1:1111", Protocol: quic.Protocol}, scanner, nil)
+	})
+
+	t.Run("siamux_succeed", func(t *testing.T) {
+		scanner := &blockingScanner{
+			settings: proto4.HostSettings{
+				Release: "siamux",
+			},
+		}
+		runTest(t, chain.NetAddress{Address: "1.1.1.1:1111", Protocol: siamux.Protocol}, scanner, &scanner.settings.Release)
+	})
+
+	t.Run("quic_succeed", func(t *testing.T) {
+		scanner := &blockingScanner{
+			settings: proto4.HostSettings{
+				Release: "quic",
+			},
+		}
+		runTest(t, chain.NetAddress{Address: "1.1.1.1:1111", Protocol: quic.Protocol}, scanner, &scanner.settings.Release)
 	})
 }
