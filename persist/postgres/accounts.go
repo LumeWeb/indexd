@@ -397,6 +397,10 @@ LIMIT $2`, hostID, limit)
 }
 
 func scanAccount(s scanner) (account accounts.Account, err error) {
-	err = s.Scan((*sqlPublicKey)(&account.AccountKey), &account.ConnectKey, &account.ServiceAccount, &account.MaxPinnedData, &account.PinnedData, &account.Description, &account.LogoURL, &account.ServiceURL, &account.LastUsed)
+	var connectKey sql.NullString
+	err = s.Scan((*sqlPublicKey)(&account.AccountKey), &connectKey, &account.ServiceAccount, &account.MaxPinnedData, &account.PinnedData, &account.Description, &account.LogoURL, &account.ServiceURL, &account.LastUsed)
+	if connectKey.Valid {
+		account.ConnectKey = &connectKey.String
+	}
 	return
 }
