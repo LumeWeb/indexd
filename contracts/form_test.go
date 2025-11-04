@@ -302,7 +302,6 @@ func TestPerformContractFormation(t *testing.T) {
 		h := goodHost(i + 1)
 		good = append(good, h)
 		hm.settings[h.PublicKey] = goodSettings
-		t.Log(i + 1)
 	}
 
 	var bad []hosts.Host
