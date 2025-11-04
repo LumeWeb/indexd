@@ -115,17 +115,11 @@ func TestUpdateLastUsed(t *testing.T) {
 	// create cluster
 	logger := testutils.NewLogger(false)
 	cluster := testutils.NewCluster(t, testutils.WithLogger(logger), testutils.WithApps(1), testutils.WithHosts(10), testutils.WithIndexer(testutils.WithSlabOptions(slabs.WithHealthCheckInterval(time.Second))))
+	app := cluster.Apps[0]
 
 	// create some more utxos
 	indexer := cluster.Indexer
 	cluster.ConsensusNode.MineBlocks(t, indexer.WalletAddr(), 10)
-
-	// add an account
-	a1 := types.GeneratePrivateKey()
-	indexer.Store().AddTestAccount(t, a1.PublicKey())
-
-	// convenience variables
-	app := indexer.App(a1)
 
 	// wait for contracts to be formed
 	cluster.WaitForContracts(t)
@@ -138,7 +132,7 @@ func TestUpdateLastUsed(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := client.WriteSector(context.Background(), hs.Prices, proto.NewAccountToken(a1, cluster.Hosts[i].PublicKey()), bytes.NewReader(shards[i]), proto.SectorSize); err != nil {
+		if _, err := client.WriteSector(context.Background(), hs.Prices, app.AccountToken(cluster.Hosts[i].PublicKey()), bytes.NewReader(shards[i]), proto.SectorSize); err != nil {
 			t.Fatal(err)
 		}
 	}
