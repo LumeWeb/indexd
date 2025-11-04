@@ -373,7 +373,7 @@ func TestContractsAPI(t *testing.T) {
 		t.Fatal(err)
 	} else if len(contracts) < 1 {
 		t.Fatal("expected at least 1 contract", len(contracts))
-	} else if contracts, err := adminClient.Contracts(context.Background(), admin.WithHostKeys([]types.PublicKey{types.PublicKey{}})); err != nil {
+	} else if contracts, err := adminClient.Contracts(context.Background(), admin.WithHostKeys([]types.PublicKey{{}})); err != nil {
 		t.Fatal(err)
 	} else if len(contracts) != 0 {
 		t.Fatal("expected no contract", len(contracts))
