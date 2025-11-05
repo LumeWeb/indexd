@@ -20,6 +20,7 @@ import (
 )
 
 const (
+	oneTB               = 1 << 40                                   // 1TB
 	minRemainingStorage = (10 * 1 << 30) / uint64(proto.SectorSize) // 10GB
 	maxContractSize     = 10 * 1 << 40                              // 10TB
 
@@ -210,6 +211,7 @@ type (
 		pruneIntervalFailure              time.Duration
 		syncPollInterval                  time.Duration
 		revisionBroadcastInterval         time.Duration
+		sectorRootsBatchSize              uint64
 	}
 )
 
@@ -234,6 +236,14 @@ func WithMaintenanceFrequency(frequency time.Duration) ContractManagerOpt {
 func WithMinHostDistance(km float64) ContractManagerOpt {
 	return func(cm *ContractManager) {
 		cm.minHostDistanceKm = km
+	}
+}
+
+// WithSectorRootsBatchSize sets the batch size for fetching sector roots.
+// The default is 1TB worth of sectors.
+func WithSectorRootsBatchSize(batchSize uint64) ContractManagerOpt {
+	return func(cm *ContractManager) {
+		cm.sectorRootsBatchSize = batchSize
 	}
 }
 
@@ -446,6 +456,7 @@ func newContractManager(renterKey types.PublicKey, accounts AccountManager, chai
 		pruneIntervalFailure:              3 * time.Hour,      // 3 hours
 		revisionBroadcastInterval:         7 * 24 * time.Hour, // 1 week,
 		syncPollInterval:                  time.Minute,
+		sectorRootsBatchSize:              oneTB / proto.SectorSize, // 1TB worth of sectors
 	}
 	for _, opt := range opts {
 		opt(cm)
