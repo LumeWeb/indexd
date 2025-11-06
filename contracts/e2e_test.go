@@ -14,6 +14,7 @@ import (
 	"go.sia.tech/indexd/hosts"
 	"go.sia.tech/indexd/internal/testutils"
 	"go.sia.tech/indexd/slabs"
+	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 	"lukechampine.com/frand"
 )
@@ -29,7 +30,7 @@ func TestContractPruning(t *testing.T) {
 	)
 
 	// create cluster
-	logger := zaptest.NewLogger(t)
+	logger := zap.NewNop()
 	cluster := testutils.NewCluster(t, testutils.WithLogger(logger), testutils.WithHosts(nHosts), testutils.WithIndexer(testutils.WithContractOptions(contracts.WithSectorRootsBatchSize(batchSize))))
 	indexer := cluster.Indexer
 
