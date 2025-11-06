@@ -271,7 +271,8 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, setting
 			return false
 		}
 
-		err = cm.formContract(ctx, host.PublicKey, settings.Period, accountFundTarget, log)
+		// fund target is multiplied by 2 to have buffer for less frequent refreshes
+		err = cm.formContract(ctx, host.PublicKey, settings.Period, accountFundTarget.Mul64(2), log)
 		switch {
 		case err == nil:
 			formed++
@@ -298,7 +299,8 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, setting
 			log.Warn("failed to get fund target", zap.Error(err))
 			return false
 		}
-		err = cm.refreshContract(ctx, contract, cm.chain.TipState().Index.Height, accountFundTarget, log)
+		// fund target is multiplied by 2 to have buffer for less frequent refreshes
+		err = cm.refreshContract(ctx, contract, cm.chain.TipState().Index.Height, accountFundTarget.Mul64(2), log)
 		switch {
 		case err == nil:
 			refreshed++
