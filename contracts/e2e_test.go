@@ -100,7 +100,6 @@ func TestContractPruning(t *testing.T) {
 	}
 
 	// assert all sectors were pinned
-	hostContracts := make(map[types.PublicKey]types.FileContractID)
 	contractRoots := make(map[types.FileContractID][]types.Hash256)
 	for _, slab := range res {
 		if len(slab.Sectors) != nHosts {
@@ -110,16 +109,34 @@ func TestContractPruning(t *testing.T) {
 			if sector.HostKey == nil || sector.ContractID == nil {
 				t.Fatal("sector is not pinned")
 			}
-			hostContracts[*sector.HostKey] = *sector.ContractID
 			contractRoots[*sector.ContractID] = append(contractRoots[*sector.ContractID], sector.Root)
 		}
+	}
+
+	// helper to fetch host's active contract ID
+	activeContractID := func(hk types.PublicKey) types.FileContractID {
+		t.Helper()
+
+		active, err := indexer.Contracts().Contracts(t.Context(), 0, 2, contracts.WithRevisable(true), contracts.WithGood(true), contracts.WithHostKeys([]types.PublicKey{hk}))
+		if err != nil {
+			t.Fatal(err)
+		} else if len(active) == 0 {
+			t.Fatalf("no active contract found for host %s", hk)
+		} else if len(active) > 1 {
+			// this should not happen unless the contract is full (impossible) or the maintenance
+			// is not working as expected.
+			t.Fatalf("multiple active contracts found for host %s", hk)
+		}
+		return active[0].ID
 	}
 
 	// compare contract roots
 	assertRoots := func(expectedSize uint64) {
 		t.Helper()
 
-		for hk, contractID := range hostContracts {
+		for _, host := range hosts {
+			contractID := activeContractID(host.PublicKey)
+
 			contract, _, err := indexer.Store().ContractRevision(t.Context(), contractID)
 			if err != nil {
 				t.Fatal(err)
@@ -127,7 +144,7 @@ func TestContractPruning(t *testing.T) {
 				t.Fatal("unexpected filesize, expected", expectedSize, "got", contract.Revision.Filesize)
 			}
 
-			client := indexer.HostClient(t, hk)
+			client := indexer.HostClient(t, host.PublicKey)
 			hs, err := client.Settings(t.Context())
 			if err != nil {
 				t.Fatal(err)
@@ -137,7 +154,7 @@ func TestContractPruning(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			} else if !reflect.DeepEqual(res.Roots, contractRoots[contractID]) {
-				t.Fatalf("unexpected roots for host %s", hk)
+				t.Fatalf("unexpected roots for host %s", host.PublicKey)
 			}
 		}
 	}
