@@ -16,10 +16,10 @@ import (
 	"go.sia.tech/indexd/client"
 	"go.sia.tech/indexd/hosts"
 	"go.uber.org/zap"
-	"lukechampine.com/frand"
 )
 
 const (
+	oneTB               = 1 << 40                                   // 1TB
 	minRemainingStorage = (10 * 1 << 30) / uint64(proto.SectorSize) // 10GB
 	maxContractSize     = 10 * 1 << 40                              // 10TB
 
@@ -44,7 +44,7 @@ type (
 	// AccountManager defines an interface that allows funding accounts on the
 	// host using a given set of contracts.
 	AccountManager interface {
-		FundTarget(ctx context.Context, minAllowance types.Currency) (types.Currency, error)
+		ContractFundTarget(ctx context.Context, host hosts.Host, minAllowance types.Currency) (types.Currency, error)
 		FundAccounts(ctx context.Context, host hosts.Host, contractIDs []types.FileContractID, force bool, log *zap.Logger) error
 	}
 
@@ -196,9 +196,8 @@ type (
 		triggerMaintenanceChan chan struct{}
 		triggerPruningChan     chan struct{}
 
-		log     *zap.Logger
-		shuffle func(int, func(i, j int))
-		tg      *threadgroup.ThreadGroup
+		log *zap.Logger
+		tg  *threadgroup.ThreadGroup
 
 		contractRejectBuffer              time.Duration
 		expiredContractBroadcastBuffer    uint64
@@ -210,6 +209,7 @@ type (
 		pruneIntervalFailure              time.Duration
 		syncPollInterval                  time.Duration
 		revisionBroadcastInterval         time.Duration
+		sectorRootsBatchSize              uint64
 	}
 )
 
@@ -234,6 +234,17 @@ func WithMaintenanceFrequency(frequency time.Duration) ContractManagerOpt {
 func WithMinHostDistance(km float64) ContractManagerOpt {
 	return func(cm *ContractManager) {
 		cm.minHostDistanceKm = km
+	}
+}
+
+// WithSectorRootsBatchSize sets the batch size for fetching sector roots.
+// The default is 1TB worth of sectors.
+func WithSectorRootsBatchSize(batchSize uint64) ContractManagerOpt {
+	if batchSize < 1 {
+		panic("sector roots batch size must be at least 1") // developer error
+	}
+	return func(cm *ContractManager) {
+		cm.sectorRootsBatchSize = batchSize
 	}
 }
 
@@ -432,20 +443,20 @@ func newContractManager(renterKey types.PublicKey, accounts AccountManager, chai
 		triggerMaintenanceChan: make(chan struct{}, 1),
 		triggerPruningChan:     make(chan struct{}, 1),
 
-		log:     zap.NewNop(),
-		shuffle: frand.Shuffle,
-		tg:      threadgroup.New(),
+		log: zap.NewNop(),
+		tg:  threadgroup.New(),
 
 		contractRejectBuffer:              6 * time.Hour, // 6 hours after formation
 		expiredContractBroadcastBuffer:    144,           // 144 block after expiration
 		expiredContractPruneBuffer:        144,           // 144 blocks after broadcast
 		expiredContractSectorsPruneBuffer: 36,            // 36 blocks (~6 hours) after expiration
-		maintenanceFrequency:              5 * time.Minute,
+		maintenanceFrequency:              2 * time.Minute,
 		minHostDistanceKm:                 10,                 // 10km
 		pruneIntervalSuccess:              24 * time.Hour,     // 1 day
 		pruneIntervalFailure:              3 * time.Hour,      // 3 hours
 		revisionBroadcastInterval:         7 * 24 * time.Hour, // 1 week,
 		syncPollInterval:                  time.Minute,
+		sectorRootsBatchSize:              oneTB / proto.SectorSize, // 1TB worth of sectors
 	}
 	for _, opt := range opts {
 		opt(cm)
