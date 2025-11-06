@@ -207,8 +207,10 @@ func (am *AccountManager) ContractFundTarget(ctx context.Context, host hosts.Hos
 		n = 1
 	}
 
-	// calculate the target and scale by number of active accounts
-	target := HostFundTarget(host).Mul64(n)
+	// calculate the target and scale by number of active accounts and double
+	// it to have a buffer so contracts are not refreshed immediately
+	// after one funding round.
+	target := HostFundTarget(host).Mul64(n).Mul64(2)
 
 	// ensure target is at least minAllowance
 	if target.Cmp(minAllowance) < 0 {
