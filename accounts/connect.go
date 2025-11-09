@@ -20,7 +20,7 @@ var (
 	ErrKeyInUse = errors.New("key in use")
 	// ErrKeyStorageLimitExceeded is returned when an operation fails due to
 	// the connect key exceeding its storage limit.
-	ErrKeyStorageLimitExceeded = errors.New("connect key storage limit exceeded")
+	ErrKeyStorageLimitExceeded = errors.New("app storage limit exceeded")
 )
 
 type (
