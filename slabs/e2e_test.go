@@ -9,7 +9,6 @@ import (
 
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
-	"go.sia.tech/indexd/contracts"
 	"go.sia.tech/indexd/internal/testutils"
 	"go.sia.tech/indexd/slabs"
 	"go.uber.org/zap"
@@ -18,7 +17,7 @@ import (
 func TestMigrations(t *testing.T) {
 	// create cluster
 	logger := zap.NewNop()
-	cluster := testutils.NewCluster(t, testutils.WithLogger(logger), testutils.WithHosts(11), testutils.WithIndexer(testutils.WithContractOptions(contracts.WithMaintenanceFrequency(500*time.Millisecond)), testutils.WithSlabOptions(slabs.WithHealthCheckInterval(500*time.Millisecond))))
+	cluster := testutils.NewCluster(t, testutils.WithLogger(logger), testutils.WithHosts(11))
 	indexer := cluster.Indexer
 
 	// create an app
@@ -118,7 +117,7 @@ func TestMigrations(t *testing.T) {
 func TestUpdateLastUsed(t *testing.T) {
 	// create cluster
 	logger := zap.NewNop()
-	cluster := testutils.NewCluster(t, testutils.WithLogger(logger), testutils.WithHosts(10), testutils.WithIndexer(testutils.WithSlabOptions(slabs.WithHealthCheckInterval(time.Second))))
+	cluster := testutils.NewCluster(t, testutils.WithLogger(logger), testutils.WithHosts(10), testutils.WithIndexer())
 
 	// create an app
 	app := cluster.App(t)
