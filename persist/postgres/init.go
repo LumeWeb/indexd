@@ -43,7 +43,7 @@ func setDBVersion(ctx context.Context, tx *txn, version int64) error {
 	return tx.QueryRow(ctx, query, version).Scan(&dbID)
 }
 
-func (s *Store) initNewDatabase(ctx context.Context, target int64, ms contracts.MaintenanceSettings, us hosts.UsabilitySettings) error {
+func (s *Store) initNewDatabase(target int64, ms contracts.MaintenanceSettings, us hosts.UsabilitySettings) error {
 	return s.transaction(func(ctx context.Context, tx *txn) error {
 		if _, err := tx.Exec(ctx, initDatabase); err != nil {
 			return err
@@ -58,7 +58,7 @@ func (s *Store) initNewDatabase(ctx context.Context, target int64, ms contracts.
 	})
 }
 
-func (s *Store) upgradeDatabase(ctx context.Context, current, target int64) error {
+func (s *Store) upgradeDatabase(current, target int64) error {
 	log := s.log.Named("migrations").With(zap.Int64("target", target))
 	for ; current < target; current++ {
 		version := current + 1 // initial schema is version 1, migration 0 is version 2, etc.

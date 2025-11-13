@@ -154,7 +154,7 @@ func (s *Store) SectorsForIntegrityCheck(hostKey types.PublicKey, limit int) ([]
 func (s *Store) MarkFailingSectorsLost(hostKey types.PublicKey, maxChecks uint) error {
 	const batchSize = 1000
 	for {
-		updated, err := s.markFailingSectorsLostBatch(s.ctx(), hostKey, maxChecks, batchSize)
+		updated, err := s.markFailingSectorsLostBatch(hostKey, maxChecks, batchSize)
 		if err != nil {
 			return err
 		} else if updated < batchSize {
@@ -167,7 +167,7 @@ func (s *Store) MarkFailingSectorsLost(hostKey types.PublicKey, maxChecks uint) 
 // markFailingSectorsLostBatch marks a batch of failing sectors as lost. We have
 // to batch it because we first need to select all sectors to update in order to
 // correctly updated the pinned sectors statistics.
-func (s *Store) markFailingSectorsLostBatch(ctx context.Context, hostKey types.PublicKey, maxChecks, batchSize uint) (int64, error) {
+func (s *Store) markFailingSectorsLostBatch(hostKey types.PublicKey, maxChecks, batchSize uint) (int64, error) {
 	var totalLost int64
 	if err := s.transaction(func(ctx context.Context, tx *txn) error {
 		var hostID int64

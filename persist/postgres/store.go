@@ -92,12 +92,12 @@ func NewStore(ctx context.Context, ci ConnectionInfo, defaultMaintenanceSettings
 	version := getDBVersion(ctx, pool)
 	switch {
 	case version == 0:
-		if err := s.initNewDatabase(ctx, target, defaultMaintenanceSettings, defaultUsabilitySettings); err != nil {
+		if err := s.initNewDatabase(target, defaultMaintenanceSettings, defaultUsabilitySettings); err != nil {
 			return nil, fmt.Errorf("failed to initialize database: %w", err)
 		}
 	case version < target:
 		s.log.Info("database version is out of date;", zap.Int64("version", version), zap.Int64("target", target))
-		if err := s.upgradeDatabase(ctx, version, target); err != nil {
+		if err := s.upgradeDatabase(version, target); err != nil {
 			return nil, fmt.Errorf("failed to upgrade database: %w", err)
 		}
 	case version > target:
