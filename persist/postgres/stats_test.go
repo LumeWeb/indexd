@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"testing"
@@ -239,7 +240,7 @@ func TestIntegrityCheckStats(t *testing.T) {
 	pinTime := time.Now().Round(time.Microsecond)
 	root1 := types.Hash256{1}
 	root2 := types.Hash256{2}
-	_, err := store.PinSlabs(context.Background(), account, pinTime, slabs.SlabPinParams{
+	_, err := store.PinSlabs(account, pinTime, slabs.SlabPinParams{
 		EncryptionKey: [32]byte{},
 		MinShards:     1,
 		Sectors: []slabs.PinnedSector{
@@ -275,7 +276,7 @@ func TestIntegrityCheckStats(t *testing.T) {
 
 	record := func(success bool, nextCheck time.Time, roots []types.Hash256) {
 		t.Helper()
-		err := store.RecordIntegrityCheck(context.Background(), success, nextCheck, hk, roots)
+		err := store.RecordIntegrityCheck(success, nextCheck, hk, roots)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -302,13 +303,13 @@ func TestIntegrityCheckStats(t *testing.T) {
 
 	// mark sectors lost with a threshold of 3 which is too high to mark
 	// root1 as lost
-	if err := store.MarkFailingSectorsLost(context.Background(), hk, 3); err != nil {
+	if err := store.MarkFailingSectorsLost(hk, 3); err != nil {
 		t.Fatal(err)
 	}
 	assertSectorStats(0, 6, 3)
 
 	// one more time with threshold of 2
-	if err := store.MarkFailingSectorsLost(context.Background(), hk, 2); err != nil {
+	if err := store.MarkFailingSectorsLost(hk, 2); err != nil {
 		t.Fatal(err)
 	}
 
@@ -316,7 +317,7 @@ func TestIntegrityCheckStats(t *testing.T) {
 	assertSectorStats(1, 6, 3)
 
 	// marking both lost should result in lost=2 because root1 is already lost
-	if err := store.MarkSectorsLost(context.Background(), hk, []types.Hash256{root1, root2}); err != nil {
+	if err := store.MarkSectorsLost(hk, []types.Hash256{root1, root2}); err != nil {
 		t.Fatal(err)
 	}
 	assertSectorStats(2, 6, 3)
