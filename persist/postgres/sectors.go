@@ -278,10 +278,8 @@ func (s *Store) PinSlabs(ctx context.Context, account proto.Account, nextIntegri
 				return fmt.Errorf("failed to insert slab into account_slabs: %w", err)
 			}
 
-			// check if pinning the slab would exceed the account's storage limit
-			// and if not, update the account's pinned data NOTE: we perform this
-			// check here since we need to know if the slab is a new slab or whether
-			// it was just repinned.
+			// track amount of data from newly pinned slabs so we can check later
+			// that we didn't exceed account and connect key storage limits
 			if res.RowsAffected() > 0 {
 				newPinnedData += slab.Size()
 			}
@@ -360,6 +358,8 @@ func (s *Store) PinSlabs(ctx context.Context, account proto.Account, nextIntegri
 			}
 		}
 
+		// check whether adding the newly pinned data would exceed the account's
+		// storage limit and if not, update the account's pinned data
 		var pinnedData, maxPinnedData uint64
 		err = tx.QueryRow(ctx, `UPDATE accounts SET last_used=NOW(), pinned_data = pinned_data + $1 WHERE id = $2 RETURNING pinned_data, max_pinned_data`, newPinnedData, accountID).Scan(&pinnedData, &maxPinnedData)
 		if err != nil {
@@ -368,6 +368,8 @@ func (s *Store) PinSlabs(ctx context.Context, account proto.Account, nextIntegri
 			return accounts.ErrAccountStorageLimitExceeded
 		}
 
+		// check whether adding the newly pinned data would exceed the connect
+		// key's storage limit and if not, update the connect key's pinned data
 		if connectKeyID.Valid {
 			var pinnedData, maxPinnedData uint64
 			err = tx.QueryRow(ctx, `UPDATE app_connect_keys SET pinned_data = pinned_data + $1 WHERE id = $2 RETURNING pinned_data, max_pinned_data`, newPinnedData, connectKeyID).Scan(&pinnedData, &maxPinnedData)
