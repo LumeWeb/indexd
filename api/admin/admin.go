@@ -953,11 +953,11 @@ func (a *admin) handleGETStatsHosts(jc jape.Context) {
 		return
 	}
 
-	var res HostStatsResponse
+	var res []HostStats
 	for _, s := range stats {
-		res.Hosts = append(res.Hosts, HostStats(s))
+		res = append(res, HostStats(s))
 	}
-	writeResponse(jc, res)
+	writeResponse(jc, HostStatsResponse(res))
 }
 
 func (a *admin) handleGETStatsHostsScans(jc jape.Context) {

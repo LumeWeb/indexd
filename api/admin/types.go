@@ -64,9 +64,7 @@ type (
 	}
 
 	// HostStatsResponse is the response body for the [GET] /stats/hosts.
-	HostStatsResponse struct {
-		Hosts []HostStats `json:"hosts"`
-	}
+	HostStatsResponse []HostStats
 
 	// HostStats wraps hosts.HostStats to provide a custom PrometheusMetric method.
 	HostStats hosts.HostStats

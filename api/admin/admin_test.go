@@ -927,9 +927,9 @@ func TestHostsStatsAPI(t *testing.T) {
 	res, err := admin.StatsHosts(t.Context(), 0, 10)
 	if err != nil {
 		t.Fatal(err)
-	} else if len(res.Hosts) != 2 {
-		t.Fatal("expected 2 hosts", len(res.Hosts))
-	} else if res.Hosts[0].PublicKey == res.Hosts[1].PublicKey {
+	} else if len(res) != 2 {
+		t.Fatal("expected 2 hosts", len(res))
+	} else if res[0].PublicKey == res[1].PublicKey {
 		t.Fatal("expected hosts to have different public keys")
 	}
 
@@ -937,15 +937,15 @@ func TestHostsStatsAPI(t *testing.T) {
 	res, err = admin.StatsHosts(t.Context(), 1, 1)
 	if err != nil {
 		t.Fatal(err)
-	} else if len(res.Hosts) != 1 {
-		t.Fatalf("expected 1 host, got %d", len(res.Hosts))
+	} else if len(res) != 1 {
+		t.Fatalf("expected 1 host, got %d", len(res))
 	}
 
 	res, err = admin.StatsHosts(t.Context(), 2, 1)
 	if err != nil {
 		t.Fatal(err)
-	} else if len(res.Hosts) != 0 {
-		t.Fatalf("expected 0 hosts, got %d", len(res.Hosts))
+	} else if len(res) != 0 {
+		t.Fatalf("expected 0 hosts, got %d", len(res))
 	}
 
 	stats, err := admin.StatsHostsScans(t.Context())
