@@ -1691,6 +1691,8 @@ components:
     #
     #############################
 
+    Hash256:
+      $ref: "./components.yml#/components/schemas/Hash256"
     Address:
       $ref: "./components.yml#/components/schemas/Address"
     Currency:
@@ -1716,6 +1718,8 @@ components:
       $ref: "./components.yml#/components/schemas/Explorer"
     Account:
       $ref: "./components.yml#/components/schemas/Account"
+    Severity:
+      $ref: "./components.yml#/components/schemas/Severity"
     Alert:
       $ref: "./components.yml#/components/schemas/Alert"
     Contract:
@@ -1732,6 +1736,8 @@ components:
       $ref: "./components.yml#/components/schemas/UsabilitySettings"
     ConnectKey:
       $ref: "./components.yml#/components/schemas/ConnectKey"
+    AccountStatsResponse:
+      $ref: "./components.yml#/components/schemas/AccountStatsResponse"
     UpdateAppConnectKey:
       $ref: "./components.yml#/components/schemas/UpdateAppConnectKey"
     AddConnectKeyRequest:
