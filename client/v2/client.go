@@ -182,7 +182,8 @@ func (c *Client) rpcFn(ctx context.Context, hostKey types.PublicKey, fn func(ctx
 		return fmt.Errorf("failed to get transport: %w", err)
 	}
 
-	if err := fn(ctx, transport); err == nil {
+	err = fn(ctx, transport)
+	if err == nil {
 		return nil
 	} else if shouldResetTransport(err) {
 		c.resetTransport(hostKey)
