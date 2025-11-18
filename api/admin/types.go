@@ -53,8 +53,8 @@ type (
 
 	// ScansStatsResponse is the response body for [GET] /stats/hosts/scans.
 	ScansStatsResponse struct {
-		Scans       int64 `json:"scans"`
-		ScansFailed int64 `json:"scansFailed"`
+		Total  int64 `json:"total"`
+		Failed int64 `json:"failed"`
 	}
 
 	// AccountStatsResponse is the response body for the [GET] /stats/accounts.

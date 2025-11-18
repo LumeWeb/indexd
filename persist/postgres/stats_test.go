@@ -505,10 +505,10 @@ func TestHostScanStats(t *testing.T) {
 		stats, err := store.ScanStats()
 		if err != nil {
 			t.Fatal(err)
-		} else if expectedScans != stats.Scans {
-			t.Fatalf("expected %d scans, got %d", expectedScans, stats.Scans)
-		} else if expectedFailed != stats.ScansFailed {
-			t.Fatalf("expected %d scans, got %d", expectedFailed, stats.ScansFailed)
+		} else if expectedScans != stats.Total {
+			t.Fatalf("expected %d scans, got %d", expectedScans, stats.Total)
+		} else if expectedFailed != stats.Failed {
+			t.Fatalf("expected %d scans, got %d", expectedFailed, stats.Failed)
 		}
 	}
 	assertStats(0, 0)

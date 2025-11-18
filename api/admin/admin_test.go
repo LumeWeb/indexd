@@ -951,10 +951,10 @@ func TestHostsStatsAPI(t *testing.T) {
 	stats, err := admin.StatsScans(t.Context())
 	if err != nil {
 		t.Fatal(err)
-	} else if stats.Scans != 4 {
-		t.Fatalf("expected 4 scans, got %d", stats.Scans)
-	} else if stats.ScansFailed != 0 {
-		t.Fatalf("expected 0 failed scans, got %d", stats.ScansFailed)
+	} else if stats.Total != 4 {
+		t.Fatalf("expected 4 scans, got %d", stats.Total)
+	} else if stats.Failed != 0 {
+		t.Fatalf("expected 0 failed scans, got %d", stats.Failed)
 	}
 }
 
