@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"time"
 
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
@@ -240,6 +241,7 @@ func (c *Client) WriteSector(ctx context.Context, accountKey types.PrivateKey, h
 	}
 	defer done()
 
+	start := time.Now()
 	err = c.rpcFn(ctx, hostKey, func(ctx context.Context, transport rhp.TransportClient) error {
 		prices, err := c.Prices(ctx, hostKey)
 		if err != nil {
@@ -249,6 +251,11 @@ func (c *Client) WriteSector(ctx context.Context, accountKey types.PrivateKey, h
 		result, err = rhp.RPCWriteSector(ctx, transport, prices, token, bytes.NewReader(data), uint64(len(data)))
 		return err
 	})
+	if err != nil {
+		c.hosts.AddFailedRPC(hostKey)
+	} else {
+		c.hosts.AddWriteSample(hostKey, time.Since(start))
+	}
 	return
 }
 
@@ -261,6 +268,7 @@ func (c *Client) ReadSector(ctx context.Context, accountKey types.PrivateKey, ho
 	}
 	defer done()
 
+	start := time.Now()
 	err = c.rpcFn(ctx, hostKey, func(ctx context.Context, transport rhp.TransportClient) error {
 		prices, err := c.Prices(ctx, hostKey)
 		if err != nil {
@@ -270,6 +278,11 @@ func (c *Client) ReadSector(ctx context.Context, accountKey types.PrivateKey, ho
 		result, err = rhp.RPCReadSector(ctx, transport, prices, token, w, root, offset, length)
 		return err
 	})
+	if err != nil {
+		c.hosts.AddFailedRPC(hostKey)
+	} else {
+		c.hosts.AddReadSample(hostKey, time.Since(start))
+	}
 	return
 }
 
