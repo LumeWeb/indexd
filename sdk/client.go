@@ -405,8 +405,8 @@ func (s *SDK) PinObject(ctx context.Context, obj Object) error {
 // SealObject seals the object for storage in the indexer. A sealed object can
 // be safely stored and shared without granting access to the underlying
 // metadata or object data.
-func (s *SDK) SealObject(obj Object) (slabs.SealedObject, error) {
-	return obj.Seal(s.appKey), nil
+func (s *SDK) SealObject(obj Object) slabs.SealedObject {
+	return obj.Seal(s.appKey)
 }
 
 // OpenSealedObject opens a sealed object from the indexer.
