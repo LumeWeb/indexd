@@ -112,7 +112,7 @@ func (s *SDK) Object(ctx context.Context, objectKey types.Hash256) (Object, erro
 	if err != nil {
 		return Object{}, fmt.Errorf("failed to get locked object: %w", err)
 	}
-	return objectFromSealedObject(lo, s.appKey)
+	return ObjectFromSealedObject(lo, s.appKey)
 }
 
 // ListObjects lists objects, starting from the given cursor, up to the given limit.
@@ -126,7 +126,7 @@ func (s *SDK) ListObjects(ctx context.Context, cursor slabs.Cursor, limit int) (
 		if lo.Deleted {
 			continue
 		}
-		obj, err := objectFromSealedObject(*lo.Object, s.appKey)
+		obj, err := ObjectFromSealedObject(*lo.Object, s.appKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to unlock object: %w", err)
 		}
@@ -178,7 +178,7 @@ func unlockEncryptedMetadata(objectID types.Hash256, masterKey []byte, encrypted
 	return metadata, nil
 }
 
-func objectFromSealedObject(so slabs.SealedObject, appKey types.PrivateKey) (Object, error) {
+func ObjectFromSealedObject(so slabs.SealedObject, appKey types.PrivateKey) (Object, error) {
 	obj := Object{
 		slabs:     slices.Clone(so.Slabs),
 		createdAt: so.CreatedAt,

@@ -411,7 +411,7 @@ func (s *SDK) SealObject(obj Object) slabs.SealedObject {
 
 // OpenSealedObject opens a sealed object from the indexer.
 func (s *SDK) OpenSealedObject(so slabs.SealedObject) (Object, error) {
-	return objectFromSealedObject(so, s.appKey)
+	return ObjectFromSealedObject(so, s.appKey)
 }
 
 func (s *SDK) downloadSlabs(ctx context.Context, w io.Writer, maxInflight int, hostTimeout time.Duration, next slabIterFn) error {
