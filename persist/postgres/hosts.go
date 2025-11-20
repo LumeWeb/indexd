@@ -458,6 +458,10 @@ WHERE hosts.id = computed.id`, sqlPublicKey(hk), uptimeHalfLife, nextScan); err 
 			} else if res.RowsAffected() == 0 {
 				return fmt.Errorf("host %q: %w", hk, hosts.ErrNotFound)
 			}
+
+			if err := incrementNumScans(ctx, tx, scanSucceeded); err != nil {
+				return fmt.Errorf("failed to update total scans: %w", err)
+			}
 			return nil
 		}
 
@@ -543,7 +547,10 @@ WHERE hosts.id = computed.id RETURNING hosts.id`,
 			return fmt.Errorf("failed to update host with scan: %w", err)
 		} else if hostID == 0 {
 			return errors.New("failed to return host id after successful update") // sanity check
+		} else if err := incrementNumScans(ctx, tx, scanSucceeded); err != nil {
+			return fmt.Errorf("failed to update total scans: %w", err)
 		}
+
 		return nil
 	})
 }

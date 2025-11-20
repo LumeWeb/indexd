@@ -51,6 +51,12 @@ type (
 		CheckFailed int64 `json:"checkFailed"`
 	}
 
+	// ScansStatsResponse is the response body for [GET] /stats/hosts/scans.
+	ScansStatsResponse struct {
+		Total  int64 `json:"total"`
+		Failed int64 `json:"failed"`
+	}
+
 	// AccountStatsResponse is the response body for the [GET] /stats/accounts.
 	AccountStatsResponse struct {
 		Registered uint64 `json:"registered"`
@@ -58,9 +64,7 @@ type (
 	}
 
 	// HostStatsResponse is the response body for the [GET] /stats/hosts.
-	HostStatsResponse struct {
-		Hosts []HostStats `json:"hosts"`
-	}
+	HostStatsResponse []HostStats
 
 	// HostStats wraps hosts.HostStats to provide a custom PrometheusMetric method.
 	HostStats hosts.HostStats

@@ -105,6 +105,7 @@ type (
 	Store interface {
 		AccountStats() (AccountStatsResponse, error)
 		ContractsStats() (ContractsStatsResponse, error)
+		ScanStats() (ScansStatsResponse, error)
 		HostStats(offset, limit int) ([]hosts.HostStats, error)
 		SectorStats() (SectorsStatsResponse, error)
 
@@ -247,6 +248,7 @@ func NewAPI(chain ChainManager, accounts Accounts, contracts ContractManager, ho
 		"GET /stats/accounts":  a.handleGETStatsAccounts,
 		"GET /stats/contracts": a.handleGETStatsContracts,
 		"GET /stats/hosts":     a.handleGETStatsHosts,
+		"GET /stats/scans":     a.handleGETStatsScans,
 		"GET /stats/sectors":   a.handleGETStatsSectors,
 	}
 
@@ -951,11 +953,19 @@ func (a *admin) handleGETStatsHosts(jc jape.Context) {
 		return
 	}
 
-	var res HostStatsResponse
+	var res []HostStats
 	for _, s := range stats {
-		res.Hosts = append(res.Hosts, HostStats(s))
+		res = append(res, HostStats(s))
 	}
-	writeResponse(jc, res)
+	writeResponse(jc, HostStatsResponse(res))
+}
+
+func (a *admin) handleGETStatsScans(jc jape.Context) {
+	stats, err := a.store.ScanStats()
+	if jc.Check("failed to retrieve host scan stats", err) != nil {
+		return
+	}
+	writeResponse(jc, stats)
 }
 
 func (a *admin) handleGETStatsSectors(jc jape.Context) {

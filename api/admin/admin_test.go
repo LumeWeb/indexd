@@ -922,14 +922,14 @@ func TestHostsStatsAPI(t *testing.T) {
 	// create cluster with two hosts
 	cluster := testutils.NewCluster(t, testutils.WithHosts(2))
 	admin := cluster.Indexer.Admin
-	time.Sleep(time.Second)
+	cluster.WaitForContracts(t)
 
 	res, err := admin.StatsHosts(t.Context(), 0, 10)
 	if err != nil {
 		t.Fatal(err)
-	} else if len(res.Hosts) != 2 {
-		t.Fatal("expected 2 hosts", len(res.Hosts))
-	} else if res.Hosts[0].PublicKey == res.Hosts[1].PublicKey {
+	} else if len(res) != 2 {
+		t.Fatal("expected 2 hosts", len(res))
+	} else if res[0].PublicKey == res[1].PublicKey {
 		t.Fatal("expected hosts to have different public keys")
 	}
 
@@ -937,15 +937,24 @@ func TestHostsStatsAPI(t *testing.T) {
 	res, err = admin.StatsHosts(t.Context(), 1, 1)
 	if err != nil {
 		t.Fatal(err)
-	} else if len(res.Hosts) != 1 {
-		t.Fatal("expected 1 host", len(res.Hosts))
+	} else if len(res) != 1 {
+		t.Fatalf("expected 1 host, got %d", len(res))
 	}
 
 	res, err = admin.StatsHosts(t.Context(), 2, 1)
 	if err != nil {
 		t.Fatal(err)
-	} else if len(res.Hosts) != 0 {
-		t.Fatal("expected 0 hosts", len(res.Hosts))
+	} else if len(res) != 0 {
+		t.Fatalf("expected 0 hosts, got %d", len(res))
+	}
+
+	stats, err := admin.StatsScans(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	} else if stats.Total != 4 {
+		t.Fatalf("expected 4 scans, got %d", stats.Total)
+	} else if stats.Failed != 0 {
+		t.Fatalf("expected 0 failed scans, got %d", stats.Failed)
 	}
 }
 

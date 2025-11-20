@@ -54,6 +54,15 @@ func incrementNumSectorsFailed(ctx context.Context, tx *txn, delta uint64) error
 	return err
 }
 
+func incrementNumScans(ctx context.Context, tx *txn, success bool) error {
+	var failed int64
+	if !success {
+		failed = 1
+	}
+	_, err := tx.Exec(ctx, "UPDATE stats SET num_scans = num_scans + 1, num_scans_failed = num_scans_failed + $1", failed)
+	return err
+}
+
 func initStats(ctx context.Context, tx *txn) error {
 	_, err := tx.Exec(ctx, "INSERT INTO stats (id) VALUES (0) ON CONFLICT(id) DO NOTHING")
 	return err
@@ -87,6 +96,14 @@ func (s *Store) AccountStats() (admin.AccountStatsResponse, error) {
 		return nil
 	})
 	return stats, err
+}
+
+// ScanStats reports statistics about host scans for all hosts.
+func (s *Store) ScanStats() (stats admin.ScansStatsResponse, err error) {
+	err = s.transaction(func(ctx context.Context, tx *txn) error {
+		return tx.QueryRow(ctx, "SELECT num_scans, num_scans_failed FROM stats").Scan(&stats.Total, &stats.Failed)
+	})
+	return
 }
 
 // HostStats reports statistics about used hosts. We consider a host to be used

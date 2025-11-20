@@ -833,41 +833,50 @@ components:
           description: Total size of all active contracts
 
     HostsStatsResponse:
+      type: array
+      items:
+        type: object
+        properties:
+          accountUsage:
+            allOf:
+              - $ref: "#/components/schemas/Currency"
+              - description: Total amount spent on ephemeral accounts
+          activeContractsSize:
+            type: integer
+            format: int64
+            description: Total size of all active contracts on this host
+          publicKey:
+            allOf:
+              - $ref: "#/components/schemas/PublicKey"
+              - description: The public key of the host
+          lostSectors:
+            type: integer
+            format: int64
+            description: Total number of sectors lost on this host
+          totalUsage:
+            allOf:
+              - $ref: "#/components/schemas/Currency"
+              - description: Total amount spent on this host
+          blocked:
+            type: boolean
+            description: Whether the host is currently blocked
+          blockedReasons:
+            type: array
+            items:
+              type: string
+            description: Reasons why the host was blocked, if any
+
+    HostScanStatsResponse:
       type: object
       properties:
-        hosts:
-          type: array
-          items:
-            type: object
-            properties:
-              accountUsage:
-                allOf:
-                  - $ref: "#/components/schemas/Currency"
-                  - description: Total amount spent on ephemeral accounts
-              activeContractsSize:
-                type: integer
-                format: int64
-                description: Total size of all active contracts on this host
-              publicKey:
-                allOf:
-                  - $ref: "#/components/schemas/PublicKey"
-                  - description: The public key of the host
-              lostSectors:
-                type: integer
-                format: int64
-                description: Total number of sectors lost on this host
-              totalUsage:
-                allOf:
-                  - $ref: "#/components/schemas/Currency"
-                  - description: Total amount spent on this host
-              blocked:
-                type: boolean
-                description: Whether the host is currently blocked
-              blockedReasons:
-                type: array
-                items:
-                  type: string
-                description: Reasons why the host was blocked, if any
+        scans:
+          type: integer
+          format: int64
+          description: Total number of host scans across all hosts
+        scansFailed:
+          type: integer
+          format: int64
+          description: Total number of failed host scans across all hosts
 
     SectorStatsResponse:
       type: object
