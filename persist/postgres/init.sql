@@ -26,6 +26,7 @@ CREATE TABLE accounts (
     deleted BOOLEAN NOT NULL DEFAULT FALSE
 );
 CREATE INDEX accounts_last_used_idx ON accounts(last_used);
+CREATE INDEX accounts_deleted_idx ON accounts(deleted);
 CREATE INDEX accounts_connect_key_id_idx ON accounts(connect_key_id);
 
 CREATE TABLE hosts (
