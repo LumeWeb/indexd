@@ -194,7 +194,7 @@ func (m *AccountManager) Accounts(ctx context.Context, offset, limit int, opts .
 // Objects/slabs/sectors associated with the account will be cleaned up by the
 // slabs manager.
 func (m *AccountManager) DeleteAccount(ctx context.Context, ak types.PublicKey) error {
-	return m.store.DeleteAccount(ak, false)
+	return m.store.DeleteAccount(ak, true)
 }
 
 // ContractFundTarget calculates the fund target for a contract on the given
