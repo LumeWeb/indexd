@@ -126,7 +126,7 @@ func (s *Store) DeleteAccount(ak types.PublicKey, soft bool) error {
 	return s.transaction(func(ctx context.Context, tx *txn) error {
 		if soft {
 			var serviceAccount bool
-			err := tx.QueryRow(ctx, `UPDATE accounts set deleted = TRUE WHERE public_key = $1 RETURNING service_account`, sqlPublicKey(ak)).Scan(&serviceAccount)
+			err := tx.QueryRow(ctx, `UPDATE accounts SET deleted = TRUE WHERE public_key = $1 RETURNING service_account`, sqlPublicKey(ak)).Scan(&serviceAccount)
 			if errors.Is(err, sql.ErrNoRows) {
 				return accounts.ErrNotFound
 			} else if err != nil {
