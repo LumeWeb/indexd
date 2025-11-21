@@ -208,6 +208,10 @@ func (s *Store) ListObjects(account proto.Account, cursor slabs.Cursor, limit in
 }
 
 func deleteObjects(ctx context.Context, tx *txn, accountID int64, objectKeys []types.Hash256) error {
+	if len(objectKeys) == 0 {
+		return nil
+	}
+
 	keys := make([]sqlHash256, 0, len(objectKeys))
 	for _, objectKey := range objectKeys {
 		keys = append(keys, sqlHash256(objectKey))

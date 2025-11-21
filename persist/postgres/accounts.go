@@ -146,8 +146,14 @@ func (s *Store) DeleteAccount(ak types.PublicKey, soft bool) error {
 				return accounts.ErrServiceAccount
 			} else if err := incrementNumAccounts(ctx, tx, -1); err != nil {
 				return fmt.Errorf("failed to decrement registered accounts: %w", err)
-			} else if _, err := tx.Exec(ctx, `UPDATE app_connect_keys SET remaining_uses = remaining_uses + 1 WHERE id = $1`, connectKeyID); err != nil {
-				return fmt.Errorf("failed to increment connect key remaining_uses: %w", err)
+			}
+
+			if connectKeyID.Valid {
+				if result, err := tx.Exec(ctx, `UPDATE app_connect_keys SET remaining_uses = remaining_uses + 1 WHERE id = $1`, connectKeyID); err != nil {
+					return fmt.Errorf("failed to increment connect key remaining_uses: %w", err)
+				} else if result.RowsAffected() != 1 {
+					return errors.New("failed to update app_connect_keys remaining uses")
+				}
 			}
 		}
 		return nil
