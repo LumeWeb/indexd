@@ -346,10 +346,6 @@ func (s *mockStore) DeleteObject(account proto.Account, objectKey types.Hash256)
 	return nil
 }
 
-func (s *mockStore) DeleteObjects(account proto.Account, objectKeys []types.Hash256) error {
-	return nil
-}
-
 func (s *mockStore) SaveObject(account proto.Account, obj SealedObject) error {
 	return nil
 }

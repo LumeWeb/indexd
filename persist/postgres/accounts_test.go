@@ -222,7 +222,7 @@ func TestDeleteAccount(t *testing.T) {
 	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
 
 	pk := types.GeneratePrivateKey().PublicKey()
-	err := store.DeleteAccount(pk, false)
+	err := store.DeleteAccount(pk)
 	if !errors.Is(err, accounts.ErrNotFound) {
 		t.Fatal("expected [accounts.ErrNotFound]")
 	}
@@ -243,8 +243,11 @@ func TestDeleteAccount(t *testing.T) {
 		t.Fatal("unexpected accounts", accs)
 	}
 
-	err = store.DeleteAccount(pk, false)
+	err = store.DeleteAccount(pk)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PruneAccount(math.MaxInt64); err != nil {
 		t.Fatal(err)
 	}
 
@@ -267,7 +270,7 @@ func TestDeleteAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = store.DeleteAccount(pk2, false)
+	err = store.DeleteAccount(pk2)
 	if !errors.Is(err, accounts.ErrServiceAccount) {
 		t.Fatal(err)
 	}
@@ -791,64 +794,64 @@ func TestServiceAccounts(t *testing.T) {
 	assertBalance(types.ZeroCurrency)
 }
 
-func TestAccountsForPruning(t *testing.T) {
-	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
+// func TestAccountsForPruning(t *testing.T) {
+// 	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
 
-	// setup
-	acc1 := types.GeneratePrivateKey().PublicKey()
-	acc2 := types.GeneratePrivateKey().PublicKey()
-	acc3 := types.GeneratePrivateKey().PublicKey()
-	store.addTestAccount(t, acc1)
-	store.addTestAccount(t, acc2)
-	store.addTestAccount(t, acc3)
+// 	// setup
+// 	acc1 := types.GeneratePrivateKey().PublicKey()
+// 	acc2 := types.GeneratePrivateKey().PublicKey()
+// 	acc3 := types.GeneratePrivateKey().PublicKey()
+// 	store.addTestAccount(t, acc1)
+// 	store.addTestAccount(t, acc2)
+// 	store.addTestAccount(t, acc3)
 
-	assertAccounts := func(limit int, expected ...types.PublicKey) {
-		t.Helper()
+// 	assertAccounts := func(limit int, expected ...types.PublicKey) {
+// 		t.Helper()
 
-		accs, err := store.AccountsForPruning(limit)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(accs) != len(expected) {
-			t.Fatalf("expected %d accs, got %d", len(expected), len(accs))
-		}
-		for i := range expected {
-			if expected[i] != types.PublicKey(accs[i]) {
-				t.Fatal("acc mismatch")
-			}
-		}
-	}
+// 		accs, err := store.AccountsForPruning(limit)
+// 		if err != nil {
+// 			t.Fatal(err)
+// 		}
+// 		if len(accs) != len(expected) {
+// 			t.Fatalf("expected %d accs, got %d", len(expected), len(accs))
+// 		}
+// 		for i := range expected {
+// 			if expected[i] != types.PublicKey(accs[i]) {
+// 				t.Fatal("acc mismatch")
+// 			}
+// 		}
+// 	}
 
-	assertAccounts(0)
-	assertAccounts(1)
+// 	assertAccounts(0)
+// 	assertAccounts(1)
 
-	if err := store.DeleteAccount(acc1, true); err != nil {
-		t.Fatal(err)
-	}
+// 	if err := store.DeleteAccount(acc1, true); err != nil {
+// 		t.Fatal(err)
+// 	}
 
-	assertAccounts(0)
-	assertAccounts(1, acc1)
-	assertAccounts(2, acc1)
+// 	assertAccounts(0)
+// 	assertAccounts(1, acc1)
+// 	assertAccounts(2, acc1)
 
-	if err := store.DeleteAccount(acc2, true); err != nil {
-		t.Fatal(err)
-	}
+// 	if err := store.DeleteAccount(acc2, true); err != nil {
+// 		t.Fatal(err)
+// 	}
 
-	assertAccounts(1, acc1)
-	assertAccounts(2, acc1, acc2)
+// 	assertAccounts(1, acc1)
+// 	assertAccounts(2, acc1, acc2)
 
-	if err := store.DeleteAccount(acc1, false); err != nil {
-		t.Fatal(err)
-	}
+// 	if err := store.DeleteAccount(acc1, false); err != nil {
+// 		t.Fatal(err)
+// 	}
 
-	assertAccounts(2, acc2)
+// 	assertAccounts(2, acc2)
 
-	if err := store.DeleteAccount(acc2, false); err != nil {
-		t.Fatal(err)
-	}
+// 	if err := store.DeleteAccount(acc2, false); err != nil {
+// 		t.Fatal(err)
+// 	}
 
-	assertAccounts(1)
-}
+// 	assertAccounts(1)
+// }
 
 func TestActiveAccounts(t *testing.T) {
 	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
