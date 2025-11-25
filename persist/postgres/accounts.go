@@ -195,7 +195,7 @@ func (s *Store) PruneAccount(limit int) error {
 
 		// prune slabs and delete the user if we have no objects left
 		if len(objKeys) > 0 {
-			// only delete up to the limit objects
+			// only delete up to limit objects
 			err := deleteObjects(ctx, tx, accountID, objKeys[:min(len(objKeys), limit)])
 			if err != nil {
 				return fmt.Errorf("failed to delete objects: %w", err)

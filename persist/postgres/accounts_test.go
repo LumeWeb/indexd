@@ -10,7 +10,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	proto "go.sia.tech/core/rhp/v4"
-	proto4 "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/chain"
 	"go.sia.tech/coreutils/rhp/v4/quic"
@@ -826,7 +825,7 @@ func TestPruneAccount(t *testing.T) {
 		return s
 	}
 
-	pinSlabs := func(acc proto4.Account, params []slabs.SlabPinParams) []slabs.SlabSlice {
+	pinSlabs := func(acc proto.Account, params []slabs.SlabPinParams) []slabs.SlabSlice {
 		t.Helper()
 
 		var ss []slabs.SlabSlice
