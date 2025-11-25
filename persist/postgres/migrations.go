@@ -524,7 +524,7 @@ ALTER TABLE hosts ADD COLUMN scans_failed INTEGER NOT NULL DEFAULT 0 CHECK (scan
 	func(ctx context.Context, tx *txn, _ *zap.Logger) error {
 		_, err := tx.Exec(ctx, `
 ALTER TABLE accounts ADD COLUMN deleted_at TIMESTAMP WITH TIME ZONE;
-CREATE INDEX accounts_deleted_at_idx ON accounts(deleted_at) WHERE deleted_at IS NOT NULL;
+CREATE INDEX accounts_deleted_at_idx ON accounts(deleted_at);
 `)
 		return err
 	},

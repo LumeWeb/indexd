@@ -68,7 +68,7 @@ type (
 		AppConnectKey(key string) (ConnectKey, error)
 		AppConnectKeys(offset, limit int) ([]ConnectKey, error)
 
-		PruneAccount(limit int) error
+		PruneAccounts(limit int) error
 		ActiveAccounts(threshold time.Time) (uint64, error)
 		Account(types.PublicKey) (Account, error)
 		Accounts(offset, limit int, opts ...QueryAccountsOpt) ([]Account, error)
@@ -293,7 +293,7 @@ func NewManager(store Store, funder AccountFunder, opts ...Option) (*AccountMana
 // needs to perform on accounts
 func (m *AccountManager) maintenanceLoop(ctx context.Context) {
 	var wg sync.WaitGroup
-	launch := func(descr string, task func(context.Context) error) {
+	launch := func(descr string, task func() error) {
 		healthTicker := time.NewTicker(m.pruneAccountsInterval)
 
 		wg.Add(1)
@@ -306,7 +306,7 @@ func (m *AccountManager) maintenanceLoop(ctx context.Context) {
 				case <-ctx.Done():
 					return
 				}
-				if err := task(ctx); err != nil && !(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+				if err := task(); err != nil && !(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 					m.log.Error("maintenance failed", zap.String("task", descr), zap.Error(err))
 				}
 			}
@@ -317,14 +317,14 @@ func (m *AccountManager) maintenanceLoop(ctx context.Context) {
 	wg.Wait()
 }
 
-func (m *AccountManager) performPruneAccounts(ctx context.Context) error {
+func (m *AccountManager) performPruneAccounts() error {
 	start := time.Now()
 	log := m.log.Named("prune")
 	log.Debug("starting account pruning")
 
 	const objectBatchSize = 100
 	for {
-		if err := m.store.PruneAccount(objectBatchSize); errors.Is(err, ErrNotFound) {
+		if err := m.store.PruneAccounts(objectBatchSize); errors.Is(err, ErrNotFound) {
 			break
 		} else if err != nil {
 			return fmt.Errorf("failed to prune account: %w", err)

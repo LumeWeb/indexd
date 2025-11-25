@@ -167,7 +167,7 @@ func (s *Store) PruneAccounts(limit int) error {
 
 	return s.transaction(func(ctx context.Context, tx *txn) error {
 		getAccountSlabs := func(accountID int64, limit int) ([]int64, error) {
-			rows, err := tx.Query(ctx, `SELECT slab_id FROM account_slabs WHERE account_id = $1 LIMIT $2`, accountID, limit)
+			rows, err := tx.Query(ctx, `SELECT slab_id FROM account_slabs WHERE account_id = $1 ORDER BY slab_id LIMIT $2`, accountID, limit)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get account slabs: %w", err)
 			}
@@ -185,7 +185,7 @@ func (s *Store) PruneAccounts(limit int) error {
 		}
 
 		var accountID int64
-		err := tx.QueryRow(ctx, `SELECT id FROM accounts WHERE deleted_at IS NOT NULL`).Scan(&accountID)
+		err := tx.QueryRow(ctx, `SELECT id FROM accounts WHERE deleted_at IS NOT NULL ORDER by deleted_at LIMIT 1`).Scan(&accountID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return accounts.ErrNotFound
 		} else if err != nil {

@@ -26,7 +26,7 @@ CREATE TABLE accounts (
     deleted_at TIMESTAMP WITH TIME ZONE
 );
 CREATE INDEX accounts_last_used_idx ON accounts(last_used);
-CREATE INDEX accounts_deleted_at_idx ON accounts(deleted_at) WHERE deleted_at IS NOT NULL;
+CREATE INDEX accounts_deleted_at_idx ON accounts(deleted_at);
 CREATE INDEX accounts_connect_key_id_idx ON accounts(connect_key_id);
 
 CREATE TABLE hosts (
