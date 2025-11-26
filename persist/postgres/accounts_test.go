@@ -10,7 +10,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	proto "go.sia.tech/core/rhp/v4"
-	proto4 "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/chain"
 	"go.sia.tech/coreutils/rhp/v4/quic"
@@ -1107,7 +1106,7 @@ func BenchmarkPruneAccounts(b *testing.B) {
 		store.addTestContract(b, hostKeys[i])
 	}
 
-	pinObject := func(acc proto4.Account) {
+	pinObject := func(acc proto.Account) {
 		b.Helper()
 
 		obj := slabs.SealedObject{
@@ -1153,7 +1152,7 @@ func BenchmarkPruneAccounts(b *testing.B) {
 			store.addTestAccount(b, pk)
 
 			for range frand.Intn(10) {
-				pinObject(proto4.Account(pk))
+				pinObject(proto.Account(pk))
 			}
 
 			// delete 1/10 accounts
