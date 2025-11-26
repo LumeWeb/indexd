@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	proto "go.sia.tech/core/rhp/v4"
+	proto4 "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/chain"
 	"go.sia.tech/coreutils/rhp/v4/quic"
@@ -1089,5 +1090,92 @@ func BenchmarkActiveAccounts(b *testing.B) {
 		if _, err := store.ActiveAccounts(threshold); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func BenchmarkPruneAccounts(b *testing.B) {
+	store := initPostgres(b, zap.NewNop())
+
+	hostKeys := make([]types.PublicKey, 30)
+	for i := range hostKeys {
+		hostKeys[i] = types.GeneratePrivateKey().PublicKey()
+		if err := store.UpdateChainState(func(tx subscriber.UpdateTx) error {
+			return tx.AddHostAnnouncement(hostKeys[i], chain.V2HostAnnouncement{{Protocol: quic.Protocol, Address: "[::]:4848"}}, time.Now())
+		}); err != nil {
+			b.Fatal(err)
+		}
+		store.addTestContract(b, hostKeys[i])
+	}
+
+	pinObject := func(acc proto4.Account) {
+		b.Helper()
+
+		obj := slabs.SealedObject{
+			EncryptedMasterKey: frand.Bytes(72),
+			EncryptedMetadata:  []byte("hello world"),
+			Signature:          (types.Signature)(frand.Bytes(64)),
+		}
+		for range frand.Intn(5) {
+			s := slabs.SlabPinParams{
+				MinShards:     3,
+				EncryptionKey: frand.Entropy256(),
+				Sectors:       make([]slabs.PinnedSector, 30),
+			}
+			for i := range s.Sectors {
+				s.Sectors[i].HostKey = hostKeys[i%len(hostKeys)]
+				s.Sectors[i].Root = frand.Entropy256()
+			}
+
+			slabIDs, err := store.PinSlabs(acc, time.Time{}, s)
+			if err != nil {
+				b.Fatal(err)
+			}
+
+			for _, slabID := range slabIDs {
+				obj.Slabs = append(obj.Slabs, slabs.SlabSlice{
+					SlabID: slabID,
+					Offset: 0,
+					Length: 256,
+				})
+			}
+			frand.Read(obj.Signature[:])
+		}
+
+		return
+	}
+
+	reset := func() {
+		for i := range 1000 {
+			if i%10 == 0 {
+				b.Log(i)
+			}
+			pk := types.GeneratePrivateKey().PublicKey()
+			store.addTestAccount(b, pk)
+
+			for range frand.Intn(10) {
+				pinObject(proto4.Account(pk))
+			}
+
+			// delete 1/10 accounts
+			if i%10 == 0 {
+				if err := store.DeleteAccount(pk); err != nil {
+					b.Fatal(err)
+				}
+			}
+		}
+	}
+
+	for _, limit := range []int{10, 50, 100, 1000} {
+		b.Run(fmt.Sprint(limit), func(b *testing.B) {
+			reset()
+
+			for b.Loop() {
+				if err := store.PruneAccounts(limit); errors.Is(err, accounts.ErrNotFound) {
+					b.Logf("pruning error: %v", err)
+				} else if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
