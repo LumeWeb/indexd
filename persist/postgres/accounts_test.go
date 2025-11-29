@@ -886,15 +886,10 @@ func TestPruneAccount(t *testing.T) {
 	assertObjects := func(acc proto.Account, expected int) {
 		t.Helper()
 
-		objs, err := store.ListObjects(acc, slabs.Cursor{}, math.MaxInt64)
+		var got int
+		err := store.pool.QueryRow(t.Context(), `SELECT COUNT(*) FROM objects WHERE account_id = $1`, expected).Scan(&got)
 		if err != nil {
 			t.Fatal(err)
-		}
-		var got int
-		for _, obj := range objs {
-			if !obj.Deleted {
-				got++
-			}
 		}
 		if expected != got {
 			t.Fatalf("expected %d objects, got %d", expected, got)

@@ -216,11 +216,6 @@ RETURNING object_key`, accountID, limit)
 			return fmt.Errorf("failed to get rows: %w", err)
 		}
 
-		_, err = tx.Exec(ctx, `DELETE FROM object_events WHERE account_id = $1 AND object_key = ANY($2)`, accountID, objKeys)
-		if err != nil {
-			return fmt.Errorf("failed to delete object events: %w", err)
-		}
-
 		limit -= len(objKeys)
 		if limit == 0 {
 			return nil
