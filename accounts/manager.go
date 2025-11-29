@@ -73,7 +73,7 @@ type (
 		Account(types.PublicKey) (Account, error)
 		Accounts(offset, limit int, opts ...QueryAccountsOpt) ([]Account, error)
 		HasAccount(types.PublicKey) (bool, error)
-		DeleteAccount(ak types.PublicKey) error
+		DeleteAccount(acc proto.Account) error
 	}
 
 	// AccountFunder defines an interface to fund accounts.
@@ -208,8 +208,8 @@ func (m *AccountManager) Accounts(ctx context.Context, offset, limit int, opts .
 // DeleteAccount soft deletes the account with the given public key.
 // Objects/slabs/sectors associated with the account will be cleaned up by the
 // account manager.
-func (m *AccountManager) DeleteAccount(ctx context.Context, ak types.PublicKey) error {
-	return m.store.DeleteAccount(ak)
+func (m *AccountManager) DeleteAccount(ctx context.Context, acc proto.Account) error {
+	return m.store.DeleteAccount(acc)
 }
 
 // ContractFundTarget calculates the fund target for a contract on the given

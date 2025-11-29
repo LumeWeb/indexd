@@ -223,7 +223,7 @@ func TestDeleteAccount(t *testing.T) {
 	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
 
 	pk := types.GeneratePrivateKey().PublicKey()
-	err := store.DeleteAccount(pk)
+	err := store.DeleteAccount(proto.Account(pk))
 	if !errors.Is(err, accounts.ErrNotFound) {
 		t.Fatal("expected [accounts.ErrNotFound]")
 	}
@@ -244,7 +244,7 @@ func TestDeleteAccount(t *testing.T) {
 		t.Fatal("unexpected accounts", accs)
 	}
 
-	err = store.DeleteAccount(pk)
+	err = store.DeleteAccount(proto.Account(pk))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +271,7 @@ func TestDeleteAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = store.DeleteAccount(pk2)
+	err = store.DeleteAccount(proto.Account(pk2))
 	if !errors.Is(err, accounts.ErrServiceAccount) {
 		t.Fatal(err)
 	}
@@ -899,7 +899,7 @@ func TestPruneAccount(t *testing.T) {
 	assertObjects(acc1, 2)
 	assertObjects(acc2, 2)
 
-	if err := store.DeleteAccount(types.PublicKey(acc1)); err != nil {
+	if err := store.DeleteAccount(acc1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -930,7 +930,7 @@ func TestPruneAccount(t *testing.T) {
 	}
 	assertObjects(acc2, 2)
 
-	if err := store.DeleteAccount(types.PublicKey(acc2)); err != nil {
+	if err := store.DeleteAccount(acc2); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1092,12 +1092,7 @@ func BenchmarkPruneAccounts(b *testing.B) {
 
 	hostKeys := make([]types.PublicKey, 30)
 	for i := range hostKeys {
-		hostKeys[i] = types.GeneratePrivateKey().PublicKey()
-		if err := store.UpdateChainState(func(tx subscriber.UpdateTx) error {
-			return tx.AddHostAnnouncement(hostKeys[i], chain.V2HostAnnouncement{{Protocol: quic.Protocol, Address: "[::]:4848"}}, time.Now())
-		}); err != nil {
-			b.Fatal(err)
-		}
+		hostKeys[i] = store.addTestHost(b)
 		store.addTestContract(b, hostKeys[i])
 	}
 
@@ -1152,7 +1147,7 @@ func BenchmarkPruneAccounts(b *testing.B) {
 
 			// delete 1/10 accounts
 			if i%10 == 0 {
-				if err := store.DeleteAccount(pk); err != nil {
+				if err := store.DeleteAccount(proto.Account(pk)); err != nil {
 					b.Fatal(err)
 				}
 			}

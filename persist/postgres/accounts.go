@@ -122,10 +122,10 @@ func (s *Store) ActiveAccounts(threshold time.Time) (count uint64, err error) {
 }
 
 // DeleteAccount deletes the account in the database with given account key.
-func (s *Store) DeleteAccount(ak types.PublicKey) error {
+func (s *Store) DeleteAccount(acc proto.Account) error {
 	return s.transaction(func(ctx context.Context, tx *txn) error {
 		var serviceAccount bool
-		err := tx.QueryRow(ctx, `UPDATE accounts SET deleted_at = NOW() WHERE public_key = $1 RETURNING service_account`, sqlPublicKey(ak)).Scan(&serviceAccount)
+		err := tx.QueryRow(ctx, `UPDATE accounts SET deleted_at = NOW() WHERE public_key = $1 RETURNING service_account`, sqlPublicKey(acc)).Scan(&serviceAccount)
 		if errors.Is(err, sql.ErrNoRows) {
 			return accounts.ErrNotFound
 		} else if err != nil {
