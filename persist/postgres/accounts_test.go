@@ -1089,8 +1089,8 @@ func BenchmarkActiveAccounts(b *testing.B) {
 
 func BenchmarkPruneAccounts(b *testing.B) {
 	const (
-		numAccounts       = 100
-		objectsPerAccount = 1000
+		numAccounts       = 1000
+		objectsPerAccount = 500
 		slabsPerObject    = 5
 	)
 
