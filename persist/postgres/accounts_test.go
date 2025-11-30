@@ -1112,40 +1112,37 @@ ALTER SEQUENCE accounts_id_seq RESTART WITH 1;
 		}
 
 		batch := &pgx.Batch{}
-		var slabID, objectID int64
-		for i := range numAccounts {
+		accountID, objectID, slabID := 0, 0, 0
+		for range numAccounts {
 			ak := types.GeneratePrivateKey().PublicKey()
-			batch.Queue(`INSERT INTO accounts(public_key, max_pinned_data) VALUES ($1, 1000000);`, sqlPublicKey(ak))
-			for j := range objectsPerAccount {
-				accountID := i + 1
 
+			batch.Queue(`INSERT INTO accounts(public_key, max_pinned_data) VALUES ($1, 1000000);`, sqlPublicKey(ak))
+			accountID++
+
+			for range objectsPerAccount {
 				var encryptionKey [32]byte
 				frand.Read(encryptionKey[:])
 
-				objectKey := sqlHash256(frand.Entropy256())
-				if j%2 == 0 {
-					objectID++
-					batch.Queue(`INSERT INTO objects(object_key, account_id, encrypted_master_key, signature) VALUES ($1, $2, $3, $4)`, objectKey, accountID, frand.Bytes(72), frand.Bytes(64))
-				}
+				batch.Queue(`INSERT INTO objects(object_key, account_id, encrypted_master_key, signature) VALUES ($1, $2, $3, $4)`, sqlHash256(frand.Entropy256()), accountID, frand.Bytes(72), frand.Bytes(64))
+				objectID++
 				for k := range slabsPerObject {
-					slabID++
 					slabDigest := sqlHash256(frand.Entropy256())
 
 					batch.Queue(`INSERT INTO slabs(digest, encryption_key, min_shards) VALUES ($1, $2, 1);`, slabDigest, sqlHash256(encryptionKey))
+					slabID++
+
 					batch.Queue(`INSERT INTO account_slabs(account_id, slab_id) VALUES ($1, $2)`, accountID, slabID)
-					if j%2 == 0 {
-						batch.Queue(`INSERT INTO object_slabs(object_id, slab_digest, slab_index, slab_offset, slab_length) VALUES ($1, $2, $3, 0, 0)`, objectID, slabDigest, k)
-					}
+					batch.Queue(`INSERT INTO object_slabs(object_id, slab_digest, slab_index, slab_offset, slab_length) VALUES ($1, $2, $3, 0, 0)`, objectID, slabDigest, k)
 				}
 			}
 
 			// delete 1/10 accounts
-			if i%10 == 0 {
-				b.Log("Deleting:", i)
+			if accountID%10 == 0 {
+				b.Log("Deleting:", accountID)
 				batch.Queue("UPDATE accounts SET deleted_at = NOW() WHERE public_key = $1", sqlPublicKey(ak))
 			}
 		}
-		batch.Queue(`UPDATE stats SET num_slabs = $1`, slabID)
+		batch.Queue(`UPDATE stats SET num_slabs = $1`, objectsPerAccount*slabsPerObject)
 		batch.Queue(`UPDATE stats SET num_accounts_registered = $1`, numAccounts)
 		if err := store.pool.SendBatch(b.Context(), batch).Close(); err != nil {
 			b.Fatal(err)
