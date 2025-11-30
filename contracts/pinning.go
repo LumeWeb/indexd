@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -103,6 +105,9 @@ func (cm *ContractManager) performSectorPinningOnHost(ctx context.Context, host 
 // space. It will try to pin sectors using the contracts in the order they are
 // provided. If the host refuses to pin a sector, it will be marked as lost.
 func (cm *ContractManager) pinSectors(ctx context.Context, client HostClient, hostKey types.PublicKey, hostPrices proto.HostPrices, contractIDs []types.FileContractID, sectors []types.Hash256, log *zap.Logger) error {
+	// NOTE: this is necessary to avoid looping forever
+	// if [AppendSectors] returns an error for all contracts.
+	var success bool
 	for _, contractID := range contractIDs {
 		if len(sectors) == 0 {
 			break
@@ -114,13 +119,8 @@ func (cm *ContractManager) pinSectors(ctx context.Context, client HostClient, ho
 		if err != nil {
 			log.Debug("failed to pin sectors", zap.Error(err))
 			continue
-		} else if len(res.Sectors) == 0 {
-			log.Debug("no sectors were pinned")
-			continue
-		}
-
-		if err := cm.store.PinSectors(contractID, res.Sectors); err != nil {
-			return fmt.Errorf("failed to pin sectors: %w", err)
+		} else if len(res.Sectors) > 0 {
+			success = true
 		}
 
 		// Only the sectors that were attempted should be marked
@@ -134,18 +134,22 @@ func (cm *ContractManager) pinSectors(ctx context.Context, client HostClient, ho
 			for _, sector := range res.Sectors {
 				delete(lookup, sector)
 			}
-			missing := make([]types.Hash256, 0, len(lookup))
-			for sector := range lookup {
-				missing = append(missing, sector)
-			}
-
+			missing := slices.Collect(maps.Keys(lookup))
 			if err := cm.store.MarkSectorsLost(hostKey, missing); err != nil {
 				return fmt.Errorf("failed to mark sectors as lost: %w", err)
 			}
 			log = log.With(zap.Int("missing", len(missing)))
 		}
+
+		if err := cm.store.PinSectors(contractID, res.Sectors); err != nil {
+			return fmt.Errorf("failed to pin sectors: %w", err)
+		}
+
 		sectors = sectors[attempted:] // pin the remaining sectors
 		log.Debug("pinned sectors", zap.Int("pinned", len(res.Sectors)), zap.Int("attempted", attempted))
+	}
+	if !success {
+		return errors.New("all contracts failed to pin sectors")
 	}
 	return nil
 }
