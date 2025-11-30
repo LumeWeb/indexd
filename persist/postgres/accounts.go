@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
 	"math"
 	"strings"
 	"time"
@@ -169,14 +168,12 @@ func (s *Store) PruneAccounts(limit int) error {
 	return s.transaction(func(ctx context.Context, tx *txn) error {
 		var accountID int64
 
-		t1 := time.Now()
 		err := tx.QueryRow(ctx, `SELECT id FROM accounts WHERE deleted_at IS NOT NULL ORDER by deleted_at LIMIT 1`).Scan(&accountID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return accounts.ErrNotFound
 		} else if err != nil {
 			return fmt.Errorf("failed to find an account to delete: %w", err)
 		}
-		log.Println("1:", time.Now().Sub(t1))
 
 		rows, err := tx.Query(ctx, `DELETE FROM objects o
 USING (
@@ -203,7 +200,6 @@ RETURNING o.object_key;`, accountID, limit)
 		if err := rows.Err(); err != nil {
 			return fmt.Errorf("failed to get rows: %w", err)
 		}
-		log.Println("2:", time.Now().Sub(t1))
 
 		limit -= len(objKeys)
 		if limit == 0 {
@@ -227,12 +223,10 @@ RETURNING o.object_key;`, accountID, limit)
 		if err := rows.Err(); err != nil {
 			return fmt.Errorf("failed to get account slabs: %w", err)
 		}
-		log.Println("3:", time.Now().Sub(t1))
 
 		if err := s.unpinSlabs(ctx, tx, accountID, slabIDs); err != nil {
 			return fmt.Errorf("failed to unpin slabs: %w", err)
 		}
-		log.Println("4:", time.Now().Sub(t1))
 
 		if len(slabIDs) < limit {
 			// no slabs left, we can delete the account
@@ -245,7 +239,6 @@ RETURNING o.object_key;`, accountID, limit)
 			if err != nil {
 				return fmt.Errorf("failed to decrement account count: %w", err)
 			}
-			log.Println("5:", time.Now().Sub(t1))
 		}
 
 		return nil
