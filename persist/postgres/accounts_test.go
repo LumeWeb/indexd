@@ -1095,67 +1095,49 @@ func BenchmarkPruneAccounts(b *testing.B) {
 	)
 
 	store := initPostgres(b, zap.NewNop())
-	reset := func(b *testing.B) {
-		_, err := store.pool.Exec(b.Context(), `
-DELETE FROM object_slabs;
-DELETE FROM objects;
-DELETE FROM account_slabs;
-DELETE FROM slabs;
-DELETE FROM accounts;
 
-ALTER SEQUENCE objects_id_seq RESTART WITH 1;
-ALTER SEQUENCE slabs_id_seq RESTART WITH 1;
-ALTER SEQUENCE accounts_id_seq RESTART WITH 1;
-`)
-		if err != nil {
-			b.Fatal(err)
-		}
+	batch := &pgx.Batch{}
+	accountID, objectID, slabID := 0, 0, 0
+	for range numAccounts {
+		ak := types.GeneratePrivateKey().PublicKey()
 
-		batch := &pgx.Batch{}
-		accountID, objectID, slabID := 0, 0, 0
-		for range numAccounts {
-			ak := types.GeneratePrivateKey().PublicKey()
+		batch.Queue(`INSERT INTO accounts(public_key, max_pinned_data) VALUES ($1, 1000000);`, sqlPublicKey(ak))
+		accountID++
 
-			batch.Queue(`INSERT INTO accounts(public_key, max_pinned_data) VALUES ($1, 1000000);`, sqlPublicKey(ak))
-			accountID++
+		for range objectsPerAccount {
+			var encryptionKey [32]byte
+			frand.Read(encryptionKey[:])
 
-			for range objectsPerAccount {
-				var encryptionKey [32]byte
-				frand.Read(encryptionKey[:])
+			batch.Queue(`INSERT INTO objects(object_key, account_id, encrypted_master_key, signature) VALUES ($1, $2, $3, $4)`, sqlHash256(frand.Entropy256()), accountID, frand.Bytes(72), frand.Bytes(64))
+			objectID++
+			for k := range slabsPerObject {
+				slabDigest := sqlHash256(frand.Entropy256())
 
-				batch.Queue(`INSERT INTO objects(object_key, account_id, encrypted_master_key, signature) VALUES ($1, $2, $3, $4)`, sqlHash256(frand.Entropy256()), accountID, frand.Bytes(72), frand.Bytes(64))
-				objectID++
-				for k := range slabsPerObject {
-					slabDigest := sqlHash256(frand.Entropy256())
+				batch.Queue(`INSERT INTO slabs(digest, encryption_key, min_shards) VALUES ($1, $2, 1);`, slabDigest, sqlHash256(encryptionKey))
+				slabID++
 
-					batch.Queue(`INSERT INTO slabs(digest, encryption_key, min_shards) VALUES ($1, $2, 1);`, slabDigest, sqlHash256(encryptionKey))
-					slabID++
-
-					batch.Queue(`INSERT INTO account_slabs(account_id, slab_id) VALUES ($1, $2)`, accountID, slabID)
-					batch.Queue(`INSERT INTO object_slabs(object_id, slab_digest, slab_index, slab_offset, slab_length) VALUES ($1, $2, $3, 0, 0)`, objectID, slabDigest, k)
-				}
-			}
-
-			// delete 1/10 accounts
-			if accountID%10 == 0 {
-				b.Log("Deleting:", accountID)
-				batch.Queue("UPDATE accounts SET deleted_at = NOW() WHERE public_key = $1", sqlPublicKey(ak))
+				batch.Queue(`INSERT INTO account_slabs(account_id, slab_id) VALUES ($1, $2)`, accountID, slabID)
+				batch.Queue(`INSERT INTO object_slabs(object_id, slab_digest, slab_index, slab_offset, slab_length) VALUES ($1, $2, $3, 0, 0)`, objectID, slabDigest, k)
 			}
 		}
-		batch.Queue(`UPDATE stats SET num_slabs = $1`, numAccounts*objectsPerAccount*slabsPerObject)
-		batch.Queue(`UPDATE stats SET num_accounts_registered = $1`, numAccounts)
-		if err := store.pool.SendBatch(b.Context(), batch).Close(); err != nil {
-			b.Fatal(err)
-		}
 
-		if _, err := store.pool.Exec(b.Context(), `VACUUM FULL ANALYZE;`); err != nil {
-			b.Fatal(err)
+		// delete 1/10 accounts
+		if accountID%10 == 0 {
+			batch.Queue("UPDATE accounts SET deleted_at = NOW() WHERE public_key = $1", sqlPublicKey(ak))
 		}
+	}
+	batch.Queue(`UPDATE stats SET num_slabs = $1`, numAccounts*objectsPerAccount*slabsPerObject)
+	batch.Queue(`UPDATE stats SET num_accounts_registered = $1`, numAccounts)
+	if err := store.pool.SendBatch(b.Context(), batch).Close(); err != nil {
+		b.Fatal(err)
+	}
+
+	if _, err := store.pool.Exec(b.Context(), `VACUUM FULL ANALYZE;`); err != nil {
+		b.Fatal(err)
 	}
 
 	for _, limit := range []int{100, 250, 500} {
 		b.Run(fmt.Sprint(limit), func(b *testing.B) {
-			reset(b)
 			for b.Loop() {
 				if err := store.PruneAccounts(limit); errors.Is(err, accounts.ErrNotFound) {
 					b.Logf("pruning error: %v", err)
