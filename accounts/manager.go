@@ -292,29 +292,21 @@ func NewManager(store Store, funder AccountFunder, opts ...Option) (*AccountMana
 // maintenanceLoop performs any background tasks that the accounts manager
 // needs to perform on accounts
 func (m *AccountManager) maintenanceLoop(ctx context.Context) {
-	var wg sync.WaitGroup
-	launch := func(descr string, task func() error) {
-		healthTicker := time.NewTicker(m.pruneAccountsInterval)
+	healthTicker := time.NewTicker(m.pruneAccountsInterval)
 
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer healthTicker.Stop()
-			for {
-				select {
-				case <-healthTicker.C:
-				case <-ctx.Done():
-					return
-				}
-				if err := task(); err != nil && !(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
-					m.log.Error("maintenance failed", zap.String("task", descr), zap.Error(err))
-				}
+	go func() {
+		defer healthTicker.Stop()
+		for {
+			select {
+			case <-healthTicker.C:
+			case <-ctx.Done():
+				return
 			}
-		}()
-	}
-
-	launch("prune accounts", m.performPruneAccounts)
-	wg.Wait()
+			if err := m.performPruneAccounts(); err != nil && !(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+				m.log.Error("maintenance failed", zap.String("task", "prune accounts"), zap.Error(err))
+			}
+		}
+	}()
 }
 
 func (m *AccountManager) performPruneAccounts() error {
