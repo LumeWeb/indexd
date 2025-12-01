@@ -193,7 +193,7 @@ RETURNING o.object_key;`, accountID, limit)
 		for rows.Next() {
 			var objKey sqlHash256
 			if err := rows.Scan(&objKey); err != nil {
-				return fmt.Errorf("failed to scan object ID: %w", err)
+				return fmt.Errorf("failed to scan object key: %w", err)
 			}
 			objKeys = append(objKeys, objKey)
 		}
