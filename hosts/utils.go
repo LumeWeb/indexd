@@ -2,6 +2,7 @@ package hosts
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"time"
@@ -14,6 +15,23 @@ import (
 	"go.sia.tech/coreutils/rhp/v4/quic"
 	"go.sia.tech/coreutils/rhp/v4/siamux"
 )
+
+// resolver is the default implementation of Resolver.
+type resolver struct {
+	main     *net.Resolver
+	fallback *net.Resolver
+}
+
+func (r *resolver) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
+	addrs, err := r.main.LookupIPAddr(ctx, host)
+	if errors.Is(err, context.Canceled) {
+		return nil, err
+	} else if err != nil {
+		// try fallback if main fails
+		return r.fallback.LookupIPAddr(ctx, host)
+	}
+	return addrs, nil
+}
 
 // scanner is the default implementation of Scanner.
 type scanner struct{}
