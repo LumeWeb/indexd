@@ -154,6 +154,15 @@ top:
 	return sectors, nil
 }
 
+// AppKey returns the app key used by the SDK.
+//
+// It should be kept secret. Applications
+// should store it securely to authenticate with
+// the indexer.
+func (s *SDK) AppKey() types.PrivateKey {
+	return s.appKey
+}
+
 // Upload uploads the data to hosts and pins it to the indexer.
 //
 // Returns the metadata of the slabs that were pinned

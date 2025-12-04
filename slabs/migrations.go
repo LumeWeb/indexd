@@ -127,14 +127,12 @@ func (m *SlabManager) migrateSlab(ctx context.Context, slabID SlabID, allHosts [
 	// note: timeouts are set within uploadShards to avoid timing out the database
 	uploadStart := time.Now()
 	migrated, err := m.uploadShards(ctx, slab, shards, uploadCandidates, log.Named("migrate"))
-	log = log.With(zap.Duration("uploadElapsed", time.Since(uploadStart)), zap.Int("toMigrate", len(indices)), zap.Int("migrated", migrated))
+	log = log.With(zap.Duration("uploadElapsed", time.Since(uploadStart)), zap.Int("migrated", migrated))
 	if err != nil {
 		log.Warn("failed to upload migrated shards", zap.Error(err))
 	}
 
-	repaired := migrated == len(indices)
-	log = log.With(zap.Bool("repaired", repaired), zap.Int("migrated", migrated), zap.Int("toMigrate", len(indices)))
-	if err := m.store.MarkSlabRepaired(slabID, repaired); err != nil {
+	if err := m.store.MarkSlabRepaired(slabID, migrated == len(indices)); err != nil {
 		log.Error("failed to mark slab repaired", zap.Error(err))
 	}
 
