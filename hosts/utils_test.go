@@ -58,7 +58,7 @@ func (m *mockResolverFallback) LookupIPAddr(ctx context.Context, host string) ([
 	return m.addrs, m.err
 }
 
-func TestResolver_LookupIPAddr(t *testing.T) {
+func TestResolver(t *testing.T) {
 	ctx := context.Background()
 
 	mainAddr := []net.IPAddr{{IP: net.ParseIP("1.2.3.4")}}
