@@ -64,12 +64,6 @@ func TestConnect(t *testing.T) {
 		ServiceURL:  "https://example.com",
 	})
 
-	mnemonic := sdk.NewSeedPhrase()
-
-	if _, err := builder.GenerateAppKey(t.Context(), mnemonic); err == nil {
-		t.Fatal("expected error when generating app key before connection")
-	}
-
 	responseURL, err := builder.RequestConnection(t.Context())
 	if err != nil {
 		t.Fatal("failed to request connection:", err)
@@ -101,30 +95,14 @@ func TestConnect(t *testing.T) {
 		t.Fatal("expected connection to be approved")
 	}
 
-	appKey, err := builder.GenerateAppKey(t.Context(), mnemonic)
+	mnemonic := sdk.NewSeedPhrase()
+	client, err := builder.Register(t.Context(), mnemonic)
 	if err != nil {
 		t.Fatal("failed to generate app key after approval:", err)
 	}
-
-	connected, err := builder.Connected(t.Context(), appKey)
-	if err != nil {
-		t.Fatal("failed to check connection status:", err)
-	} else if !connected {
-		t.Fatal("expected app to be connected")
-	}
-
-	// expect generating the app key again to fail since it has already
-	// been generated
-	if _, err := builder.GenerateAppKey(t.Context(), mnemonic); err == nil {
-		t.Fatal("expected error when generating app key second time")
-	}
-
-	// create SDK instance
-	client, err := builder.SDK(appKey)
-	if err != nil {
-		t.Fatal("failed to create SDK instance:", err)
-	}
 	defer client.Close()
+
+	appKey1 := client.AppKey()
 
 	// verify the key can be used to access resources owned by the app
 	if _, err := client.ListObjects(t.Context(), slabs.Cursor{}, 10); err != nil {
@@ -135,7 +113,6 @@ func TestConnect(t *testing.T) {
 
 	// go through the connection flow again to verify multiple connections generate
 	// the same app key
-
 	builder = sdk.NewBuilder(cluster.Indexer.AppAPIAddr(), sdk.AppMetadata{
 		ID:          appID,
 		Name:        "Test App",
@@ -160,17 +137,14 @@ func TestConnect(t *testing.T) {
 		t.Fatal("expected connection to be approved")
 	}
 
-	appKey2, err := builder.GenerateAppKey(t.Context(), mnemonic)
+	client2, err := builder.Register(t.Context(), mnemonic)
 	if err != nil {
 		t.Fatal("failed to generate app key after approval:", err)
-	} else if appKey.String() != appKey2.String() {
-		t.Fatal("expected regenerated app key to match original")
 	}
+	defer client2.Close()
 
-	connected, err = builder.Connected(t.Context(), appKey2)
-	if err != nil {
-		t.Fatal("failed to check connection status:", err)
-	} else if !connected {
-		t.Fatal("expected app to be connected")
+	appKey2 := client2.AppKey()
+	if !bytes.Equal(appKey1, appKey2) {
+		t.Fatal("expected regenerated app key to match original")
 	}
 }

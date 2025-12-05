@@ -2,8 +2,6 @@ package sdk
 
 import (
 	"context"
-	"crypto/ed25519"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"time"
@@ -37,40 +35,7 @@ type (
 		ServiceURL  string
 		CallbackURL string
 	}
-
-	// An AppKey represents a key used to authenticate an application.
-	// It is derived from a BIP-39 seed phrase and a shared secret
-	// provided by the indexer during app connection.
-	//
-	// This key should be stored securely by the application and never
-	// shared with anyone else. It can be regenerated using the same app
-	// ID, user account, and seed phrase.
-	AppKey struct {
-		key types.PrivateKey
-	}
 )
-
-// String returns the base64-encoded representation of the app key.
-func (ak *AppKey) String() string {
-	return base64.RawURLEncoding.EncodeToString(ak.key[:32])
-}
-
-// MarshalText encodes the app key as a base64-encoded string.
-func (ak *AppKey) MarshalText() ([]byte, error) {
-	return []byte(ak.String()), nil
-}
-
-// UnmarshalText decodes a base64-encoded app key.
-func (ak *AppKey) UnmarshalText(text []byte) error {
-	buf, err := base64.RawURLEncoding.DecodeString(string(text))
-	if err != nil {
-		return fmt.Errorf("failed to decode app key: %w", err)
-	} else if len(buf) != ed25519.SeedSize {
-		return fmt.Errorf("invalid app key size: expected %d, got %d", ed25519.SeedSize, len(buf))
-	}
-	ak.key = types.NewPrivateKeyFromSeed(buf)
-	return nil
-}
 
 // A Builder helps connect an application to an indexer
 // and initialize an SDK instance.
@@ -112,14 +77,13 @@ func (b *Builder) WaitForApproval(ctx context.Context) (bool, error) {
 	}
 }
 
-// GenerateAppKey derives an application key from a BIP-39 seed phrase that
-// can be used to upload and download data from the indexer and
+// Register derives an application key from a BIP-39 seed phrase and
 // registers it with the indexer.
 //
 // This key should be stored securely by the application and never
 // shared with anyone else. It can be regenerated using the same app
 // ID, user account, and seed phrase.
-func (b *Builder) GenerateAppKey(ctx context.Context, mnemonic string) (*AppKey, error) {
+func (b *Builder) Register(ctx context.Context, mnemonic string) (*SDK, error) {
 	if b.sharedSecret == (types.Hash256{}) {
 		return nil, fmt.Errorf("app not connected")
 	}
@@ -127,14 +91,14 @@ func (b *Builder) GenerateAppKey(ctx context.Context, mnemonic string) (*AppKey,
 	appKey, err := deriveAppKey(mnemonic, b.request.AppID, b.sharedSecret)
 	if err != nil {
 		return nil, fmt.Errorf("failed to derive app key: %w", err)
-	} else if err := b.client.RegisterApp(ctx, b.registerResp.RegisterURL, appKey.key); err != nil {
+	} else if err := b.client.RegisterApp(ctx, b.registerResp.RegisterURL, appKey); err != nil {
 		return nil, fmt.Errorf("failed to register app key: %w", err)
 	}
 
 	// prevent attempted re-use
 	b.registerResp = nil
 	clear(b.sharedSecret[:])
-	return appKey, nil
+	return b.SDK(appKey)
 }
 
 // RequestConnection sends a request to connect an application to the indexer.
@@ -150,26 +114,22 @@ func (b *Builder) RequestConnection(ctx context.Context) (string, error) {
 	return resp.ResponseURL, nil
 }
 
-// Connected checks if the application is connected to the indexer.
-func (b *Builder) Connected(ctx context.Context, appKey *AppKey) (bool, error) {
-	return b.client.CheckAppAuth(ctx, appKey.key)
-}
-
-// SDK creates a new SDK instance using the given application key.
-func (b *Builder) SDK(appKey *AppKey, opts ...Option) (*SDK, error) {
-	if ok, err := b.client.CheckAppAuth(context.Background(), appKey.key); err != nil {
+// SDK creates a new SDK instance using the given application key. If the
+// key is not authorized, an error is returned.
+func (b *Builder) SDK(appKey types.PrivateKey, opts ...Option) (*SDK, error) {
+	if ok, err := b.client.CheckAppAuth(context.Background(), appKey); err != nil {
 		return nil, fmt.Errorf("failed to check app auth: %w", err)
 	} else if !ok {
 		return nil, fmt.Errorf("app key is not authorized")
 	}
-	hostStore, err := newCachedHostStore(b.client, appKey.key)
+	hostStore, err := newCachedHostStore(b.client, appKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create host store: %w", err)
 	}
-	return initSDK(appKey.key, b.client, client.New(client.NewProvider(hostStore)), opts...), nil
+	return initSDK(appKey, b.client, client.New(client.NewProvider(hostStore)), opts...), nil
 }
 
-func deriveAppKey(mnemonic string, appID types.Hash256, sharedSecret types.Hash256) (*AppKey, error) {
+func deriveAppKey(mnemonic string, appID types.Hash256, sharedSecret types.Hash256) (types.PrivateKey, error) {
 	var seed [32]byte
 	if err := wallet.SeedFromPhrase(&seed, mnemonic); err != nil {
 		return nil, fmt.Errorf("failed to derive seed from phrase: %w", err)
@@ -178,7 +138,7 @@ func deriveAppKey(mnemonic string, appID types.Hash256, sharedSecret types.Hash2
 	buf := keys.Derive(append(seed[:], sharedSecret[:]...), appID[:], []byte("indexd app key derivation"), 32)
 	defer clear(buf)
 
-	return &AppKey{types.NewPrivateKeyFromSeed(buf)}, nil
+	return types.NewPrivateKeyFromSeed(buf), nil
 }
 
 // NewBuilder creates a new Builder for connecting applications to the indexer.
