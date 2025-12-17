@@ -5,26 +5,15 @@ import (
 	"errors"
 	"testing"
 
+	"go.sia.tech/core/consensus"
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
-	"go.sia.tech/coreutils/chain"
 	"go.sia.tech/coreutils/rhp/v4"
 	"go.sia.tech/indexd/accounts"
-	"go.sia.tech/indexd/client"
+	"go.sia.tech/indexd/client/v2"
 	"go.sia.tech/indexd/hosts"
 	"go.uber.org/zap"
 )
-
-type funderDialerMock struct {
-	clients map[types.PublicKey]FunderHostClient
-}
-
-func (d *funderDialerMock) DialHost(ctx context.Context, hk types.PublicKey, addrs []chain.NetAddress) (FunderHostClient, error) {
-	if client, ok := d.clients[hk]; ok {
-		return client, nil
-	}
-	return &funderHostClientMock{}, nil
-}
 
 type (
 	funderHostClientMock struct {
@@ -40,20 +29,46 @@ type (
 
 func (*funderHostClientMock) Close() error { return nil }
 
-func (h *funderHostClientMock) ReplenishAccounts(ctx context.Context, contractID types.FileContractID, accounts []proto.Account, target types.Currency) (rhp.RPCReplenishAccountsResult, int, error) {
-	res, ok := h.results[contractID]
+func (h *funderHostClientMock) LatestRevision(ctx context.Context, hostKey types.PublicKey, contractID types.FileContractID) (proto.RPCLatestRevisionResponse, error) {
+	return proto.RPCLatestRevisionResponse{}, nil
+}
+func (h *funderHostClientMock) ReplenishAccounts(ctx context.Context, signer rhp.ContractSigner, chain client.ChainManager, params rhp.RPCReplenishAccountsParams) (rhp.RPCReplenishAccountsResult, error) {
+	res, ok := h.results[params.Contract.ID]
 	if !ok {
 		panic("unexpected contract ID in mock")
 	}
-	return res.res, res.funded, res.err
+	return res.res, res.err
+}
+
+type mockChainManager struct{}
+
+func (cm *mockChainManager) TipState() consensus.State {
+	return consensus.State{}
+}
+
+func (cm *mockChainManager) V2TransactionSet(basis types.ChainIndex, txn types.V2Transaction) (types.ChainIndex, []types.V2Transaction, error) {
+	return types.ChainIndex{}, nil, nil
+}
+
+type mockStore struct{}
+
+func (s *mockStore) ContractRevision(contractID types.FileContractID) (rhp.ContractRevision, bool, error) {
+	return rhp.ContractRevision{
+		ID:       contractID,
+		Revision: types.V2FileContract{ProofHeight: 1},
+	}, false, nil
+}
+
+func (s *mockStore) UpdateContractRevision(contract rhp.ContractRevision, usage proto.Usage) error {
+	return nil
+}
+
+func (s *mockStore) MarkContractBad(contractID types.FileContractID) error {
+	return nil
 }
 
 // TestFunder is a unit test that checks the various edge cases in FundAccounts
 func TestFunder(t *testing.T) {
-	// prepare funder
-	dialer := &funderDialerMock{clients: make(map[types.PublicKey]FunderHostClient)}
-	f := &Funder{dialer: dialer}
-
 	// prepare accounts
 	accs := []accounts.HostAccount{
 		{AccountKey: proto.Account{1}},
@@ -66,8 +81,8 @@ func TestFunder(t *testing.T) {
 
 	// prepare results to cover all possible branches in FundAccounts
 	hc := &funderHostClientMock{results: make(map[types.FileContractID]funderRpcResult)}
-	hc.results[types.FileContractID{1}] = funderRpcResult{err: client.ErrContractInsufficientFunds}
-	hc.results[types.FileContractID{2}] = funderRpcResult{err: client.ErrContractNotRevisable}
+	hc.results[types.FileContractID{1}] = funderRpcResult{err: ErrContractInsufficientFunds}
+	hc.results[types.FileContractID{2}] = funderRpcResult{err: ErrContractNotRevisable}
 	hc.results[types.FileContractID{3}] = funderRpcResult{err: errors.New("failed to replenish accounts")}
 	hc.results[types.FileContractID{4}] = funderRpcResult{
 		res:    rhp.RPCReplenishAccountsResult{Revision: types.V2FileContract{RenterOutput: types.SiacoinOutput{Value: target.Sub(types.NewCurrency64(1))}}},
@@ -82,7 +97,9 @@ func TestFunder(t *testing.T) {
 		res:    rhp.RPCReplenishAccountsResult{Revision: types.V2FileContract{RenterOutput: types.SiacoinOutput{Value: target}}},
 		funded: len(accs) - 1,
 	}
-	dialer.clients[host.PublicKey] = hc
+
+	// prepare funder
+	f := NewFunder(hc, nil, &mockChainManager{}, &mockStore{}, zap.NewNop(), WithRevisionSubmissionBuffer(1))
 
 	// assert contract is marked as drained if it is out of funds
 	funded, drained, err := f.FundAccounts(context.Background(), host, []types.FileContractID{{1}}, accs, target, zap.NewNop())

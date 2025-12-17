@@ -173,7 +173,8 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger, opts ...Indexer
 		t.Fatalf("failed to create accounts manager: %v", err)
 	}
 
-	contracts, err := contracts.NewManager(walletKey, am, contracts.NewFunder(dialer), c.cm, store, dialer, hm, s, wm, cfg.contractOpts...)
+	f := contracts.NewFunder(client2, signer, c.cm, store, log)
+	contracts, err := contracts.NewManager(walletKey, am, f, c.cm, store, dialer, hm, s, wm, cfg.contractOpts...)
 	if err != nil {
 		t.Fatalf("failed to create contract manager: %v", err)
 	}
