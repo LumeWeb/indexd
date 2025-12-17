@@ -28,7 +28,9 @@ type accountsManagerMock struct {
 func (am *accountsManagerMock) AccountsForFunding(hk types.PublicKey, threshold time.Time, limit int) ([]accounts.HostAccount, error) {
 	am.mu.Lock()
 	defer am.mu.Unlock()
-	return am.accountsToFund, nil
+	cpy := make([]accounts.HostAccount, len(am.accountsToFund))
+	copy(cpy, am.accountsToFund)
+	return cpy, nil
 }
 
 func (am *accountsManagerMock) ActiveAccounts(threshold time.Time) (uint64, error) {
