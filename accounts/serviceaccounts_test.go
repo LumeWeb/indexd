@@ -20,7 +20,7 @@ func TestServiceAccounts(t *testing.T) {
 	host := hosts.Host{
 		PublicKey: types.GeneratePrivateKey().PublicKey(),
 		Addresses: []chain.NetAddress{{Protocol: siamux.Protocol, Address: "foo"}},
-		Usability: goodUsability,
+		Usability: hosts.GoodUsability,
 	}
 	s.AddTestHost(t, host)
 

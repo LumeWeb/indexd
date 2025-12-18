@@ -8,28 +8,8 @@ import (
 
 	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/contracts"
-	"go.sia.tech/indexd/hosts"
 	"go.sia.tech/indexd/internal/testutils"
 	"go.uber.org/zap/zaptest"
-)
-
-var (
-	// goodUsability is the usability of a host that passes all checks
-	goodUsability = hosts.Usability{
-		Uptime:              true,
-		MaxContractDuration: true,
-		MaxCollateral:       true,
-		ProtocolVersion:     true,
-		PriceValidity:       true,
-		AcceptingContracts:  true,
-
-		ContractPrice:   true,
-		Collateral:      true,
-		StoragePrice:    true,
-		IngressPrice:    true,
-		EgressPrice:     true,
-		FreeSectorPrice: true,
-	}
 )
 
 type testStore struct {
