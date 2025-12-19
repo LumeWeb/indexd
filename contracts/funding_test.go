@@ -100,7 +100,6 @@ func TestFunding(t *testing.T) {
 	}
 	defer am.Close()
 
-	// Set up chain manager so the maintenance loop doesn't crash
 	network, genesis := testutil.V2Network()
 	dbstore, tipState, err := chain.NewDBStore(chain.NewMemDB(), network, genesis, chain.NewZapMigrationLogger(log.Named("chaindb")))
 	if err != nil {
