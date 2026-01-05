@@ -121,6 +121,7 @@ type (
 		BlockHosts(hostKeys []types.PublicKey, reasons []string) error
 		BlockedHosts(offset, limit int) ([]types.PublicKey, error)
 		UnblockHost(hk types.PublicKey) error
+		ResetLostSectors(hk types.PublicKey) error
 
 		PruneHosts(lastSuccessfulScanCutoff time.Time, minConsecutiveFailedScans int) (int64, error)
 		UpdateHostPrices(hostKey types.PublicKey, prices proto4.HostPrices) error
@@ -198,15 +199,30 @@ func (hm *HostManager) UnblockHost(ctx context.Context, hk types.PublicKey) erro
 	return hm.store.UnblockHost(hk)
 }
 
+// ResetLostSectors resets the lost sectors count for the given host
+func (hm *HostManager) ResetLostSectors(ctx context.Context, hk types.PublicKey) error {
+	return hm.store.ResetLostSectors(hk)
+}
+
 // NewManager creates a new host manager.
 func NewManager(syncer Syncer, locator Locator, client HostClient, store Store, opts ...Option) (*HostManager, error) {
+	// uses Cloudflare 1.1.1.1 for when OS resolver fails
+	fallbackResolver := &net.Resolver{
+		// PreferGo allows us to use our own dialer
+		// https://github.com/golang/go/issues/35561
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, "1.1.1.1:53")
+		},
+	}
+
 	m := &HostManager{
 		announcementMaxAge: time.Hour * 24 * 365,
 		scanFrequency:      time.Hour,
 		scanInterval:       time.Hour * 24,
 
 		onlineChecker: &onlineChecker{addresses: fallbackSites, syncer: syncer},
-		resolver:      &net.Resolver{},
+		resolver:      &resolver{main: &net.Resolver{}, fallback: fallbackResolver},
 		scanner:       &scanner{},
 		locator:       locator,
 		store:         store,

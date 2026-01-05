@@ -70,6 +70,7 @@ type (
 		BlockHosts(ctx context.Context, hks []types.PublicKey, reasons []string) error
 		BlockedHosts(ctx context.Context, offset, limit int) ([]types.PublicKey, error)
 		UnblockHost(ctx context.Context, hk types.PublicKey) error
+		ResetLostSectors(ctx context.Context, hk types.PublicKey) error
 
 		UsabilitySettings(ctx context.Context) (hosts.UsabilitySettings, error)
 		UpdateUsabilitySettings(ctx context.Context, us hosts.UsabilitySettings) error
@@ -188,6 +189,9 @@ func NewAPI(chain ChainManager, accounts Accounts, contracts ContractManager, ho
 	routes := map[string]jape.Handler{
 		"GET /state": a.handleGETState,
 
+		"GET /consensus/state":   a.handleGETConsensusState,
+		"GET /consensus/network": a.handleGETConsensusNetwork,
+
 		// accounts endpoints
 		"GET    /accounts":            a.handleGETAccounts,
 		"GET    /account/:accountkey": a.handleGETAccount,
@@ -208,8 +212,9 @@ func NewAPI(chain ChainManager, accounts Accounts, contracts ContractManager, ho
 		"GET /explorer/exchange-rate/siacoin/:currency": a.handleGETExplorerSiacoinExchangeRate,
 
 		// host endpoints
-		"GET    /host/:hostkey":      a.handleGETHost,
-		"POST   /host/:hostkey/scan": a.handlePOSTHostScan,
+		"GET    /host/:hostkey":                   a.handleGETHost,
+		"POST   /host/:hostkey/scan":              a.handlePOSTHostScan,
+		"POST   /host/:hostkey/lostsectors/reset": a.handlePOSTHostLostSectorsReset,
 
 		// hosts endpoints
 		"GET    /hosts":                    a.handleGETHosts,
@@ -268,6 +273,14 @@ func (a *admin) checkServerError(jc jape.Context, context string, err error) boo
 		a.log.Warn(context, zap.Error(err))
 	}
 	return err == nil
+}
+
+func (a *admin) handleGETConsensusState(jc jape.Context) {
+	jc.Encode(a.chain.TipState())
+}
+
+func (a *admin) handleGETConsensusNetwork(jc jape.Context) {
+	jc.Encode(a.chain.TipState().Network)
 }
 
 func (a *admin) handleGETPProf(jc jape.Context) {
@@ -420,13 +433,6 @@ func (a *admin) handleGETAccounts(jc jape.Context) {
 		return
 	}
 	var opts []accounts.QueryAccountsOpt
-	if jc.Request.FormValue("serviceaccount") != "" {
-		var serviceAccount bool
-		if jc.DecodeForm("serviceaccount", &serviceAccount) != nil {
-			return
-		}
-		opts = append(opts, accounts.WithServiceAccount(serviceAccount))
-	}
 	if connectKey := jc.Request.FormValue("connectkey"); connectKey != "" {
 		opts = append(opts, accounts.WithConnectKey(connectKey))
 	}
@@ -685,6 +691,21 @@ func (a *admin) handlePOSTHostScan(jc jape.Context) {
 		return
 	}
 	jc.Encode(host)
+}
+
+func (a *admin) handlePOSTHostLostSectorsReset(jc jape.Context) {
+	var hk types.PublicKey
+	if jc.DecodeParam("hostkey", &hk) != nil {
+		return
+	}
+	err := a.hosts.ResetLostSectors(jc.Request.Context(), hk)
+	if errors.Is(err, hosts.ErrNotFound) {
+		jc.Error(err, http.StatusNotFound)
+		return
+	} else if jc.Check("failed to reset lost sectors", err) != nil {
+		return
+	}
+	jc.Encode(nil)
 }
 
 func (a *admin) handleGETHosts(jc jape.Context) {

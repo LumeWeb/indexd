@@ -434,7 +434,7 @@ FROM objects o;
 			-- add reasons column and migrate data
 			ALTER TABLE hosts_blocklist ADD COLUMN reasons TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];
 			UPDATE hosts_blocklist SET reasons = ARRAY[reason];
-			
+
 			-- drop old column and create index
 			DROP INDEX hosts_blocklist_reason_idx;
 			ALTER TABLE hosts_blocklist DROP COLUMN reason;
@@ -572,6 +572,47 @@ ALTER TABLE app_connect_keys ADD CONSTRAINT app_connect_keys_user_secret_key UNI
 	func(ctx context.Context, tx *txn, _ *zap.Logger) error {
 		_, err := tx.Exec(ctx, `
 CREATE INDEX contracts_next_prune_host_id_idx ON contracts (next_prune, host_id) WHERE state IN (0,1) AND renewed_to IS NULL AND good;`)
+		return err
+	},
+	// remove service accounts
+	func(ctx context.Context, tx *txn, _ *zap.Logger) error {
+		_, err := tx.Exec(ctx, `
+ALTER TABLE accounts DROP COLUMN service_account;
+
+DROP TABLE service_accounts;`)
+		return err
+	},
+	// add metadata key to objects
+	func(ctx context.Context, tx *txn, l *zap.Logger) error {
+		// rename encrypted_master_key column to encrypted_data_key
+		_, err := tx.Exec(ctx, `
+-- rename constraints of existing columns
+ALTER TABLE objects RENAME CONSTRAINT objects_encrypted_master_key_key TO objects_encrypted_data_key_key;
+ALTER TABLE objects RENAME CONSTRAINT objects_signature_key TO objects_data_signature_key;
+ALTER TABLE objects RENAME CONSTRAINT objects_encrypted_master_key_check TO objects_encrypted_data_key_check;
+ALTER TABLE objects RENAME CONSTRAINT objects_signature_check TO objects_data_signature_check;
+
+-- rename existing columns
+ALTER TABLE objects RENAME encrypted_master_key TO encrypted_data_key;
+ALTER TABLE objects RENAME signature TO data_signature;
+
+-- add new columns
+ALTER TABLE objects ADD COLUMN encrypted_meta_key BYTEA UNIQUE CHECK(LENGTH(encrypted_meta_key) = 72);
+ALTER TABLE objects ADD COLUMN meta_signature BYTEA UNIQUE CHECK(LENGTH(meta_signature) = 64);
+`)
+		if err != nil {
+			return fmt.Errorf("failed to add metadata key columns: %w", err)
+		}
+		// copy data signature to meta signature to satisfy not null constraint
+		_, err = tx.Exec(ctx, `
+			UPDATE objects
+			SET meta_signature = data_signature;
+		`)
+		if err != nil {
+			return fmt.Errorf("failed to copy data_signature to meta_signature for existing objects: %w", err)
+		}
+		// add not null constraint
+		_, err = tx.Exec(ctx, "ALTER TABLE objects ALTER COLUMN meta_signature SET NOT NULL;")
 		return err
 	},
 }

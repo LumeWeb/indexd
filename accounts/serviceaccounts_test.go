@@ -20,18 +20,15 @@ func TestServiceAccounts(t *testing.T) {
 	host := hosts.Host{
 		PublicKey: types.GeneratePrivateKey().PublicKey(),
 		Addresses: []chain.NetAddress{{Protocol: siamux.Protocol, Address: "foo"}},
-		Usability: goodUsability,
+		Usability: hosts.GoodUsability,
 	}
 	s.AddTestHost(t, host)
 
 	// add accounts
 	account1 := proto.Account(types.GeneratePrivateKey().PublicKey())
 	account2 := proto.Account(types.GeneratePrivateKey().PublicKey())
-	s.AddTestServiceAccount(t, host.PublicKey, account1)
-	s.AddTestServiceAccount(t, host.PublicKey, account2)
 
-	f := &mockFunder{}
-	am, err := accounts.NewManager(s, f)
+	am, err := accounts.NewManager(s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +37,7 @@ func TestServiceAccounts(t *testing.T) {
 	// helper to assert balance
 	assertBalance := func(account proto.Account, expected types.Currency) {
 		t.Helper()
-		if balance, err := s.ServiceAccountBalance(host.PublicKey, account); err != nil {
+		if balance, err := am.ServiceAccountBalance(t.Context(), host.PublicKey, account); !errors.Is(err, accounts.ErrNotFound) && err != nil {
 			t.Fatal(err)
 		} else if !balance.Equals(expected) {
 			t.Fatalf("expected balance %v, got %v", expected, balance)

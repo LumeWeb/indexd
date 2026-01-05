@@ -56,6 +56,53 @@ func TestMigrateSector(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// create an object using the pinned slab
+	so := slabs.SealedObject{
+		EncryptedDataKey:     frand.Bytes(72),
+		EncryptedMetadataKey: frand.Bytes(72),
+		Slabs: []slabs.SlabSlice{
+			{
+				EncryptionKey: [32]byte{},
+				MinShards:     1,
+				Sectors: []slabs.PinnedSector{
+					{
+						Root:    root1,
+						HostKey: hk1,
+					},
+					{
+						Root:    root2,
+						HostKey: hk2,
+					},
+				},
+			},
+		},
+	}
+
+	// helper to determine that object was updated since 'lastUpdate'
+	lastUpdate := time.Now().Add(-time.Second)
+	assertUpdated := func(updated bool) {
+		t.Helper()
+		events, err := store.ListObjects(account, slabs.Cursor{
+			After: lastUpdate,
+		}, 10)
+		if err != nil {
+			t.Fatal(err)
+		} else if updated && len(events) != 1 {
+			t.Fatal("object was updated unexpectedly, got", len(events), "events")
+		} else if !updated && len(events) != 0 {
+			t.Fatal("object was not updated, but got", len(events), "events")
+		} else if updated {
+			lastUpdate = time.Now()
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+
+	err = store.SaveObject(account, so)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertUpdated(true) // creation
+
 	// pin sectors to contract
 	if err := store.PinSectors(fcid1, []types.Hash256{root1, root2}); err != nil {
 		t.Fatal(err)
@@ -144,24 +191,28 @@ func TestMigrateSector(t *testing.T) {
 	assertSector(root1, hk1, fcid1, 1, 0)
 	assertSector(root2, hk1, fcid1, 1, 0)
 	assertMigratedSectors(0)
+	assertUpdated(false)
 
 	// migrate sector 1 to host 2
 	migrate(root1, hk2, true)
 	assertSector(root1, hk2, types.FileContractID{}, 0, 1)
 	assertSector(root2, hk1, fcid1, 1, 0)
 	assertMigratedSectors(1)
+	assertUpdated(true)
 
 	// migrate sector 2 to unknown host, this should be a no-op
 	migrate(root2, types.PublicKey{10}, false)
 	assertSector(root1, hk2, types.FileContractID{}, 0, 1)
 	assertSector(root2, hk1, fcid1, 1, 0)
 	assertMigratedSectors(1)
+	assertUpdated(false)
 
 	// migrate sector 2 to host 2
 	migrate(root2, hk2, true)
 	assertSector(root1, hk2, types.FileContractID{}, 0, 1)
 	assertSector(root2, hk2, types.FileContractID{}, 0, 1)
 	assertMigratedSectors(2)
+	assertUpdated(true)
 }
 
 func TestRecordIntegrityCheck(t *testing.T) {
@@ -531,11 +582,7 @@ func TestPinSlabs(t *testing.T) {
 				},
 			},
 		}
-		slabID, err := slab.Digest()
-		if err != nil {
-			t.Fatal(err)
-		}
-		return slabID, slab
+		return slab.Digest(), slab
 	}
 
 	assertUnpinnedSectors := func(expected uint64) {
@@ -794,11 +841,7 @@ func TestPinSlabsStorageLimit(t *testing.T) {
 				},
 			},
 		}
-		slabID, err := slab.Digest()
-		if err != nil {
-			t.Fatal(err)
-		}
-		return slabID, slab
+		return slab.Digest(), slab
 	}
 
 	// these accounts will have the same MaxPinnedData as the connect key
@@ -896,11 +939,7 @@ func TestPinSlabsBadHost(t *testing.T) {
 				HostKey: hk,
 			})
 		}
-		slabID, err := slab.Digest()
-		if err != nil {
-			t.Fatal(err)
-		}
-		return slabID, slab
+		return slab.Digest(), slab
 	}
 	nextCheck := time.Now().Round(time.Microsecond).Add(time.Hour)
 
@@ -937,11 +976,7 @@ func TestPinSlabsConflict(t *testing.T) {
 				HostKey: hk,
 			}},
 		}
-		slabID, err := slab.Digest()
-		if err != nil {
-			t.Fatal(err)
-		}
-		return slabID, slab
+		return slab.Digest(), slab
 	}
 
 	slabID, slab := newSlab()
@@ -1032,9 +1067,9 @@ func TestUnpinSlab(t *testing.T) {
 			},
 		})
 	}
-	slab1, _ := params[0].Digest()
-	slab2, _ := params[1].Digest()
-	slab3, _ := params[2].Digest()
+	slab1 := params[0].Digest()
+	slab2 := params[1].Digest()
+	slab3 := params[2].Digest()
 
 	// add an account with 2 slabs, 2 sectors each
 	acc1 := proto.Account{1}

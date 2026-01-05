@@ -13,7 +13,6 @@ import (
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/rhp/v4"
 	"go.sia.tech/coreutils/threadgroup"
-	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/alerts"
 	"go.sia.tech/indexd/contracts"
 	"go.sia.tech/indexd/hosts"
@@ -92,7 +91,6 @@ type (
 	// Store defines an interface to store and update slab related information
 	// in the database.
 	Store interface {
-		AddServiceAccount(ak types.PublicKey, meta accounts.AppMeta, opts ...accounts.AddAccountOption) error
 		Hosts(offset, limit int, queryOpts ...hosts.HostQueryOpt) ([]hosts.Host, error)
 		HostsForIntegrityChecks(maxLastCheck time.Time, limit int) ([]types.PublicKey, error)
 		HostsWithLostSectors() ([]types.PublicKey, error)
@@ -182,11 +180,7 @@ func WithLogger(l *zap.Logger) Option {
 
 // NewManager creates a new slab manager.
 func NewManager(chain ChainManager, am AccountManager, cm ContractManager, hm HostManager, store Store, hosts HostClient, alerter AlertsManager, migrationAccount, integrityAccount types.PrivateKey, opts ...Option) (*SlabManager, error) {
-	sm, err := newSlabManager(chain, am, cm, hm, store, hosts, alerter, migrationAccount, integrityAccount, opts...)
-	if err != nil {
-		return nil, err
-	}
-
+	sm := newSlabManager(chain, am, cm, hm, store, hosts, alerter, migrationAccount, integrityAccount, opts...)
 	ctx, cancel, err := sm.tg.AddContext(context.Background())
 	if err != nil {
 		return nil, err
@@ -200,7 +194,7 @@ func NewManager(chain ChainManager, am AccountManager, cm ContractManager, hm Ho
 	return sm, nil
 }
 
-func newSlabManager(chain ChainManager, am AccountManager, cm ContractManager, hm HostManager, store Store, hosts HostClient, alerter AlertsManager, migrationAccount, integrityAccount types.PrivateKey, opts ...Option) (*SlabManager, error) {
+func newSlabManager(chain ChainManager, am AccountManager, cm ContractManager, hm HostManager, store Store, hosts HostClient, alerter AlertsManager, migrationAccount, integrityAccount types.PrivateKey, opts ...Option) *SlabManager {
 	m := &SlabManager{
 		healthCheckInterval: 10 * time.Minute,
 
@@ -230,12 +224,8 @@ func newSlabManager(chain ChainManager, am AccountManager, cm ContractManager, h
 	}
 	m.verifier = NewSectorVerifier(am, hosts, integrityAccount, m.log)
 
-	err := m.initServiceAccounts(migrationAccount.PublicKey(), integrityAccount.PublicKey())
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize service accounts: %w", err)
-	}
-
-	return m, nil
+	m.initServiceAccounts(migrationAccount.PublicKey(), integrityAccount.PublicKey())
+	return m
 }
 
 // Close closes the manager.
@@ -244,7 +234,7 @@ func (m *SlabManager) Close() error {
 	return nil
 }
 
-func (m *SlabManager) initServiceAccounts(migrationAccount, integrityAccount types.PublicKey) error {
+func (m *SlabManager) initServiceAccounts(migrationAccount, integrityAccount types.PublicKey) {
 	for _, acc := range []struct {
 		description string
 		key         types.PublicKey
@@ -252,20 +242,9 @@ func (m *SlabManager) initServiceAccounts(migrationAccount, integrityAccount typ
 		{"slab migrations", migrationAccount},
 		{"data integrity checks", integrityAccount},
 	} {
-		// ensure account is added to the store
-		err := m.store.AddServiceAccount(acc.key, accounts.AppMeta{
-			Description: acc.description,
-			LogoURL:     "", // service accounts don't need a logo
-			ServiceURL:  "", // service accounts don't need a service URL
-		})
-		if err != nil && !errors.Is(err, accounts.ErrExists) {
-			return fmt.Errorf("failed to add service account: %w", err)
-		}
-
 		// ensure account is registered with the AccountManager
 		m.am.RegisterServiceAccount(proto.Account(acc.key))
 	}
-	return nil
 }
 
 // maintenanceLoop performs any background tasks that the slab manager needs to
@@ -275,9 +254,7 @@ func (m *SlabManager) maintenanceLoop(ctx context.Context) {
 	launch := func(descr string, task func(context.Context) error) {
 		healthTicker := time.NewTicker(m.healthCheckInterval)
 
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			defer healthTicker.Stop()
 			for {
 				select {
@@ -289,8 +266,11 @@ func (m *SlabManager) maintenanceLoop(ctx context.Context) {
 					m.log.Error("maintenance failed", zap.String("task", descr), zap.Error(err))
 				}
 			}
-		}()
+		})
 	}
+
+	// register lost sectors alerts on startup
+	m.registerLostSectorsAlert()
 
 	launch("integrity checks", m.performIntegrityChecks)
 	launch("slab migrations", m.performSlabMigrations)
@@ -344,18 +324,7 @@ func (m *SlabManager) performIntegrityChecks(ctx context.Context) error {
 		}
 		wg.Wait()
 	}
-
-	hks, err := m.store.HostsWithLostSectors()
-	if err != nil {
-		return fmt.Errorf("failed to get hosts with lost sectors: %w", err)
-	}
-	if len(hks) > 0 {
-		if err := m.alerter.RegisterAlert(newLostSectorsAlert(hks)); err != nil {
-			return fmt.Errorf("failed to register lost sector alert: %w", err)
-		}
-	} else {
-		m.alerter.DismissAlerts(alertLostSectorsID)
-	}
+	m.registerLostSectorsAlert()
 
 	logger.Debug("finished integrity checks", zap.Duration("elapsed", time.Since(start)))
 	return nil
@@ -385,4 +354,20 @@ func (m *SlabManager) performSlabMigrations(ctx context.Context) error {
 
 	log.Debug("finished slab migrations", zap.Duration("elapsed", time.Since(start)))
 	return nil
+}
+
+func (m *SlabManager) registerLostSectorsAlert() {
+	hks, err := m.store.HostsWithLostSectors()
+	if err != nil {
+		m.log.Error("failed to get hosts with lost sectors", zap.Error(err))
+		return
+	}
+	if len(hks) > 0 {
+		if err := m.alerter.RegisterAlert(newLostSectorsAlert(hks)); err != nil {
+			m.log.Error("failed to register lost sector alert", zap.Error(err))
+			return
+		}
+	} else {
+		m.alerter.DismissAlerts(alertLostSectorsID)
+	}
 }

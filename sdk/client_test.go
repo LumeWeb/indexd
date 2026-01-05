@@ -215,7 +215,7 @@ func TestE2E(t *testing.T) {
 	cluster.WaitForContracts(t)
 
 	b := NewBuilder(cluster.Indexer.AppAPIAddr(), AppMetadata{})
-	client, err := b.SDK(&AppKey{privateKey}, WithLogger(log.Named("sdk")))
+	client, err := b.SDK(privateKey, WithLogger(log.Named("sdk")))
 	if err != nil {
 		t.Fatal(err)
 	}

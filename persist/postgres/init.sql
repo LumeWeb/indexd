@@ -19,7 +19,6 @@ CREATE TABLE accounts (
 
     pinned_data BIGINT NOT NULL DEFAULT 0 CHECK (pinned_data >= 0), -- total pinned data in bytes
     max_pinned_data BIGINT NOT NULL CHECK (max_pinned_data >= 0), -- max pinned data in bytes
-    service_account BOOLEAN NOT NULL DEFAULT FALSE, -- true if this is a service account
     app_id BYTEA NOT NULL DEFAULT '\x0000000000000000000000000000000000000000000000000000000000000000'::bytea CHECK (LENGTH(app_id) = 32), -- app identifier
     description TEXT NOT NULL DEFAULT '',
     logo_url TEXT NOT NULL DEFAULT '',
@@ -89,13 +88,6 @@ CREATE TABLE account_hosts (
     CONSTRAINT account_hosts_pk PRIMARY KEY (account_id, host_id)
 );
 CREATE INDEX account_hosts_host_id_next_fund_idx ON account_hosts (host_id, next_fund);
-
-CREATE TABLE service_accounts (
-    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-    host_id INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
-    balance NUMERIC(50,0) NOT NULL DEFAULT 0 CHECK (balance >= 0),
-    CONSTRAINT service_accounts_pk PRIMARY KEY (account_id, host_id)
-);
 
 CREATE TABLE hosts_blocklist (
     public_key BYTEA PRIMARY KEY CHECK (LENGTH(public_key) = 32),
@@ -302,12 +294,14 @@ CREATE INDEX slabs_id_next_repair_attempt_idx ON slabs(next_repair_attempt ASC);
 CREATE TABLE objects (
     id BIGSERIAL PRIMARY KEY,
     object_key BYTEA NOT NULL CHECK(LENGTH(object_key) = 32),
-    encrypted_master_key BYTEA UNIQUE NOT NULL CHECK(LENGTH(encrypted_master_key) = 72), -- user provided, master encryption key (xchacha20 nonce + key + tag)
+    encrypted_data_key BYTEA UNIQUE NOT NULL CHECK(LENGTH(encrypted_data_key) = 72), -- user provided, data encryption key (xchacha20 nonce + key + tag)
+    encrypted_meta_key BYTEA UNIQUE CHECK(LENGTH(encrypted_meta_key) = 72), -- user provided, metadata encryption key (xchacha20 nonce + key + tag)
     account_id INTEGER REFERENCES accounts(id) NOT NULL, -- account that owns object
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(), -- allow sorting by update time
     encrypted_metadata BYTEA, -- user provided, encrypted metadata
-    signature BYTEA UNIQUE NOT NULL CHECK(LENGTH(signature) = 64) -- signature of blake2b(object_key || encrypted_master_key || encrypted_metadata)
+    data_signature BYTEA UNIQUE NOT NULL CHECK(LENGTH(data_signature) = 64), -- signature of blake2b(object_key || encrypted_data_key)
+    meta_signature BYTEA UNIQUE NOT NULL CHECK(LENGTH(meta_signature) = 64) -- signature of blake2b(object ID || metadata key || encrypted_metadata)
 );
 
 -- object_key is unique per account
@@ -316,7 +310,7 @@ CREATE UNIQUE INDEX objects_account_id_object_key_idx ON objects(account_id, obj
 CREATE TABLE object_slabs (
     object_id BIGINT REFERENCES objects(id) ON DELETE CASCADE,
     slab_digest BYTEA REFERENCES slabs(digest) ON DELETE CASCADE,
-    slab_index INTEGER NOT NULL, -- index within corresponding slab to retrieve slabs in right order
+    slab_index INTEGER NOT NULL, -- index within corresponding object to retrieve slabs in right order
     slab_offset INTEGER NOT NULL, -- offset within slab
     slab_length INTEGER NOT NULL, -- length of object data within slab
     PRIMARY KEY (object_id, slab_digest, slab_index)
