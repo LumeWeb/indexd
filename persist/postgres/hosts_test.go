@@ -1088,6 +1088,187 @@ func TestResetLostSectors(t *testing.T) {
 	}
 }
 
+func TestHostUnpinnedSectors(t *testing.T) {
+	// create database
+	log := zaptest.NewLogger(t)
+	db := initPostgres(t, log.Named("postgres"))
+
+	// add account
+	account := proto4.Account{1}
+	db.addTestAccount(t, types.PublicKey(account))
+
+	// helper to assert unpinned sectors for a host
+	assertHostUnpinned := func(hk types.PublicKey, expected int64) {
+		t.Helper()
+		var got int64
+		err := db.pool.QueryRow(t.Context(), `SELECT unpinned_sectors FROM hosts WHERE public_key = $1`, sqlPublicKey(hk)).Scan(&got)
+		if err != nil {
+			t.Fatal(err)
+		} else if got != expected {
+			t.Fatalf("expected %d unpinned sectors, got %d", expected, got)
+		}
+	}
+
+	// add four hosts
+	hk1 := db.addTestHost(t)
+	hk2 := db.addTestHost(t)
+	hk3 := db.addTestHost(t)
+	hk4 := db.addTestHost(t)
+
+	// h1, h2 and h4 get contracts
+	fcid1 := db.addTestContract(t, hk1)
+	fcid2 := db.addTestContract(t, hk2)
+	_ = db.addTestContract(t, hk4)
+
+	// h3 gets a contract with custom expiry height (to test pruning later)
+	fcid3 := types.FileContractID(hk3)
+	revision := newTestRevision(hk3)
+	revision.ExpirationHeight = 10
+	if err := db.AddFormedContract(hk3, fcid3, revision, types.ZeroCurrency, types.ZeroCurrency, types.ZeroCurrency, proto4.Usage{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert no unpinned sectors
+	assertHostUnpinned(hk1, 0)
+	assertHostUnpinned(hk2, 0)
+
+	// pin a slab, h1 gets 2 sectors
+	root1 := frand.Entropy256()
+	root2 := frand.Entropy256()
+	root3 := frand.Entropy256()
+	_, err := db.PinSlabs(account, time.Time{}, slabs.SlabPinParams{
+		EncryptionKey: frand.Entropy256(),
+		MinShards:     1,
+		Sectors: []slabs.PinnedSector{
+			{Root: root1, HostKey: hk1},
+			{Root: root2, HostKey: hk1},
+			{Root: root3, HostKey: hk2},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// assert unpinned sectors after pinning slabs
+	assertHostUnpinned(hk1, 2)
+	assertHostUnpinned(hk2, 1)
+
+	// pin a sector on h1
+	if err := db.PinSectors(fcid1, []types.Hash256{root1}); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert unpinned sectors after pinning sectors
+	assertHostUnpinned(hk1, 1)
+	assertHostUnpinned(hk2, 1)
+
+	// pin sectors on h2
+	if err := db.PinSectors(fcid2, []types.Hash256{root3}); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert unpinned sectors after pinning sectors
+	assertHostUnpinned(hk1, 1)
+	assertHostUnpinned(hk2, 0)
+
+	// mark unpinned sector as lost on h1
+	if err := db.MarkSectorsLost(hk1, []types.Hash256{root2}); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert unpinned sectors after marking sectors lost
+	assertHostUnpinned(hk1, 0)
+	assertHostUnpinned(hk2, 0)
+
+	// migrate a pinned sector from hk2 to hk1
+	if _, err := db.MigrateSector(root3, hk1); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert unpinned sectors, hk1 has 1 unpinned (root3), hk2 unchanged
+	assertHostUnpinned(hk1, 1)
+	assertHostUnpinned(hk2, 0)
+
+	// migrate the now-unpinned sector from hk1 to hk2
+	if _, err := db.MigrateSector(root3, hk2); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert unpinned sectors, hk1 has 0 unpinned, hk2 has 1 unpinned
+	assertHostUnpinned(hk1, 0)
+	assertHostUnpinned(hk2, 1)
+
+	// migrate it back to hk1 for the rest of the test
+	if _, err := db.MigrateSector(root3, hk1); err != nil {
+		t.Fatal(err)
+	}
+	assertHostUnpinned(hk1, 1)
+	assertHostUnpinned(hk2, 0)
+
+	// mark sectors unpinnable, use root3 as a threshold
+	var uploadedAt time.Time
+	if err := db.pool.QueryRow(t.Context(), `SELECT uploaded_at FROM sectors WHERE sector_root = $1`, sqlHash256(root3)).Scan(&uploadedAt); err != nil {
+		t.Fatal(err)
+	} else if err := db.MarkSectorsUnpinnable(uploadedAt.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert unpinned sectors, h1's unpinned sector should be gone
+	assertHostUnpinned(hk1, 0)
+	assertHostUnpinned(hk2, 0)
+
+	// pin a slab with a sector on h3
+	root4 := frand.Entropy256()
+	if _, err := db.PinSlabs(account, time.Time{}, slabs.SlabPinParams{
+		EncryptionKey: frand.Entropy256(),
+		MinShards:     1,
+		Sectors: []slabs.PinnedSector{
+			{Root: root4, HostKey: hk3},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertHostUnpinned(hk3, 1)
+
+	// pin the sector to the contract
+	if err := db.PinSectors(fcid3, []types.Hash256{root4}); err != nil {
+		t.Fatal(err)
+	}
+	assertHostUnpinned(hk3, 0)
+
+	// expire contract and prune contract sector mappings
+	if err := db.UpdateChainState(func(tx subscriber.UpdateTx) error {
+		return tx.UpdateLastScannedIndex(types.ChainIndex{Height: 11})
+	}); err != nil {
+		t.Fatal(err)
+	} else if err := db.PruneContractSectorsMap(0); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert unpinned sectors after pruning
+	assertHostUnpinned(hk3, 1)
+
+	// test BlockHosts: add another host with unpinned sectors
+	root5 := frand.Entropy256()
+	_, err = db.PinSlabs(account, time.Time{}, slabs.SlabPinParams{
+		EncryptionKey: frand.Entropy256(),
+		MinShards:     1,
+		Sectors: []slabs.PinnedSector{
+			{Root: root5, HostKey: hk4},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertHostUnpinned(hk4, 1)
+
+	// block the host
+	if err := db.BlockHosts([]types.PublicKey{hk4}, []string{t.Name()}); err != nil {
+		t.Fatal(err)
+	}
+	assertHostUnpinned(hk4, 0)
+}
+
 func TestStuckHosts(t *testing.T) {
 	// create database
 	log := zaptest.NewLogger(t)

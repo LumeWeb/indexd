@@ -123,6 +123,7 @@ type (
 		Blocked                bool                `json:"blocked"`
 		BlockedReasons         []string            `json:"blockedReasons"`
 		LostSectors            uint64              `json:"lostSectors"`
+		UnpinnedSectors        uint64              `json:"unpinnedSectors"`
 		AccountFunding         types.Currency      `json:"accountFunding"`
 		TotalSpent             types.Currency      `json:"totalSpent"`
 	}
@@ -141,8 +142,9 @@ type (
 	// StuckHost contains the public key of a stuck host and the time it
 	// became stuck.
 	StuckHost struct {
-		PublicKey  types.PublicKey `json:"publicKey"`
-		StuckSince time.Time       `json:"stuckSince"`
+		PublicKey       types.PublicKey `json:"publicKey"`
+		StuckSince      time.Time       `json:"stuckSince"`
+		UnpinnedSectors uint64          `json:"unpinnedSectors"`
 	}
 
 	// Usability represents a series of host checks that can be used to

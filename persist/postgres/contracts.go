@@ -537,15 +537,16 @@ func (s *Store) PruneContractSectorsMap(maxBlocksSinceExpiry uint64) error {
 	return s.transaction(func(ctx context.Context, tx *txn) error {
 		// fetch rows to prune
 		var toPrune []int64
+		csmToHostID := make(map[int64]int64)
 		rows, err := tx.Query(ctx, `
 			WITH current_height AS (
 				SELECT scanned_height FROM global_settings
 			)
-			SELECT csm.id
+			SELECT csm.id, c.host_id
 			FROM contract_sectors_map csm
 			CROSS JOIN current_height
-			INNER JOIN contracts ON csm.contract_id = contracts.contract_id
-			WHERE current_height.scanned_height >= contracts.expiration_height + $1
+			INNER JOIN contracts c ON csm.contract_id = c.contract_id
+			WHERE current_height.scanned_height >= c.expiration_height + $1
 		`, maxBlocksSinceExpiry)
 		if err != nil {
 			return fmt.Errorf("failed to query contract_sectors_map for pruning: %w", err)
@@ -553,11 +554,12 @@ func (s *Store) PruneContractSectorsMap(maxBlocksSinceExpiry uint64) error {
 		defer rows.Close()
 
 		for rows.Next() {
-			var id int64
-			if err := rows.Scan(&id); err != nil {
+			var id, hostID int64
+			if err := rows.Scan(&id, &hostID); err != nil {
 				return fmt.Errorf("failed to scan contract_sectors_map id: %w", err)
 			}
 			toPrune = append(toPrune, id)
+			csmToHostID[id] = hostID
 		}
 		if rows.Err() != nil {
 			return fmt.Errorf("failed to iterate over contract_sectors_map rows: %w", rows.Err())
@@ -585,14 +587,17 @@ func (s *Store) PruneContractSectorsMap(maxBlocksSinceExpiry uint64) error {
 		}
 
 		var totalUnpinned int64
+		unpinnedPerHost := make(map[int64]int64)
 		res := tx.SendBatch(ctx, updateBatch)
-		for range toPrune {
+		for _, id := range toPrune {
 			ct, err := res.Exec()
 			if err != nil {
 				res.Close()
 				return fmt.Errorf("failed to update sectors table: %w", err)
 			}
-			totalUnpinned += ct.RowsAffected()
+			unpinned := ct.RowsAffected()
+			unpinnedPerHost[csmToHostID[id]] += unpinned
+			totalUnpinned += unpinned
 		}
 		if err := res.Close(); err != nil {
 			return err
@@ -600,6 +605,8 @@ func (s *Store) PruneContractSectorsMap(maxBlocksSinceExpiry uint64) error {
 			return fmt.Errorf("failed to update number of pinned sectors: %w", err)
 		} else if err := incrementNumUnpinnedSectors(ctx, tx, totalUnpinned); err != nil {
 			return fmt.Errorf("failed to update number of unpinned sectors: %w", err)
+		} else if err := incrementHostsUnpinnedSectors(ctx, tx, unpinnedPerHost); err != nil {
+			return fmt.Errorf("failed to update hosts unpinned sectors: %w", err)
 		}
 
 		if err := tx.SendBatch(ctx, pruneBatch).Close(); err != nil {
