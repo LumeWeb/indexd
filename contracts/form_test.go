@@ -654,15 +654,15 @@ func TestContractFunding(t *testing.T) {
 }
 
 func TestShouldReplaceContract(t *testing.T) {
-	contract := func(append, funding, refresh bool) (cc candidateContract) {
+	contract := func(gfa, gff, gfr bool) (cc candidateContract) {
 		t.Helper()
-		if !append {
+		if !gfa {
 			cc.goodForAppend = fmt.Errorf("not good for append")
 		}
-		if !funding {
+		if !gff {
 			cc.goodForFunding = fmt.Errorf("not good for funding")
 		}
-		if !refresh {
+		if !gfr {
 			cc.goodForRefresh = fmt.Errorf("not good for refresh")
 		}
 		return cc
