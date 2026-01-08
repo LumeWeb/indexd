@@ -131,11 +131,12 @@ type (
 	// key and addresses. It is used for listing usable hosts in the
 	// application API.
 	HostInfo struct {
-		PublicKey   types.PublicKey    `json:"publicKey"`
-		Addresses   []chain.NetAddress `json:"addresses"`
-		CountryCode string             `json:"countryCode"`
-		Latitude    float64            `json:"latitude"`
-		Longitude   float64            `json:"longitude"`
+		PublicKey     types.PublicKey    `json:"publicKey"`
+		Addresses     []chain.NetAddress `json:"addresses"`
+		CountryCode   string             `json:"countryCode"`
+		Latitude      float64            `json:"latitude"`
+		Longitude     float64            `json:"longitude"`
+		GoodForUpload bool               `json:"goodForUpload"`
 	}
 
 	// StuckHost contains the public key of a stuck host and the time it

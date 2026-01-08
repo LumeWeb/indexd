@@ -626,6 +626,7 @@ WITH globals AS (
 		country_code,
 		location,
 		last_successful_scan,
+		stuck_since,
 		settings_protocol_version,
 		settings_release,
 		settings_wallet_address,
@@ -651,7 +652,8 @@ SELECT
 	hosts.id,
 	hosts.public_key,
 	hosts.country_code,
-	hosts.location
+	hosts.location,
+	(stuck_since IS NULL OR stuck_since >= NOW() - INTERVAL '24 hours') AND settings_remaining_storage > 0
 FROM hosts
 CROSS JOIN globals
 WHERE
@@ -690,16 +692,19 @@ WHERE
 		defer rows.Close()
 
 		var dbHosts []*dbHost
+		var goodForUpload []bool
 		for rows.Next() {
 			var host dbHost
 			var point pgtype.Point
-			if err := rows.Scan(&host.id, (*sqlPublicKey)(&host.PublicKey), &host.CountryCode, &point); err != nil {
+			var good bool
+			if err := rows.Scan(&host.id, (*sqlPublicKey)(&host.PublicKey), &host.CountryCode, &point, &good); err != nil {
 				return fmt.Errorf("failed to scan host: %w", err)
 			}
 
 			host.Latitude = point.P.X
 			host.Longitude = point.P.Y
 			dbHosts = append(dbHosts, &host)
+			goodForUpload = append(goodForUpload, good)
 		}
 		if err := rows.Err(); err != nil {
 			return err
@@ -711,13 +716,14 @@ WHERE
 			return fmt.Errorf("failed to decorate host addresses: %w", err)
 		}
 
-		for _, h := range dbHosts {
+		for i, h := range dbHosts {
 			usable = append(usable, hosts.HostInfo{
-				PublicKey:   h.PublicKey,
-				Addresses:   h.Addresses,
-				CountryCode: h.CountryCode,
-				Latitude:    h.Latitude,
-				Longitude:   h.Longitude,
+				PublicKey:     h.PublicKey,
+				Addresses:     h.Addresses,
+				CountryCode:   h.CountryCode,
+				Latitude:      h.Latitude,
+				Longitude:     h.Longitude,
+				GoodForUpload: goodForUpload[i],
 			})
 		}
 		return nil
