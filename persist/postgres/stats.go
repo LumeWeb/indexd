@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"go.sia.tech/indexd/api/admin"
 	"go.sia.tech/indexd/hosts"
 )
@@ -146,7 +147,7 @@ func (s *Store) HostStats(offset, limit int) ([]hosts.HostStats, error) {
 					h.scans_failed,
 					hb.public_key IS NOT NULL AS blocked,
 					COALESCE(hb.reasons, ARRAY[]::TEXT[]) AS blocked_reasons,
-					h.stuck_since IS NOT NULL AND h.stuck_since < NOW() - INTERVAL '24 hours' AS stuck
+					h.stuck_since
 				FROM hosts h
 				LEFT JOIN hosts_blocklist hb ON hb.public_key = h.public_key
 				WHERE h.usage_total_spent > 0
@@ -167,7 +168,7 @@ func (s *Store) HostStats(offset, limit int) ([]hosts.HostStats, error) {
 				h.scans_failed,
 				h.blocked,
 				h.blocked_reasons,
-				h.stuck
+				h.stuck_since
 			FROM selected_hosts h
 			LEFT JOIN LATERAL (
 			SELECT SUM(size) AS total_contracts_size
@@ -186,6 +187,7 @@ func (s *Store) HostStats(offset, limit int) ([]hosts.HostStats, error) {
 
 		for rows.Next() {
 			var hs hosts.HostStats
+			var stuckSince pgtype.Timestamp
 			if err := rows.Scan(
 				(*sqlPublicKey)(&hs.PublicKey),
 				&hs.LostSectors,
@@ -199,9 +201,13 @@ func (s *Store) HostStats(offset, limit int) ([]hosts.HostStats, error) {
 				&hs.ScansFailed,
 				&hs.Blocked,
 				&hs.BlockedReasons,
-				&hs.Stuck,
+				&stuckSince,
 			); err != nil {
 				return err
+			}
+			if stuckSince.Valid && time.Since(stuckSince.Time) >= 24*time.Hour {
+				hs.StuckSince = &stuckSince.Time
+				hs.Stuck = true
 			}
 			stats = append(stats, hs)
 		}

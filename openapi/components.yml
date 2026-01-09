@@ -869,6 +869,14 @@ components:
             items:
               type: string
             description: Reasons why the host was blocked, if any
+          stuck:
+            type: boolean
+            description: Whether the host is currently stuck. A host is stuck when contract operations have been failing for more than 24 hours.
+          stuckSince:
+            type: string
+            format: date-time
+            nullable: true
+            description: Timestamp when the host became stuck. Only present when stuck is true.
 
     ScansStatsResponse:
       type: object

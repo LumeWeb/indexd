@@ -141,6 +141,16 @@ func (h HostStats) PrometheusMetric() []prometheus.Metric {
 				return 0
 			}(),
 		},
+		{
+			Name:   "indexd_host_stuck_since",
+			Labels: labels,
+			Value: func() float64 {
+				if h.StuckSince != nil {
+					return float64(time.Since(*h.StuckSince).Milliseconds())
+				}
+				return 0
+			}(),
+		},
 	}
 
 	for _, reason := range h.BlockedReasons {
