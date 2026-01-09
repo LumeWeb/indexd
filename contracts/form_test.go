@@ -652,3 +652,134 @@ func TestContractFunding(t *testing.T) {
 		})
 	}
 }
+
+func TestShouldReplaceContract(t *testing.T) {
+	contract := func(gfa, gff, gfr bool) (cc candidateContract) {
+		t.Helper()
+		if !gfa {
+			cc.goodForAppend = fmt.Errorf("not good for append")
+		}
+		if !gff {
+			cc.goodForFunding = fmt.Errorf("not good for funding")
+		}
+		if !gfr {
+			cc.goodForRefresh = fmt.Errorf("not good for refresh")
+		}
+		return cc
+	}
+
+	tests := []struct {
+		name      string
+		current   candidateContract
+		candidate candidateContract
+		should    bool
+	}{
+		{
+			name:      "current good for upload and funding",
+			current:   contract(true, true, false),
+			candidate: contract(true, true, true),
+			should:    false,
+		},
+		{
+			name:      "candidate good for upload and funding",
+			current:   contract(true, false, false),
+			candidate: contract(true, true, false),
+			should:    true,
+		},
+		{
+			name:      "current refreshed > not refreshed",
+			current:   contract(true, false, true),
+			candidate: contract(true, false, false),
+			should:    false,
+		},
+		{
+			name:      "candidate refreshed > not refreshed",
+			current:   contract(true, false, false),
+			candidate: contract(true, false, true),
+			should:    true,
+		},
+		{
+			name:      "current refreshable < candidate good",
+			current:   contract(false, false, true),
+			candidate: contract(true, true, false),
+			should:    true,
+		},
+		{
+			name:      "current append > not append",
+			current:   contract(true, true, false),
+			candidate: contract(false, true, false),
+			should:    false,
+		},
+		{
+			name:      "candidate append > not append",
+			current:   contract(false, true, false),
+			candidate: contract(true, true, false),
+			should:    true,
+		},
+		{
+			name:      "current funding > not funding",
+			current:   contract(false, true, false),
+			candidate: contract(false, false, false),
+			should:    false,
+		},
+		{
+			name:      "candidate funding > not funding",
+			current:   contract(false, false, false),
+			candidate: contract(false, true, false),
+			should:    true,
+		},
+		{
+			name:      "both equally bad",
+			current:   contract(false, false, false),
+			candidate: contract(false, false, false),
+			should:    true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := shouldReplaceContract(test.current, test.candidate)
+			if result != test.should {
+				t.Fatalf("expected %v but got %v", test.should, result)
+			}
+		})
+	}
+
+	// run exhaustive combinations for important cases
+	enumerate := func(gfa, gff, gfr []bool) (candidates []candidateContract) {
+		t.Helper()
+		for _, gfa := range gfa {
+			for _, gff := range gff {
+				for _, gfr := range gfr {
+					candidates = append(candidates, contract(gfa, gff, gfr))
+				}
+			}
+		}
+		return
+	}
+
+	assertShouldReplace := func(current []candidateContract, candidates []candidateContract, shouldReplace bool) {
+		t.Helper()
+		for _, current := range current {
+			for _, candidate := range candidates {
+				if replaces := shouldReplaceContract(current, candidate); replaces != shouldReplace {
+					t.Fatalf("expected replace=%v for candidate gfa=%v, gff=%v, gfr=%v, got %v", shouldReplace, candidate.goodForAppend == nil, candidate.goodForFunding == nil, candidate.goodForRefresh == nil, replaces)
+				}
+			}
+		}
+	}
+
+	// a good contract should never be replaced
+	goodContracts := enumerate([]bool{true}, []bool{true}, []bool{true, false})
+	anyContracts := enumerate([]bool{true, false}, []bool{true, false}, []bool{true, false})
+	assertShouldReplace(goodContracts, anyContracts, false)
+
+	// a contract that is not good should be replaced by any good contract
+	badContracts := slices.DeleteFunc(slices.Clone(anyContracts), func(c candidateContract) bool {
+		return c.goodForAppend == nil && c.goodForFunding == nil
+	})
+	assertShouldReplace(badContracts, goodContracts, true)
+
+	// a bad contract should be replaced by any contract that is good for refresh
+	goodForRefreshContracts := enumerate([]bool{true, false}, []bool{true, false}, []bool{true})
+	assertShouldReplace(badContracts, goodForRefreshContracts, true)
+}
