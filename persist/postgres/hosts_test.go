@@ -860,9 +860,9 @@ func TestUsableHosts(t *testing.T) {
 	}, siamuxProtocol, true, false, true)
 
 	// test GoodForUpload field
-	// set uh1 to have no remaining storage - should have GoodForUpload=false
+	// set uh1 to have less than one sector of remaining storage - should have GoodForUpload=false
 	settingsNoStorage := newTestHostSettings(uh1)
-	settingsNoStorage.RemainingStorage = 0
+	settingsNoStorage.RemainingStorage = proto4.SectorSize - 1
 	if err := db.UpdateHostScan(uh1, settingsNoStorage, locationUS, true, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -895,7 +895,7 @@ func TestUsableHosts(t *testing.T) {
 	}
 	for _, h := range usableHosts {
 		if h.PublicKey == uh1 && h.GoodForUpload {
-			t.Fatal("expected host with no storage to not be good for upload")
+			t.Fatal("expected host with insufficient storage to not be good for upload")
 		} else if h.PublicKey == uh2 && h.GoodForUpload {
 			t.Fatal("expected stuck host to not be good for upload")
 		} else if h.PublicKey == uh3 && !h.GoodForUpload {

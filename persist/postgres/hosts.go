@@ -86,7 +86,7 @@ WITH globals AS (
 		settings_egress_price, settings_free_sector_price, settings_tip_height, settings_valid_until, settings_signature,
 		last_successful_scan IS NOT NULL as has_settings,
 		(get_byte(settings_protocol_version, 0) << 16) + (get_byte(settings_protocol_version, 1) << 8) + (get_byte(settings_protocol_version, 2)) as settings_version,
-		((stuck_since IS NULL OR stuck_since >= NOW() - INTERVAL '24 hours') AND settings_remaining_storage > 0) AS good_for_upload
+		((stuck_since IS NULL OR stuck_since >= NOW() - INTERVAL '24 hours') AND settings_remaining_storage >= $2) AS good_for_upload
 	FROM hosts
 	LEFT JOIN hosts_blocklist hb ON hosts.public_key = hb.public_key
 	WHERE hosts.public_key = $1
@@ -104,7 +104,7 @@ WITH globals AS (
 	has_settings AND settings_ingress_price <= globals.hosts_max_ingress_price,
 	has_settings AND settings_egress_price <= globals.hosts_max_egress_price,
 	has_settings AND settings_free_sector_price <= globals.one_sc / globals.sectors_per_tb
-FROM hosts CROSS JOIN globals;`, sqlPublicKey(hk)))
+FROM hosts CROSS JOIN globals;`, sqlPublicKey(hk), proto4.SectorSize))
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("host %q: %w", hk, hosts.ErrNotFound)
 		} else if err != nil {
@@ -171,7 +171,7 @@ WITH globals AS (
 		settings_egress_price, settings_free_sector_price, settings_tip_height, settings_valid_until, settings_signature,
 		last_successful_scan IS NOT NULL as has_settings,
 		(get_byte(settings_protocol_version, 0) << 16) + (get_byte(settings_protocol_version, 1) << 8) + (get_byte(settings_protocol_version, 2)) as settings_version,
-		((stuck_since IS NULL OR stuck_since >= NOW() - INTERVAL '24 hours') AND settings_remaining_storage > 0) AS good_for_upload
+		((stuck_since IS NULL OR stuck_since >= NOW() - INTERVAL '24 hours') AND settings_remaining_storage >= $7) AS good_for_upload
 	FROM hosts
 	LEFT JOIN hosts_blocklist hb ON hosts.public_key = hb.public_key
 ) SELECT
@@ -215,7 +215,7 @@ WHERE
 	-- public key filter
 	AND ((CARDINALITY($6::bytea[]) = 0) OR (public_key = ANY($6)))
 	%s -- orderClause
-	LIMIT $1 OFFSET $2`, orderClause), limit, offset, opts.Usable, opts.Blocked, opts.ActiveContracts, hks)
+	LIMIT $1 OFFSET $2`, orderClause), limit, offset, opts.Usable, opts.Blocked, opts.ActiveContracts, hks, proto4.SectorSize)
 		if err != nil {
 			return fmt.Errorf("failed to query hosts: %w", err)
 		}
@@ -647,7 +647,7 @@ WITH globals AS (
 		settings_valid_until,
 		settings_signature,
 		(get_byte(settings_protocol_version, 0) << 16) + (get_byte(settings_protocol_version, 1) << 8) + (get_byte(settings_protocol_version, 2)) as settings_version,
-		((stuck_since IS NULL OR stuck_since >= NOW() - INTERVAL '24 hours') AND settings_remaining_storage > 0) AS good_for_upload
+		((stuck_since IS NULL OR stuck_since >= NOW() - INTERVAL '24 hours') AND settings_remaining_storage >= $5) AS good_for_upload
 	FROM hosts
 	WHERE last_successful_scan IS NOT NULL -- has settings
 )
@@ -680,10 +680,10 @@ WHERE
 	EXISTS (SELECT 1 FROM contracts WHERE host_id = hosts.id AND state IN (0,1) AND renewed_to IS NULL AND good) AND
 	-- protocol filter
 	($4::smallint IS NULL OR EXISTS (SELECT 1 FROM host_addresses WHERE host_id = hosts.id AND protocol = $4::smallint)) `
-		args := []any{limit, offset, queryOpts.CountryCode, (*sqlNetworkProtocol)(queryOpts.Protocol)}
+		args := []any{limit, offset, queryOpts.CountryCode, (*sqlNetworkProtocol)(queryOpts.Protocol), proto4.SectorSize}
 
 		if queryOpts.Location != nil {
-			baseQuery += `ORDER BY location <-> point($5, $6) `
+			baseQuery += `ORDER BY location <-> point($6, $7) `
 			args = append(args, queryOpts.Location[0], queryOpts.Location[1])
 		}
 		baseQuery += `LIMIT $1 OFFSET $2;`
