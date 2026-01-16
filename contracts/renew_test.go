@@ -93,17 +93,10 @@ func TestPerformContractRenewals(t *testing.T) {
 
 	assertRenewal := func(renewedFrom types.FileContractID, proofHeight uint64, call renewContractCall) {
 		t.Helper()
-		// compare settings except ValidUntil (timezone may differ after db round-trip)
-		expected := goodSettings
-		got := call.settings
-		if !expected.Prices.ValidUntil.Equal(got.Prices.ValidUntil) {
-			t.Fatalf("expected ValidUntil %v, got %v", expected.Prices.ValidUntil, got.Prices.ValidUntil)
-		}
-		expected.Prices.ValidUntil = got.Prices.ValidUntil // normalize for struct comparison
-		if expected != got {
-			t.Fatalf("expected settings %v+, got %v+", expected, got)
-		}
-		if call.params.ContractID != renewedFrom {
+		call.settings.Prices.ValidUntil = call.settings.Prices.ValidUntil.UTC()
+		if goodSettings != call.settings {
+			t.Fatalf("expected settings %v+, got %v+", goodSettings, call.settings)
+		} else if call.params.ContractID != renewedFrom {
 			t.Fatalf("expected renewedFrom %v, got %v", renewedFrom, call.params.ContractID)
 		} else if call.params.ProofHeight != proofHeight {
 			t.Fatalf("expected proof height %v, got %v", proofHeight, call.params.ProofHeight)
