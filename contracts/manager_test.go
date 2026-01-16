@@ -3,6 +3,7 @@ package contracts_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"go.sia.tech/core/types"
@@ -34,13 +35,19 @@ func TestBlockBadHosts(t *testing.T) {
 		store.addTestContract(t, host.PublicKey, true, types.FileContractID(host.PublicKey))
 	}
 
+	// get expected reasons before blocking (usability is computed from settings in DB)
+	storedBadHost, err := store.Host(badHost.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	// block the bad hosts
 	if err := cm.BlockBadHosts(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
 	// helper to assert a blocked host has a blocked contract and vice versa
-	assertHostAndContract := func(hk types.PublicKey, blocked bool, expectReasons bool) {
+	assertHostAndContract := func(hk types.PublicKey, blocked bool, reasons []string) {
 		t.Helper()
 
 		host, err := store.Host(hk)
@@ -48,8 +55,8 @@ func TestBlockBadHosts(t *testing.T) {
 			t.Fatal(err)
 		} else if host.Blocked != blocked {
 			t.Fatalf("expected host %v to be blocked=%v, got blocked=%v", hk, blocked, host.Blocked)
-		} else if host.Blocked && expectReasons && len(host.BlockedReasons) == 0 {
-			t.Fatalf("expected host %v to have block reasons, got none", hk)
+		} else if host.Blocked && !slices.Equal(slices.Sorted(slices.Values(host.BlockedReasons)), slices.Sorted(slices.Values(reasons))) {
+			t.Fatalf("expected host %v to be blocked due to %v, got blocked due to %v", hk, reasons, host.BlockedReasons)
 		}
 		contract, err := store.Contract(types.FileContractID(hk))
 		if errors.Is(err, contracts.ErrNotFound) && hk == unusedBadHost.PublicKey {
@@ -62,11 +69,11 @@ func TestBlockBadHosts(t *testing.T) {
 	}
 
 	// a good host shouldn't be blocked
-	assertHostAndContract(goodHost.PublicKey, false, false)
+	assertHostAndContract(goodHost.PublicKey, false, nil)
 
 	// a bad host and its contract should be blocked
-	assertHostAndContract(badHost.PublicKey, true, true)
+	assertHostAndContract(badHost.PublicKey, true, storedBadHost.Usability.FailedChecks())
 
 	// an unused host shouldn't be blocked
-	assertHostAndContract(unusedBadHost.PublicKey, false, false)
+	assertHostAndContract(unusedBadHost.PublicKey, false, nil)
 }
