@@ -30,7 +30,7 @@ var (
 			ContractPrice: types.Siacoins(1),
 			// 100 SC / TB / month - satisfies min collateral and >= 2 * storage_price
 			Collateral:   types.Siacoins(100).Div64(1e12).Div64(4320),
-			StoragePrice: types.Siacoins(50).Div64(1e12).Div64(4320), // 50 SC / TB / month
+			StoragePrice: types.NewCurrency64(1),
 			ValidUntil:   time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC),
 		},
 		MaxContractDuration: 90 * 144,
