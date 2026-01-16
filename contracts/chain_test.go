@@ -221,7 +221,7 @@ func (ts testStore) setContractLastBroadcastAttempt(t testing.TB, fcid types.Fil
 }
 
 // addContractElement adds a contract element for a contract. This is needed for broadcasting.
-func (ts testStore) addContractElement(t testing.TB, fcid types.FileContractID, fce types.V2FileContractElement) {
+func (ts testStore) addContractElement(t testing.TB, fce types.V2FileContractElement) {
 	t.Helper()
 
 	if err := ts.UpdateChainState(func(tx subscriber.UpdateTx) error {

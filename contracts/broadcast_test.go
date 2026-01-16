@@ -58,7 +58,7 @@ func TestBroadcastContractRevisions(t *testing.T) {
 	}
 
 	// add contract element for c4 so it can be broadcasted
-	store.addContractElement(t, c4, types.V2FileContractElement{
+	store.addContractElement(t, types.V2FileContractElement{
 		ID: c4,
 		StateElement: types.StateElement{
 			LeafIndex:   1,
