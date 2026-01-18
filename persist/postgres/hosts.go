@@ -311,7 +311,7 @@ func (s *Store) BlockHosts(hks []types.PublicKey, reasons []string) error {
 
 			res, err := tx.Exec(ctx, `
 				UPDATE sectors
-				SET host_id = NULL
+				SET host_id = NULL, consecutive_failed_checks = 0
 				WHERE host_id = $1 AND contract_sectors_map_id IS NULL`, hostID)
 			if err != nil {
 				return fmt.Errorf("failed to update sectors: %w", err)
