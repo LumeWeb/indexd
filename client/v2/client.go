@@ -93,6 +93,9 @@ func (t *transport) dial(ctx context.Context, hostKey types.PublicKey, addresses
 	var dialCtx, dialCancel = context.WithCancel(ctx)
 	defer dialCancel()
 
+	var connectErr error
+	var connectErrMu sync.Mutex
+
 top:
 	for _, addr := range addresses {
 		select {
@@ -117,6 +120,9 @@ top:
 			default:
 				return
 			}
+			connectErrMu.Lock()
+			connectErr = errors.Join(connectErr, err)
+			connectErrMu.Unlock()
 			if err != nil || dialCtx.Err() != nil {
 				// failed to connect or already connected elsewhere
 				if err == nil {
@@ -140,7 +146,7 @@ top:
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.tc == nil {
-		return nil, fmt.Errorf("failed to connect to host %s", hostKey.String())
+		return nil, fmt.Errorf("failed to connect to host %s (%w)", hostKey.String(), connectErr)
 	}
 	return t.tc, nil
 }
