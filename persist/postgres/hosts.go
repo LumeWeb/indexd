@@ -30,7 +30,8 @@ const (
 )
 
 type dbHost struct {
-	id int64
+	id            int64
+	GoodForUpload bool // used by UsableHosts query
 	hosts.Host
 }
 
@@ -85,8 +86,7 @@ WITH globals AS (
 		settings_collateral, settings_storage_price, settings_ingress_price,
 		settings_egress_price, settings_free_sector_price, settings_tip_height, settings_valid_until, settings_signature,
 		last_successful_scan IS NOT NULL as has_settings,
-		(get_byte(settings_protocol_version, 0) << 16) + (get_byte(settings_protocol_version, 1) << 8) + (get_byte(settings_protocol_version, 2)) as settings_version,
-		(stuck_since IS NULL AND settings_remaining_storage > 0) AS good_for_upload
+		(get_byte(settings_protocol_version, 0) << 16) + (get_byte(settings_protocol_version, 1) << 8) + (get_byte(settings_protocol_version, 2)) as settings_version
 	FROM hosts
 	LEFT JOIN hosts_blocklist hb ON hosts.public_key = hb.public_key
 	WHERE hosts.public_key = $1
@@ -170,8 +170,7 @@ WITH globals AS (
 		settings_collateral, settings_storage_price, settings_ingress_price,
 		settings_egress_price, settings_free_sector_price, settings_tip_height, settings_valid_until, settings_signature,
 		last_successful_scan IS NOT NULL as has_settings,
-		(get_byte(settings_protocol_version, 0) << 16) + (get_byte(settings_protocol_version, 1) << 8) + (get_byte(settings_protocol_version, 2)) as settings_version,
-		(stuck_since IS NULL AND settings_remaining_storage > 0) AS good_for_upload
+		(get_byte(settings_protocol_version, 0) << 16) + (get_byte(settings_protocol_version, 1) << 8) + (get_byte(settings_protocol_version, 2)) as settings_version
 	FROM hosts
 	LEFT JOIN hosts_blocklist hb ON hosts.public_key = hb.public_key
 ) SELECT
@@ -800,7 +799,6 @@ func scanHost(s scanner) (dbHost, error) {
 		(*sqlSignature)(&host.Settings.Prices.Signature),
 		&ignore,
 		&ignore,
-		&host.GoodForUpload,
 		&host.Usability.Uptime,
 		&host.Usability.MaxContractDuration,
 		&host.Usability.MaxCollateral,
