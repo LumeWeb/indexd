@@ -261,7 +261,7 @@ top:
 		}
 	}
 	sort.Slice(uploaded, func(i, j int) bool {
-		return uploadedIndices[i] < uploadedIndices[j]
+		return uploadedIndices[i] < uploadedIndices[j] //nolint:gocritic
 	})
 	obj.slabs = append(obj.slabs, uploaded...)
 	return nil
