@@ -126,14 +126,15 @@ func (s *storeMock) MarkSectorsLost(hk types.PublicKey, roots []types.Hash256) e
 		lookup[root] = struct{}{}
 	}
 
-	// mark sectors as lost
+	// mark sectors as lost by removing them from the host's sector list
 	updated, ok := s.sectors[hk]
 	if !ok {
 		panic("no host sectors found")
 	}
-	for i, sector := range updated {
-		if _, ok := lookup[sector.root]; ok {
-			updated[i].contractID = nil
+	updated = updated[:0]
+	for _, sector := range s.sectors[hk] {
+		if _, ok := lookup[sector.root]; !ok {
+			updated = append(updated, sector)
 		}
 	}
 	s.sectors[hk] = updated

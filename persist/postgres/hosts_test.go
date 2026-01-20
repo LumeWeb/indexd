@@ -93,10 +93,34 @@ func TestBlockHosts(t *testing.T) {
 	hk2 := store.addTestHost(t, types.PublicKey{2})
 	hk3 := types.PublicKey{3} // not in DB
 
+	// create a sector for hk1 with a non-zero consecutive_failed_checks
+	sectorRoot := frand.Entropy256()
+	_, err := store.pool.Exec(t.Context(), `
+		INSERT INTO sectors (sector_root, host_id, next_integrity_check, consecutive_failed_checks)
+		SELECT $1, id, NOW(), 5 FROM hosts WHERE public_key = $2
+	`, sqlHash256(sectorRoot), sqlPublicKey(hk1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// update num_unpinned_sectors stat to match inserted sector
+	_, err = store.pool.Exec(t.Context(), `UPDATE stats SET num_unpinned_sectors = num_unpinned_sectors + 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	// assert block reasons
 	reasons := []string{"a", "b"}
 	if err := store.BlockHosts([]types.PublicKey{hk1, hk2}, reasons); err != nil {
 		t.Fatal(err)
+	}
+
+	// assert consecutive_failed_checks was reset to 0
+	var consecutiveFailedChecks int
+	err = store.pool.QueryRow(t.Context(), `SELECT consecutive_failed_checks FROM sectors WHERE sector_root = $1`, sqlHash256(sectorRoot)).Scan(&consecutiveFailedChecks)
+	if err != nil {
+		t.Fatal(err)
+	} else if consecutiveFailedChecks != 0 {
+		t.Fatalf("expected consecutive_failed_checks to be 0, got %d", consecutiveFailedChecks)
 	}
 	for _, hk := range []types.PublicKey{hk1, hk2} {
 		host, err := store.Host(hk)
