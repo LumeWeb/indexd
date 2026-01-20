@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -201,6 +202,11 @@ func (s *SDK) Upload(ctx context.Context, obj *Object, r io.Reader, opts ...Uplo
 	slabsCh := make(chan slabUpload, concurrentSlabUploads)
 	go s.uploadSlabs(ctx, slabsCh, r, enc, int(uo.dataShards), int(uo.parityShards), uo.maxInflight, uo.hostTimeout)
 
+	// collect uploaded slabs in a temporary variable to avoid modifying the
+	// object on error and to sort the slabs first
+	var uploaded []slabs.SlabSlice
+	var uploadedIndices []int
+
 	// TODO: cleanup on failure
 top:
 	for {
@@ -216,7 +222,6 @@ top:
 				return slab.err
 			}
 
-			slabIndex := len(obj.slabs)
 			totalShards := uo.dataShards + uo.parityShards
 			params := slabs.SlabPinParams{
 				EncryptionKey: slab.encryptionKey,
@@ -244,16 +249,21 @@ top:
 
 			slabIDs, err := s.client.PinSlabs(ctx, s.appKey, params)
 			if err != nil {
-				return fmt.Errorf("failed to pin slab %d: %w", slabIndex, err)
+				return fmt.Errorf("failed to pin slab %d: %w", slab.slabIndex, err)
 			}
 			slabID := slabIDs[0]
 
 			if slabID != expectedSlabID {
-				return fmt.Errorf("pinned slab %d id %s does not match expected id %s", slabIndex, slabID.String(), expectedSlabID.String())
+				return fmt.Errorf("pinned slab %d id %s does not match expected id %s", slab.slabIndex, slabID.String(), expectedSlabID.String())
 			}
-			obj.slabs = append(obj.slabs, params.Slice(0, slab.length))
+			uploaded = append(uploaded, params.Slice(0, slab.length))
+			uploadedIndices = append(uploadedIndices, slab.slabIndex)
 		}
 	}
+	sort.Slice(uploaded, func(i, j int) bool {
+		return uploadedIndices[i] < uploadedIndices[j]
+	})
+	obj.slabs = append(obj.slabs, uploaded...)
 	return nil
 }
 
