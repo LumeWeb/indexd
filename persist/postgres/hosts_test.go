@@ -860,9 +860,9 @@ func TestUsableHosts(t *testing.T) {
 	}, siamuxProtocol, true, false, true)
 
 	// test GoodForUpload field
-	// set uh1 to have less than one sector of remaining storage - should have GoodForUpload=false
+	// set uh1 to have no remaining storage - should have GoodForUpload=false
 	settingsNoStorage := newTestHostSettings(uh1)
-	settingsNoStorage.RemainingStorage = proto4.SectorSize - 1
+	settingsNoStorage.RemainingStorage = 0
 	if err := db.UpdateHostScan(uh1, settingsNoStorage, locationUS, true, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
