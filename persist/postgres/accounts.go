@@ -112,11 +112,20 @@ func (s *Store) ActiveAccounts(threshold time.Time) (count uint64, err error) {
 // DeleteAccount deletes the account in the database with given account key.
 func (s *Store) DeleteAccount(acc proto.Account) error {
 	return s.transaction(func(ctx context.Context, tx *txn) error {
-		result, err := tx.Exec(ctx, `UPDATE accounts SET deleted_at = NOW() WHERE public_key = $1`, sqlPublicKey(acc))
-		if err != nil {
-			return fmt.Errorf("failed to delete account: %w", err)
-		} else if result.RowsAffected() != 1 {
+		var connectKeyID sql.NullInt64
+		err := tx.QueryRow(ctx, `UPDATE accounts SET deleted_at = NOW() WHERE public_key = $1 RETURNING connect_key_id`, sqlPublicKey(acc)).Scan(&connectKeyID)
+		if errors.Is(err, sql.ErrNoRows) {
 			return accounts.ErrNotFound
+		} else if err != nil {
+			return fmt.Errorf("failed to delete account: %w", err)
+		}
+
+		// increment remaining uses on the connect key since this account no longer counts
+		if connectKeyID.Valid {
+			_, err = tx.Exec(ctx, `UPDATE app_connect_keys SET remaining_uses = remaining_uses + 1 WHERE id = $1`, connectKeyID.Int64)
+			if err != nil {
+				return fmt.Errorf("failed to increment connect key remaining uses: %w", err)
+			}
 		}
 		return nil
 	})
@@ -152,9 +161,8 @@ func (s *Store) PruneAccounts(limit int) error {
 
 	return s.transaction(func(ctx context.Context, tx *txn) error {
 		var accountID int64
-		var connectKeyID sql.NullInt64
 
-		err := tx.QueryRow(ctx, `SELECT id, connect_key_id FROM accounts WHERE deleted_at IS NOT NULL ORDER by deleted_at LIMIT 1`).Scan(&accountID, &connectKeyID)
+		err := tx.QueryRow(ctx, `SELECT id FROM accounts WHERE deleted_at IS NOT NULL ORDER by deleted_at LIMIT 1`).Scan(&accountID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return accounts.ErrNotFound
 		} else if err != nil {
@@ -219,14 +227,6 @@ RETURNING o.object_key;`, accountID, limit)
 			_, err = tx.Exec(ctx, `DELETE FROM accounts WHERE id = $1`, accountID)
 			if err != nil {
 				return fmt.Errorf("failed to delete account: %w", err)
-			}
-
-			// this account should no longer count as using a connect key
-			if connectKeyID.Valid {
-				_, err = tx.Exec(ctx, `UPDATE app_connect_keys SET remaining_uses = remaining_uses + 1 WHERE id = $1`, connectKeyID.Int64)
-				if err != nil {
-					return fmt.Errorf("failed to increment connect key remaining uses: %w", err)
-				}
 			}
 
 			err = incrementNumAccounts(ctx, tx, -1)
