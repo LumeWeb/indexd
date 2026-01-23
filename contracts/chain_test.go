@@ -20,8 +20,8 @@ import (
 	"go.sia.tech/indexd/contracts"
 	"go.sia.tech/indexd/geoip"
 	"go.sia.tech/indexd/hosts"
-	"go.sia.tech/indexd/internal/testutils"
 	"go.sia.tech/indexd/subscriber"
+	"go.sia.tech/indexd/testutils"
 	"go.uber.org/zap/zaptest"
 )
 
