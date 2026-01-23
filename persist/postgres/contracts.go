@@ -681,6 +681,51 @@ func (s *Store) MarkContractBad(contractID types.FileContractID) error {
 	})
 }
 
+// DeleteContract unpins all sectors from a contract, updates stats, and marks
+// the contract as bad.
+func (s *Store) DeleteContract(contractID types.FileContractID) error {
+	return s.transaction(func(ctx context.Context, tx *txn) error {
+		var contractMapID int64
+		err := tx.QueryRow(ctx, `SELECT id FROM contract_sectors_map WHERE contract_id = $1`, sqlHash256(contractID)).Scan(&contractMapID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("contract %q: %w", contractID, contracts.ErrNotFound)
+		} else if err != nil {
+			return fmt.Errorf("failed to get contract sectors map ID: %w", err)
+		}
+
+		// count the number of sectors pinned to this contract
+		var pinned int64
+		err = tx.QueryRow(ctx, `SELECT COUNT(*) FROM sectors WHERE contract_sectors_map_id = $1`, contractMapID).Scan(&pinned)
+		if err != nil {
+			return fmt.Errorf("failed to count pinned sectors: %w", err)
+		}
+
+		// unpin all sectors by setting contract_sectors_map_id to NULL
+		_, err = tx.Exec(ctx, `UPDATE sectors SET contract_sectors_map_id = NULL WHERE contract_sectors_map_id = $1`, contractMapID)
+		if err != nil {
+			return fmt.Errorf("failed to unpin sectors: %w", err)
+		}
+
+		// update stats
+		if pinned > 0 {
+			if err := incrementNumPinnedSectors(ctx, tx, -pinned); err != nil {
+				return fmt.Errorf("failed to update pinned sectors stat: %w", err)
+			}
+			if err := incrementNumUnpinnedSectors(ctx, tx, pinned); err != nil {
+				return fmt.Errorf("failed to update unpinned sectors stat: %w", err)
+			}
+		}
+
+		// mark the contract as bad
+		_, err = tx.Exec(ctx, `UPDATE contracts SET good = FALSE WHERE contract_id = $1`, sqlHash256(contractID))
+		if err != nil {
+			return fmt.Errorf("failed to mark contract bad: %w", err)
+		}
+
+		return nil
+	})
+}
+
 // RejectPendingContracts marks all contracts as rejected that are currently
 // pending and have a formation height older than 'maxFormation'.
 func (s *Store) RejectPendingContracts(maxFormation time.Time) error {
