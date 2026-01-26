@@ -685,7 +685,7 @@ func (s *Store) MarkSectorsUnpinnable(threshold time.Time) error {
 					AND uploaded_at <= $1
 			), updated AS (
 				UPDATE sectors s
-				SET host_id = NULL
+				SET host_id = NULL, consecutive_failed_checks = 0
 				FROM selected
 				WHERE s.id = selected.id
 				RETURNING selected.host_id

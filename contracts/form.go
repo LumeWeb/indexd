@@ -100,8 +100,8 @@ func (cm *ContractManager) formContract(ctx context.Context, host types.PublicKe
 		if !host.IsGood() {
 			return errors.New("host is not good")
 		}
-		allowance, collateral := contractFunding(host.Settings, 0, fundTarget, period)
-		formationCtx, cancel := context.WithTimeout(ctx, 5*time.Minute) // note: broadcasting on the host-side can block for up to a minute by default
+		allowance, collateral := contractFunding(host.Settings, 0, fundTarget, period+proto.ProofWindow) // duration should be extended until expiration height
+		formationCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)                                  // note: broadcasting on the host-side can block for up to a minute by default
 		defer cancel()
 		hc, err := cm.dialer.DialHost(formationCtx, host.PublicKey, host.RHP4Addrs())
 		if err != nil {
@@ -142,7 +142,7 @@ func (cm *ContractManager) formContract(ctx context.Context, host types.PublicKe
 	})
 }
 
-func (cm *ContractManager) refreshContract(ctx context.Context, contract Contract, height uint64, fundTarget types.Currency, log *zap.Logger) error {
+func (cm *ContractManager) refreshContract(ctx context.Context, contract Contract, fundTarget types.Currency, log *zap.Logger) error {
 	return cm.hosts.WithScannedHost(ctx, contract.HostKey, func(host hosts.Host) error {
 		if !host.IsGood() {
 			return errors.New("host is not good")
@@ -150,7 +150,11 @@ func (cm *ContractManager) refreshContract(ctx context.Context, contract Contrac
 		refreshCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 		defer cancel()
 
-		duration := contract.ExpirationHeight - height
+		if contract.ProofHeight <= host.Settings.Prices.TipHeight {
+			return fmt.Errorf("contract is expired and cannot be refreshed")
+		}
+
+		duration := contract.ExpirationHeight - host.Settings.Prices.TipHeight
 		allowance, collateral := contractFunding(host.Settings, contract.Size, fundTarget, duration)
 		hc, err := cm.dialer.DialHost(refreshCtx, host.PublicKey, host.RHP4Addrs())
 		if err != nil {
@@ -212,30 +216,6 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, setting
 		}
 	}
 
-	// helper to determine if the candidate contract is better
-	// than the current best candidate for this host.
-	// The priority is to have a contract that is as good as possible
-	// for both uploading and funding. A contract that can be refreshed
-	// is preferred over one that cannot to prevent forming unnecessary
-	// extra contracts.
-	shouldReplaceContract := func(current, candidate candidateContract) bool {
-		switch {
-		case current.goodForAppend == nil && current.goodForFunding == nil:
-			// current contract is already good for both uploading and funding
-			return false
-		case current.goodForRefresh == nil && candidate.goodForRefresh != nil:
-			// current contract can be refreshed to become good, but candidate cannot
-			return false
-		case current.goodForAppend == nil && candidate.goodForAppend != nil:
-			// current contract is good for uploading, but candidate is not
-			return false
-		case current.goodForFunding == nil && candidate.goodForFunding != nil:
-			// current contract is good for funding, but candidate is not
-			return false
-		}
-		return true
-	}
-
 	// evaluate all existing contracts to see which hosts do not
 	// currently have a contract that is both good for uploading and
 	// funding and determine the best candidate for refreshing.
@@ -261,7 +241,7 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, setting
 			candidate := candidateContract{
 				host:           host,
 				contract:       contract,
-				goodForRefresh: contract.GoodForRefresh(host.Settings, accountFundTarget, settings.RenewWindow, height, settings.Period),
+				goodForRefresh: contract.GoodForRefresh(host.Settings, accountFundTarget, settings.RenewWindow, height),
 				goodForFunding: contract.GoodForAccountFunding(accountFundTarget),
 				goodForAppend:  contract.GoodForAppend(host.Settings.Prices, settings.RenewWindow, height),
 			}
@@ -324,7 +304,7 @@ func (cm *ContractManager) performContractFormation(ctx context.Context, setting
 			return false
 		}
 		// fund target is multiplied by 2 to have buffer for less frequent refreshes
-		err = cm.refreshContract(ctx, contract, cm.chain.TipState().Index.Height, accountFundTarget.Mul64(2), log)
+		err = cm.refreshContract(ctx, contract, accountFundTarget.Mul64(2), log)
 		switch {
 		case err == nil:
 			refreshed++
@@ -481,4 +461,30 @@ func contractFunding(settings proto.HostSettings, existingData uint64, minAllowa
 		collateral = minHostCollateral // ensure we have at least the minimum collateral
 	}
 	return
+}
+
+// Helper to determine if a candidate contract is better than the current best
+// candidate for this host. The priority is to have a contract that is as good
+// as possible for both uploading and funding. A contract that can be refreshed
+// is preferred over one that cannot to prevent forming unnecessary extra
+// contracts.
+func shouldReplaceContract(current, candidate candidateContract) bool {
+	switch {
+	case current.goodForAppend == nil && current.goodForFunding == nil:
+		// current contract is already good for both uploading and funding
+		return false
+	case current.goodForRefresh == nil && candidate.goodForRefresh != nil && (candidate.goodForAppend != nil || candidate.goodForFunding != nil):
+		// current contract can be refreshed to become good, candidate cannot
+		// and is not good for both upload and funding.
+		return false
+	case current.goodForAppend == nil && candidate.goodForAppend != nil && candidate.goodForRefresh != nil:
+		// current contract is only good for uploading, candidate is not and
+		// can't be refreshed.
+		return false
+	case current.goodForFunding == nil && candidate.goodForFunding != nil && candidate.goodForRefresh != nil:
+		// current contract is only good for funding, candidate is not and can't
+		// be refreshed.
+		return false
+	}
+	return true
 }
