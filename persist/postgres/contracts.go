@@ -668,16 +668,20 @@ func (s *Store) MarkUnrenewableContractsBad(minProofHeight uint64) error {
 	})
 }
 
+func (s *Store) markContractBad(ctx context.Context, tx *txn, contractID types.FileContractID) error {
+	res, err := tx.Exec(ctx, `UPDATE contracts SET good = FALSE WHERE contract_id = $1`, sqlHash256(contractID))
+	if err != nil {
+		return fmt.Errorf("failed to mark contract bad: %w", err)
+	} else if res.RowsAffected() != 1 {
+		return fmt.Errorf("contract %q: %w", contractID, contracts.ErrNotFound)
+	}
+	return nil
+}
+
 // MarkContractBad marks a specific contract as bad.
 func (s *Store) MarkContractBad(contractID types.FileContractID) error {
 	return s.transaction(func(ctx context.Context, tx *txn) error {
-		res, err := tx.Exec(ctx, `UPDATE contracts SET good = FALSE WHERE contract_id = $1`, sqlHash256(contractID))
-		if err != nil {
-			return fmt.Errorf("failed to mark contract bad: %w", err)
-		} else if res.RowsAffected() != 1 {
-			return fmt.Errorf("contract %q: %w", contractID, contracts.ErrNotFound)
-		}
-		return nil
+		return s.markContractBad(ctx, tx, contractID)
 	})
 }
 
@@ -723,12 +727,7 @@ func (s *Store) DeleteContract(contractID types.FileContractID) error {
 		}
 
 		// mark the contract as bad
-		_, err = tx.Exec(ctx, `UPDATE contracts SET good = FALSE WHERE contract_id = $1`, sqlHash256(contractID))
-		if err != nil {
-			return fmt.Errorf("failed to mark contract bad: %w", err)
-		}
-
-		return nil
+		return s.markContractBad(ctx, tx, contractID)
 	})
 }
 
