@@ -1830,6 +1830,18 @@ func BenchmarkUnpinnedSectors(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
+
+		// recalculate host unpinned sectors
+		_, err = store.pool.Exec(b.Context(), `
+			UPDATE hosts h
+			SET unpinned_sectors = COALESCE((
+				SELECT COUNT(*)
+				FROM sectors s
+				WHERE s.host_id = h.id AND s.contract_sectors_map_id IS NULL
+			), 0)`)
+		if err != nil {
+			b.Fatal(err)
+		}
 	}
 
 	// run benchmark for various batch sizes
@@ -2371,6 +2383,16 @@ func BenchmarkMarkSectorsUnpinnable(b *testing.B) {
 			num_unpinned_sectors   = counts.unpinned,
 			num_unpinnable_sectors = counts.unpinnable
 		FROM counts`); err != nil {
+			b.Fatal(err)
+		}
+		// recalculate host unpinned sectors
+		if _, err := store.pool.Exec(b.Context(), `
+		UPDATE hosts h
+		SET unpinned_sectors = COALESCE((
+			SELECT COUNT(*)
+			FROM sectors s
+			WHERE s.host_id = h.id AND s.contract_sectors_map_id IS NULL
+		), 0)`); err != nil {
 			b.Fatal(err)
 		}
 	}

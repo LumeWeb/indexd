@@ -70,13 +70,18 @@ func incrementHostUnpinnedSectors(ctx context.Context, tx *txn, hostID int64, de
 	return err
 }
 
-func incrementHostsUnpinnedSectors(ctx context.Context, tx *txn, deltas map[int64]int64) error {
+type unpinnedDelta struct {
+	hostID int64
+	delta  int64
+}
+
+func incrementHostsUnpinnedSectors(ctx context.Context, tx *txn, deltas []unpinnedDelta) error {
 	if len(deltas) == 0 {
 		return nil
 	}
 	batch := &pgx.Batch{}
-	for hostID, delta := range deltas {
-		batch.Queue(`UPDATE hosts SET unpinned_sectors = unpinned_sectors + $1 WHERE id = $2`, delta, hostID)
+	for _, delta := range deltas {
+		batch.Queue(`UPDATE hosts SET unpinned_sectors = unpinned_sectors + $1 WHERE id = $2`, delta.delta, delta.hostID)
 	}
 	return tx.SendBatch(ctx, batch).Close()
 }

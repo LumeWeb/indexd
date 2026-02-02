@@ -312,7 +312,7 @@ func (s *Store) PinSlabs(account proto.Account, nextIntegrityCheck time.Time, to
 
 			var badHosts int
 			var unpinned int64
-			unpinnedPerHost := make(map[int64]int64)
+			var unpinnedDeltas []unpinnedDelta
 			br := tx.SendBatch(ctx, batch)
 			sectorIDs := make([]int64, len(slab.Sectors))
 			for i, sector := range slab.Sectors {
@@ -330,7 +330,7 @@ func (s *Store) PinSlabs(account proto.Account, nextIntegrityCheck time.Time, to
 					return fmt.Errorf("failed to insert sector %q: %w", sector.Root, err)
 				} else if inserted {
 					unpinned++
-					unpinnedPerHost[hostID]++
+					unpinnedDeltas = append(unpinnedDeltas, unpinnedDelta{hostID: hostID, delta: 1})
 				}
 			}
 			br.Close()
@@ -345,7 +345,7 @@ func (s *Store) PinSlabs(account proto.Account, nextIntegrityCheck time.Time, to
 			if unpinned > 0 {
 				if err := incrementNumUnpinnedSectors(ctx, tx, unpinned); err != nil {
 					return fmt.Errorf("failed to increment number of unpinned sectors: %w", err)
-				} else if err := incrementHostsUnpinnedSectors(ctx, tx, unpinnedPerHost); err != nil {
+				} else if err := incrementHostsUnpinnedSectors(ctx, tx, unpinnedDeltas); err != nil {
 					return fmt.Errorf("failed to update hosts unpinned sectors: %w", err)
 				}
 
@@ -696,14 +696,14 @@ func (s *Store) MarkSectorsUnpinnable(threshold time.Time) error {
 		}
 		defer rows.Close()
 
-		unpinnablePerHost := make(map[int64]int64)
 		var totalUnpinnable int64
+		var unpinnedDeltas []unpinnedDelta
 		for rows.Next() {
 			var hostID, unpinnable int64
 			if err := rows.Scan(&hostID, &unpinnable); err != nil {
 				return fmt.Errorf("failed to scan unpinnable counts: %w", err)
 			}
-			unpinnablePerHost[hostID] = -unpinnable
+			unpinnedDeltas = append(unpinnedDeltas, unpinnedDelta{hostID: hostID, delta: -unpinnable})
 			totalUnpinnable += unpinnable
 		}
 		if err := rows.Err(); err != nil {
@@ -716,7 +716,7 @@ func (s *Store) MarkSectorsUnpinnable(threshold time.Time) error {
 			return fmt.Errorf("failed to increment unpinnable sectors: %w", err)
 		} else if err := incrementNumUnpinnedSectors(ctx, tx, -totalUnpinnable); err != nil {
 			return fmt.Errorf("failed to decrement unpinned sectors: %w", err)
-		} else if err := incrementHostsUnpinnedSectors(ctx, tx, unpinnablePerHost); err != nil {
+		} else if err := incrementHostsUnpinnedSectors(ctx, tx, unpinnedDeltas); err != nil {
 			return fmt.Errorf("failed to update hosts unpinned sectors: %w", err)
 		}
 		return nil

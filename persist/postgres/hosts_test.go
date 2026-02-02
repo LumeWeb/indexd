@@ -107,6 +107,10 @@ func TestBlockHosts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	_, err = store.pool.Exec(t.Context(), `UPDATE hosts SET unpinned_sectors = unpinned_sectors + 1 WHERE public_key = $1`, sqlPublicKey(hk1))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// assert block reasons
 	reasons := []string{"a", "b"}

@@ -587,7 +587,7 @@ func (s *Store) PruneContractSectorsMap(maxBlocksSinceExpiry uint64) error {
 		}
 
 		var totalUnpinned int64
-		unpinnedPerHost := make(map[int64]int64)
+		var unpinnedDeltas []unpinnedDelta
 		res := tx.SendBatch(ctx, updateBatch)
 		for _, id := range toPrune {
 			ct, err := res.Exec()
@@ -596,7 +596,7 @@ func (s *Store) PruneContractSectorsMap(maxBlocksSinceExpiry uint64) error {
 				return fmt.Errorf("failed to update sectors table: %w", err)
 			}
 			unpinned := ct.RowsAffected()
-			unpinnedPerHost[csmToHostID[id]] += unpinned
+			unpinnedDeltas = append(unpinnedDeltas, unpinnedDelta{hostID: csmToHostID[id], delta: int64(unpinned)})
 			totalUnpinned += unpinned
 		}
 		if err := res.Close(); err != nil {
@@ -605,7 +605,7 @@ func (s *Store) PruneContractSectorsMap(maxBlocksSinceExpiry uint64) error {
 			return fmt.Errorf("failed to update number of pinned sectors: %w", err)
 		} else if err := incrementNumUnpinnedSectors(ctx, tx, totalUnpinned); err != nil {
 			return fmt.Errorf("failed to update number of unpinned sectors: %w", err)
-		} else if err := incrementHostsUnpinnedSectors(ctx, tx, unpinnedPerHost); err != nil {
+		} else if err := incrementHostsUnpinnedSectors(ctx, tx, unpinnedDeltas); err != nil {
 			return fmt.Errorf("failed to update hosts unpinned sectors: %w", err)
 		}
 
