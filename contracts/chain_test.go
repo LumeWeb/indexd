@@ -287,6 +287,10 @@ func (ts testStore) addUnpinnedSectors(t testing.TB, hk types.PublicKey, roots [
 		if err != nil {
 			t.Fatal(err)
 		}
+		_, err = ts.Exec(t.Context(), `UPDATE hosts SET unpinned_sectors = unpinned_sectors + $1 WHERE public_key = $2`, inserted, sqlPublicKey(hk))
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

@@ -3,8 +3,11 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"go.sia.tech/indexd/api/admin"
 	"go.sia.tech/indexd/hosts"
 )
@@ -61,6 +64,31 @@ func incrementNumScans(ctx context.Context, tx *txn, success bool) error {
 	}
 	_, err := tx.Exec(ctx, "UPDATE stats SET num_scans = num_scans + 1, num_scans_failed = num_scans_failed + $1", failed)
 	return err
+}
+
+func incrementHostUnpinnedSectors(ctx context.Context, tx *txn, hostID int64, delta int64) error {
+	_, err := tx.Exec(ctx, `UPDATE hosts SET unpinned_sectors = unpinned_sectors + $1 WHERE id = $2`, delta, hostID)
+	return err
+}
+
+type unpinnedDelta struct {
+	hostID int64
+	delta  int64
+}
+
+func incrementHostsUnpinnedSectors(ctx context.Context, tx *txn, deltas []unpinnedDelta) error {
+	if len(deltas) == 0 {
+		return nil
+	}
+	// sort by hostID to ensure consistent lock ordering and prevent deadlocks
+	slices.SortFunc(deltas, func(a, b unpinnedDelta) int {
+		return int(a.hostID - b.hostID)
+	})
+	batch := &pgx.Batch{}
+	for _, delta := range deltas {
+		batch.Queue(`UPDATE hosts SET unpinned_sectors = unpinned_sectors + $1 WHERE id = $2`, delta.delta, delta.hostID)
+	}
+	return tx.SendBatch(ctx, batch).Close()
 }
 
 func initStats(ctx context.Context, tx *txn) error {
@@ -120,6 +148,7 @@ func (s *Store) HostStats(offset, limit int) ([]hosts.HostStats, error) {
 					h.id,
 					h.public_key,
 					h.lost_sectors,
+					h.unpinned_sectors,
 					h.usage_account_funding,
 					h.usage_total_spent,
 					h.settings_protocol_version,
@@ -128,7 +157,7 @@ func (s *Store) HostStats(offset, limit int) ([]hosts.HostStats, error) {
 					h.scans_failed,
 					hb.public_key IS NOT NULL AS blocked,
 					COALESCE(hb.reasons, ARRAY[]::TEXT[]) AS blocked_reasons,
-					h.stuck_since IS NOT NULL AND h.stuck_since < NOW() - INTERVAL '24 hours' AS stuck
+					h.stuck_since
 				FROM hosts h
 				LEFT JOIN hosts_blocklist hb ON hb.public_key = h.public_key
 				WHERE h.usage_total_spent > 0
@@ -139,6 +168,7 @@ func (s *Store) HostStats(offset, limit int) ([]hosts.HostStats, error) {
 			SELECT
 				h.public_key,
 				h.lost_sectors,
+				h.unpinned_sectors,
 				COALESCE(cs.total_contracts_size, 0) AS total_contracts_size,
 				h.usage_account_funding,
 				h.usage_total_spent,
@@ -148,7 +178,7 @@ func (s *Store) HostStats(offset, limit int) ([]hosts.HostStats, error) {
 				h.scans_failed,
 				h.blocked,
 				h.blocked_reasons,
-				h.stuck
+				h.stuck_since
 			FROM selected_hosts h
 			LEFT JOIN LATERAL (
 			SELECT SUM(size) AS total_contracts_size
@@ -167,9 +197,11 @@ func (s *Store) HostStats(offset, limit int) ([]hosts.HostStats, error) {
 
 		for rows.Next() {
 			var hs hosts.HostStats
+			var stuckSince pgtype.Timestamp
 			if err := rows.Scan(
 				(*sqlPublicKey)(&hs.PublicKey),
 				&hs.LostSectors,
+				&hs.UnpinnedSectors,
 				&hs.ActiveContractsSize,
 				(*sqlCurrency)(&hs.AccountUsage),
 				(*sqlCurrency)(&hs.TotalUsage),
@@ -179,9 +211,13 @@ func (s *Store) HostStats(offset, limit int) ([]hosts.HostStats, error) {
 				&hs.ScansFailed,
 				&hs.Blocked,
 				&hs.BlockedReasons,
-				&hs.Stuck,
+				&stuckSince,
 			); err != nil {
 				return err
+			}
+			if stuckSince.Valid && time.Since(stuckSince.Time) >= 24*time.Hour {
+				hs.StuckSince = &stuckSince.Time
+				hs.Stuck = true
 			}
 			stats = append(stats, hs)
 		}

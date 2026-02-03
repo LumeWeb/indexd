@@ -69,6 +69,8 @@ func (s *Store) MarkSectorsLost(hostKey types.PublicKey, roots []types.Hash256) 
 		}
 		if err := updateSectorStats(ctx, tx, -pinned, -unpinned, totalLost); err != nil {
 			return fmt.Errorf("failed to update sector stats: %w", err)
+		} else if err := incrementHostUnpinnedSectors(ctx, tx, hostID, -unpinned); err != nil {
+			return fmt.Errorf("failed to update host %v unpinned sectors: %w", hostKey, err)
 		}
 
 		return nil
@@ -203,6 +205,8 @@ func (s *Store) markFailingSectorsLostBatch(hostKey types.PublicKey, maxChecks, 
 		}
 		if err := updateSectorStats(ctx, tx, -pinned, -unpinned, totalLost); err != nil {
 			return fmt.Errorf("failed to update sector stats: %w", err)
+		} else if err := incrementHostUnpinnedSectors(ctx, tx, hostID, -unpinned); err != nil {
+			return fmt.Errorf("failed to update host %v unpinned sectors: %w", hostKey, err)
 		}
 		return nil
 	}); err != nil {
@@ -300,7 +304,7 @@ func (s *Store) PinSlabs(account proto.Account, nextIntegrityCheck time.Time, to
 				FROM hosts h
 				WHERE h.public_key = $2
 				ON CONFLICT (sector_root) DO UPDATE SET uploaded_at=NOW()
-				RETURNING id, (xmax = 0) AS inserted`,
+				RETURNING id, host_id, (xmax = 0) AS inserted`,
 					sqlHash256(sector.Root),
 					sqlPublicKey(sector.HostKey),
 					nextIntegrityCheck)
@@ -308,6 +312,7 @@ func (s *Store) PinSlabs(account proto.Account, nextIntegrityCheck time.Time, to
 
 			var badHosts int
 			var unpinned int64
+			var unpinnedDeltas []unpinnedDelta
 			br := tx.SendBatch(ctx, batch)
 			sectorIDs := make([]int64, len(slab.Sectors))
 			for i, sector := range slab.Sectors {
@@ -316,7 +321,8 @@ func (s *Store) PinSlabs(account proto.Account, nextIntegrityCheck time.Time, to
 				}
 
 				var inserted bool
-				if err := br.QueryRow().Scan(&sectorIDs[i], &inserted); err != nil {
+				var hostID int64
+				if err := br.QueryRow().Scan(&sectorIDs[i], &hostID, &inserted); err != nil {
 					br.Close()
 					if errors.Is(err, sql.ErrNoRows) {
 						return fmt.Errorf("unknown host %q for sector", sector.HostKey)
@@ -324,6 +330,7 @@ func (s *Store) PinSlabs(account proto.Account, nextIntegrityCheck time.Time, to
 					return fmt.Errorf("failed to insert sector %q: %w", sector.Root, err)
 				} else if inserted {
 					unpinned++
+					unpinnedDeltas = append(unpinnedDeltas, unpinnedDelta{hostID: hostID, delta: 1})
 				}
 			}
 			br.Close()
@@ -338,6 +345,8 @@ func (s *Store) PinSlabs(account proto.Account, nextIntegrityCheck time.Time, to
 			if unpinned > 0 {
 				if err := incrementNumUnpinnedSectors(ctx, tx, unpinned); err != nil {
 					return fmt.Errorf("failed to increment number of unpinned sectors: %w", err)
+				} else if err := incrementHostsUnpinnedSectors(ctx, tx, unpinnedDeltas); err != nil {
+					return fmt.Errorf("failed to update hosts unpinned sectors: %w", err)
 				}
 
 				// insert slab sectors into join table
@@ -654,6 +663,8 @@ func (s *Store) PinSectors(contractID types.FileContractID, roots []types.Hash25
 				return fmt.Errorf("failed to update number of pinned sectors: %w", err)
 			} else if err := incrementNumUnpinnedSectors(ctx, tx, -unpinned); err != nil {
 				return fmt.Errorf("failed to update number of unpinned sectors: %w", err)
+			} else if err := incrementHostUnpinnedSectors(ctx, tx, hostID, -unpinned); err != nil {
+				return fmt.Errorf("failed to update host unpinned sectors: %w", err)
 			}
 		}
 
@@ -665,20 +676,48 @@ func (s *Store) PinSectors(contractID types.FileContractID, roots []types.Hash25
 // by the threshold time to NULL.
 func (s *Store) MarkSectorsUnpinnable(threshold time.Time) error {
 	err := s.transaction(func(ctx context.Context, tx *txn) error {
-		res, err := tx.Exec(ctx, `
-            UPDATE sectors
-            SET host_id = NULL, consecutive_failed_checks = 0
-            WHERE host_id IS NOT NULL
-	            AND contract_sectors_map_id IS NULL
-	            AND uploaded_at <= $1`, threshold)
+		rows, err := tx.Query(ctx, `
+			WITH selected AS (
+				SELECT id, host_id
+				FROM sectors
+				WHERE host_id IS NOT NULL
+					AND contract_sectors_map_id IS NULL
+					AND uploaded_at <= $1
+			), updated AS (
+				UPDATE sectors s
+				SET host_id = NULL, consecutive_failed_checks = 0
+				FROM selected
+				WHERE s.id = selected.id
+				RETURNING selected.host_id
+			)
+			SELECT host_id, COUNT(*) FROM updated GROUP BY host_id`, threshold)
 		if err != nil {
 			return fmt.Errorf("failed to prune unpinnable sectors: %w", err)
-		} else if unpinnable := res.RowsAffected(); unpinnable > 0 {
-			if err := incrementNumUnpinnableSectors(ctx, tx, unpinnable); err != nil {
-				return fmt.Errorf("failed to increment unpinnable sectors: %w", err)
-			} else if err := incrementNumUnpinnedSectors(ctx, tx, -unpinnable); err != nil {
-				return fmt.Errorf("failed to decrement unpinned sectors: %w", err)
+		}
+		defer rows.Close()
+
+		var totalUnpinnable int64
+		var unpinnedDeltas []unpinnedDelta
+		for rows.Next() {
+			var hostID, unpinnable int64
+			if err := rows.Scan(&hostID, &unpinnable); err != nil {
+				return fmt.Errorf("failed to scan unpinnable counts: %w", err)
 			}
+			unpinnedDeltas = append(unpinnedDeltas, unpinnedDelta{hostID: hostID, delta: -unpinnable})
+			totalUnpinnable += unpinnable
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		} else if totalUnpinnable == 0 {
+			return nil
+		}
+
+		if err := incrementNumUnpinnableSectors(ctx, tx, totalUnpinnable); err != nil {
+			return fmt.Errorf("failed to increment unpinnable sectors: %w", err)
+		} else if err := incrementNumUnpinnedSectors(ctx, tx, -totalUnpinnable); err != nil {
+			return fmt.Errorf("failed to decrement unpinned sectors: %w", err)
+		} else if err := incrementHostsUnpinnedSectors(ctx, tx, unpinnedDeltas); err != nil {
+			return fmt.Errorf("failed to update hosts unpinned sectors: %w", err)
 		}
 		return nil
 	})
@@ -793,27 +832,31 @@ func (s *Store) UnhealthySlabs(limit int) (unhealthy []slabs.SlabID, err error) 
 // the meantime, this operation is a no-op.
 func (s *Store) MigrateSector(root types.Hash256, hostKey types.PublicKey) (migrated bool, err error) {
 	err = s.transaction(func(ctx context.Context, tx *txn) error {
-		var hostID sql.NullInt64
+		var oldHostID sql.NullInt64
 		var contractMapID sql.NullInt64
 		var sectorID int64
 		err := tx.QueryRow(ctx, `
 			SELECT id, host_id, contract_sectors_map_id
 			FROM sectors
-			WHERE sector_root = $1`, sqlHash256(root)).Scan(&sectorID, &hostID, &contractMapID)
+			WHERE sector_root = $1`, sqlHash256(root)).Scan(&sectorID, &oldHostID, &contractMapID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil // not migrated
+		} else if err != nil {
+			return fmt.Errorf("failed to get sector: %w", err)
 		}
 
-		resp, err := tx.Exec(ctx, `
+		var newHostID int64
+		err = tx.QueryRow(ctx, `
 			UPDATE sectors
 			SET host_id = hosts.id, contract_sectors_map_id = NULL, consecutive_failed_checks = 0, num_migrated = num_migrated + 1, uploaded_at=NOW()
 			FROM hosts
 			WHERE sector_root = $1 AND hosts.public_key = $2
-		`, sqlHash256(root), sqlPublicKey(hostKey))
-		if err != nil {
-			return err
-		} else if resp.RowsAffected() == 0 {
+			RETURNING hosts.id
+		`, sqlHash256(root), sqlPublicKey(hostKey)).Scan(&newHostID)
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil
+		} else if err != nil {
+			return err
 		}
 
 		// update affected objects
@@ -842,13 +885,24 @@ func (s *Store) MigrateSector(root types.Hash256, hostKey types.PublicKey) (migr
 				return fmt.Errorf("failed to decrement pinned sectors: %w", err)
 			} else if err := incrementNumUnpinnedSectors(ctx, tx, 1); err != nil {
 				return fmt.Errorf("failed to increment unpinned sectors: %w", err)
+			} else if err := incrementHostUnpinnedSectors(ctx, tx, newHostID, 1); err != nil {
+				return fmt.Errorf("failed to update host unpinned sectors: %w", err)
 			}
-		} else if !hostID.Valid {
+		} else if oldHostID.Valid {
+			// sector was unpinned before, update host stats
+			if err := incrementHostUnpinnedSectors(ctx, tx, oldHostID.Int64, -1); err != nil {
+				return fmt.Errorf("failed to update old host unpinned sectors: %w", err)
+			} else if err := incrementHostUnpinnedSectors(ctx, tx, newHostID, 1); err != nil {
+				return fmt.Errorf("failed to update new host unpinned sectors: %w", err)
+			}
+		} else {
 			// sector was unpinnable before, update stats
 			if err := incrementNumUnpinnableSectors(ctx, tx, -1); err != nil {
 				return fmt.Errorf("failed to decrement unpinnable sectors: %w", err)
 			} else if err := incrementNumUnpinnedSectors(ctx, tx, 1); err != nil {
 				return fmt.Errorf("failed to increment unpinned sectors: %w", err)
+			} else if err := incrementHostUnpinnedSectors(ctx, tx, newHostID, 1); err != nil {
+				return fmt.Errorf("failed to update host unpinned sectors: %w", err)
 			}
 		}
 

@@ -126,6 +126,9 @@ func (s *testStore) setSectorsForCheck(t testing.TB, hk types.PublicKey, roots [
 	if _, err := s.Exec(context.Background(), "UPDATE stats SET num_unpinned_sectors = num_unpinned_sectors + $1", len(roots)); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := s.Exec(context.Background(), "UPDATE hosts SET unpinned_sectors = unpinned_sectors + $1 WHERE public_key = $2", len(roots), hk[:]); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (s *testStore) failedChecks(t testing.TB, hk types.PublicKey) map[types.Hash256]int {
@@ -217,17 +220,19 @@ func (s *testStore) addTestContract(t testing.TB, hk types.PublicKey) {
 
 func (s *testStore) pinSectorToContract(t testing.TB, root types.Hash256, fcid types.FileContractID) {
 	t.Helper()
-	result, err := s.Exec(context.Background(), `
+	var hostID int64
+	err := s.QueryRow(context.Background(), `
         UPDATE sectors SET contract_sectors_map_id = (SELECT id FROM contract_sectors_map WHERE contract_id = $2)
         WHERE sector_root = $1
-    `, root[:], fcid[:])
+        RETURNING host_id
+    `, root[:], fcid[:]).Scan(&hostID)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if result.RowsAffected() == 0 {
-		t.Fatalf("failed to pin sector %x to contract %s", root, fcid)
+		t.Fatalf("failed to pin sector %x to contract %s: %v", root, fcid, err)
 	}
 	if _, err := s.Exec(context.Background(), "UPDATE stats SET num_pinned_sectors = num_pinned_sectors + 1, num_unpinned_sectors = num_unpinned_sectors - 1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Exec(context.Background(), "UPDATE hosts SET unpinned_sectors = unpinned_sectors - 1 WHERE id = $1", hostID); err != nil {
 		t.Fatal(err)
 	}
 }

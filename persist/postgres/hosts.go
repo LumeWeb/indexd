@@ -77,7 +77,7 @@ WITH globals AS (
 ), hosts AS (
 	SELECT
 		id, hosts.public_key, last_announcement, hb.public_key IS NOT NULL AS blocked, hb.reasons,
-		lost_sectors,
+		lost_sectors, unpinned_sectors,
 		last_failed_scan, last_successful_scan, next_scan, consecutive_failed_scans, recent_uptime, usage_account_funding, usage_total_spent,
 		country_code, location,
 		settings_protocol_version, settings_release, settings_wallet_address,
@@ -161,7 +161,7 @@ WITH globals AS (
 ), hosts AS (
 	SELECT
 		id, hosts.public_key, last_announcement, hb.public_key IS NOT NULL AS blocked, hb.reasons,
-		lost_sectors,
+		lost_sectors, unpinned_sectors,
 		last_failed_scan, last_successful_scan, next_scan, consecutive_failed_scans, recent_uptime, usage_account_funding, usage_total_spent,
 		country_code, location,
 		settings_protocol_version, settings_release, settings_wallet_address,
@@ -321,6 +321,8 @@ func (s *Store) BlockHosts(hks []types.PublicKey, reasons []string) error {
 					return fmt.Errorf("failed to increment unpinnable sectors: %w", err)
 				} else if err := incrementNumUnpinnedSectors(ctx, tx, -unpinnable); err != nil {
 					return fmt.Errorf("failed to decrement unpinned sectors: %w", err)
+				} else if err := incrementHostUnpinnedSectors(ctx, tx, hostID, -unpinnable); err != nil {
+					return fmt.Errorf("failed to decrement host unpinned sectors: %w", err)
 				}
 			}
 		}
@@ -771,6 +773,7 @@ func scanHost(s scanner) (dbHost, error) {
 		&host.Blocked,
 		&host.BlockedReasons,
 		&host.LostSectors,
+		&host.UnpinnedSectors,
 		&lastFailedScan,
 		&lastSuccessfulScan,
 		&host.NextScan,
@@ -1060,7 +1063,7 @@ func (s *Store) StuckHosts() ([]hosts.StuckHost, error) {
 	var result []hosts.StuckHost
 	if err := s.transaction(func(ctx context.Context, tx *txn) error {
 		rows, err := tx.Query(ctx, `
-			SELECT public_key, stuck_since
+			SELECT public_key, stuck_since, unpinned_sectors
 			FROM hosts
 			WHERE stuck_since IS NOT NULL
 				AND stuck_since < NOW() - INTERVAL '24 hours'`)
@@ -1071,7 +1074,7 @@ func (s *Store) StuckHosts() ([]hosts.StuckHost, error) {
 
 		for rows.Next() {
 			var sh hosts.StuckHost
-			if err := rows.Scan((*sqlPublicKey)(&sh.PublicKey), &sh.StuckSince); err != nil {
+			if err := rows.Scan((*sqlPublicKey)(&sh.PublicKey), &sh.StuckSince, &sh.UnpinnedSectors); err != nil {
 				return err
 			}
 			result = append(result, sh)

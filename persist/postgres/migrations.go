@@ -625,4 +625,23 @@ CREATE INDEX hosts_stuck_since_idx ON hosts(stuck_since) WHERE stuck_since IS NO
 `)
 		return err
 	},
+	// add unpinned_sectors column and calculate initial values
+	func(ctx context.Context, tx *txn, _ *zap.Logger) error {
+		_, err := tx.Exec(ctx, `ALTER TABLE hosts ADD COLUMN unpinned_sectors INTEGER NOT NULL DEFAULT 0 CHECK (unpinned_sectors >= 0);`)
+		if err != nil {
+			return fmt.Errorf("failed to add unpinned_sectors column: %w", err)
+		}
+		_, err = tx.Exec(ctx, `
+			UPDATE hosts
+			SET unpinned_sectors = sub.unpinned_count
+			FROM (
+				SELECT host_id, COUNT(*) AS unpinned_count
+				FROM sectors
+				WHERE host_id IS NOT NULL AND contract_sectors_map_id IS NULL
+				GROUP BY host_id
+			) AS sub
+			WHERE hosts.id = sub.host_id;
+		`)
+		return err
+	},
 }

@@ -594,6 +594,10 @@ components:
           type: integer
           format: uint64
           description: The number of sectors the host lost
+        unpinnedSectors:
+          type: integer
+          format: uint64
+          description: The number of unpinned sectors on the host
         fundsSpent:
           allOf:
             - $ref: "#/components/schemas/Currency"
@@ -844,6 +848,10 @@ components:
             type: integer
             format: int64
             description: Total number of sectors lost on this host
+          unpinnedSectors:
+            type: integer
+            format: int64
+            description: Total number of unpinned sectors on this host
           totalUsage:
             allOf:
               - $ref: "#/components/schemas/Currency"
@@ -864,6 +872,14 @@ components:
             items:
               type: string
             description: Reasons why the host was blocked, if any
+          stuck:
+            type: boolean
+            description: Whether the host is currently stuck. A host is stuck when contract operations have been failing for more than 24 hours.
+          stuckSince:
+            type: string
+            format: date-time
+            nullable: true
+            description: Timestamp when the host became stuck. Only present when stuck is true.
 
     ScansStatsResponse:
       type: object
