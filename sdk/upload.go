@@ -43,6 +43,7 @@ type (
 	slabUpload struct {
 		encryptionKey [32]byte
 		length        uint32
+		slabIndex     int
 
 		uploadsCh chan shard
 		err       error
@@ -150,6 +151,7 @@ func (s *SDK) uploadSlabs(ctx context.Context, slabsCh chan slabUpload, r io.Rea
 		case slabsCh <- slabUpload{
 			encryptionKey: encryptionKey,
 			length:        uint32(n),
+			slabIndex:     i,
 			uploadsCh:     uploadsCh,
 		}:
 		}

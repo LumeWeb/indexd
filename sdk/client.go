@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"sync"
 	"time"
 
@@ -20,7 +21,6 @@ import (
 	"go.sia.tech/indexd/slabs"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/chacha20"
-	"lukechampine.com/frand"
 )
 
 type (
@@ -220,8 +220,10 @@ func (s *SDK) PruneSlabs(ctx context.Context) error {
 
 // Upload uploads the data to hosts and pins it to the indexer.
 //
-// Returns the metadata of the slabs that were pinned
-func (s *SDK) Upload(ctx context.Context, r io.Reader, opts ...UploadOption) (Object, error) {
+// Appends the metadata of the slabs that were uploaded to the given object.
+// After uploading the object, the caller must call SaveObject to save the
+// object metadata to the indexer.
+func (s *SDK) Upload(ctx context.Context, obj *Object, r io.Reader, opts ...UploadOption) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -237,38 +239,41 @@ func (s *SDK) Upload(ctx context.Context, r io.Reader, opts ...UploadOption) (Ob
 
 	totalShards := int(uo.dataShards) + int(uo.parityShards)
 	if err := slabs.ValidateECParams(int(uo.dataShards), totalShards); err != nil {
-		return Object{}, err
+		return err
 	}
 
-	obj := Object{dataKey: frand.Bytes(32)}
-	r = encrypt((*[32]byte)(obj.dataKey), r, 0)
+	r = encrypt((*[32]byte)(obj.dataKey), r, obj.Size())
 
 	// create erasure coder
 	enc, err := reedsolomon.New(int(uo.dataShards), int(uo.parityShards))
 	if err != nil {
-		return Object{}, fmt.Errorf("failed to create erasure coder: %w", err)
+		return fmt.Errorf("failed to create erasure coder: %w", err)
 	}
 
 	// start uploading slabs
 	slabsCh := make(chan slabUpload, concurrentSlabUploads)
 	go s.uploadSlabs(ctx, slabsCh, r, enc, int(uo.dataShards), int(uo.parityShards), uo.maxInflight, uo.hostTimeout)
 
+	// collect uploaded slabs in a temporary variable to avoid modifying the
+	// object on error and to sort the slabs first
+	var uploaded []slabs.SlabSlice
+	var uploadedIndices []int
+
 	// TODO: cleanup on failure
 top:
 	for {
 		select {
 		case <-ctx.Done():
-			return Object{}, ctx.Err()
+			return ctx.Err()
 		case slab := <-slabsCh:
 			err := slab.err
 			if errors.Is(err, io.EOF) {
 				// all slabs complete
 				break top
 			} else if slab.err != nil {
-				return Object{}, slab.err
+				return slab.err
 			}
 
-			slabIndex := len(obj.slabs)
 			totalShards := uo.dataShards + uo.parityShards
 			params := slabs.SlabPinParams{
 				EncryptionKey: slab.encryptionKey,
@@ -280,10 +285,10 @@ top:
 			for n := totalShards; n > 0; n-- {
 				select {
 				case <-ctx.Done():
-					return Object{}, ctx.Err()
+					return ctx.Err()
 				case shard := <-slab.uploadsCh:
 					if shard.err != nil {
-						return Object{}, fmt.Errorf("failed to upload slab: shard upload failed: %w", shard.err)
+						return fmt.Errorf("failed to upload slab: shard upload failed: %w", shard.err)
 					}
 					params.Sectors[shard.index] = slabs.PinnedSector{
 						HostKey: shard.host,
@@ -296,18 +301,22 @@ top:
 
 			slabIDs, err := s.client.PinSlabs(ctx, s.appKey, params)
 			if err != nil {
-				return Object{}, fmt.Errorf("failed to pin slab %d: %w", slabIndex, err)
+				return fmt.Errorf("failed to pin slab %d: %w", slab.slabIndex, err)
 			}
 			slabID := slabIDs[0]
 
 			if slabID != expectedSlabID {
-				return Object{}, fmt.Errorf("pinned slab %d id %s does not match expected id %s", slabIndex, slabID.String(), expectedSlabID.String())
+				return fmt.Errorf("pinned slab %d id %s does not match expected id %s", slab.slabIndex, slabID.String(), expectedSlabID.String())
 			}
-			obj.slabs = append(obj.slabs, params.Slice(0, slab.length))
+			uploaded = append(uploaded, params.Slice(0, slab.length))
+			uploadedIndices = append(uploadedIndices, slab.slabIndex)
 		}
 	}
-	// pin the object
-	return obj, s.client.SaveObject(ctx, s.appKey, obj.Seal(s.appKey))
+	sort.Slice(uploaded, func(i, j int) bool {
+		return uploadedIndices[i] < uploadedIndices[j] //nolint:gocritic
+	})
+	obj.slabs = append(obj.slabs, uploaded...)
+	return nil
 }
 
 // Download downloads object metadata
@@ -372,6 +381,11 @@ func (s *SDK) DownloadSharedObject(ctx context.Context, w io.Writer, sharedURL s
 // Close closes the SDK and releases all resources.
 func (s *SDK) Close() error {
 	return s.hosts.Close()
+}
+
+// SaveObject saves the given object to the indexer.
+func (s *SDK) SaveObject(ctx context.Context, obj Object) error {
+	return s.client.SaveObject(ctx, s.appKey, obj.Seal(s.appKey))
 }
 
 func (s *SDK) downloadSlabs(ctx context.Context, w io.Writer, maxInflight int, hostTimeout time.Duration, ss []slabs.SlabSlice) error {

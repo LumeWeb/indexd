@@ -96,6 +96,16 @@ func (o *Object) UpdateMetadata(meta json.RawMessage) {
 	o.metadata = slices.Clone(meta)
 }
 
+// NewEmptyObject creates a new Object to use in [Upload].
+func NewEmptyObject() Object {
+	now := time.Now()
+	return Object{
+		dataKey:   frand.Bytes(32),
+		createdAt: now,
+		updatedAt: now,
+	}
+}
+
 // Object retrieves the object with the given key.
 func (s *SDK) Object(ctx context.Context, objectKey types.Hash256) (Object, error) {
 	lo, err := s.client.Object(ctx, s.appKey, objectKey)
@@ -176,6 +186,7 @@ func unlockEncryptedMetadata(metadataKey, encryptedMeta []byte) (json.RawMessage
 	return metadata, nil
 }
 
+// objectFromSealedObject unlocks a SealedObject using the given app key.
 func objectFromSealedObject(so slabs.SealedObject, appKey types.PrivateKey) (Object, error) {
 	obj := Object{
 		slabs:     slices.Clone(so.Slabs),
