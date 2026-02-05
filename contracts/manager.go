@@ -558,5 +558,5 @@ func maxRenewableContractSize(hostSettings proto.HostSettings, period uint64) ui
 	if maxSectorsSize.IsUint64() {
 		maxSize = min(maxSize, maxSectorsSize.Uint64())
 	}
-	return maxSize
+	return maxSize * 8 / 10 // 20% safety margin
 }

@@ -17,8 +17,6 @@ import (
 )
 
 const (
-	maxContractSize = 10 * 1 << 40 // 10TB
-
 	// defaultRevisionSubmissionBuffer is a buffer that mainnet hosts apply on
 	// the contract's proof height before they consider a contract revisable, so
 	// if the current block height plus the buffer exceed the proof height, the
