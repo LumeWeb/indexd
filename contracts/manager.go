@@ -550,7 +550,7 @@ func NewManager(renterKey types.PrivateKey, accountManager AccountManager, accou
 // still be renewable
 func maxRenewableContractSize(hostSettings proto.HostSettings, period uint64) uint64 {
 	maxCollateral := hostSettings.MaxCollateral
-	sectorUsage := hostSettings.Prices.RPCAppendSectorsCost(1, period)
+	sectorUsage := hostSettings.Prices.RPCAppendSectorsCost(1, period+proto.ProofWindow)
 	sectorCollateral := sectorUsage.HostRiskedCollateral()
 	if sectorCollateral.IsZero() {
 		sectorCollateral = types.NewCurrency64(1)
