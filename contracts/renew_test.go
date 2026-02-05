@@ -147,7 +147,7 @@ func TestPerformContractRenewals(t *testing.T) {
 			if c.RenewedFrom != (types.FileContractID{1}) {
 				t.Fatal("renewed contract should be renewed from first contract")
 			} else if c.ProofHeight != blockHeight+period {
-				t.Fatalf("renewed contract should have proof height %d, got %d", blockHeight+period+renewWindow, c.ProofHeight)
+				t.Fatalf("renewed contract should have proof height %d, got %d", blockHeight+period, c.ProofHeight)
 			} else if c.ExpirationHeight != c.ProofHeight+144 {
 				t.Fatalf("renewed contract should have expiration height %d, got %d", c.ProofHeight+144, c.ExpirationHeight)
 			} else if !c.ContractPrice.Equals(types.Siacoins(1)) {
