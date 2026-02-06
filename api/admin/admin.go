@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"net/http"
+	"strings"
 
 	"errors"
 	"fmt"
@@ -101,6 +102,11 @@ type (
 		DeleteAppConnectKey(context.Context, string) error
 		AppConnectKey(ctx context.Context, key string) (accounts.ConnectKey, error)
 		AppConnectKeys(ctx context.Context, offset, limit int) ([]accounts.ConnectKey, error)
+
+		PutQuota(ctx context.Context, key string, req accounts.PutQuotaRequest) (accounts.Quota, error)
+		DeleteQuota(ctx context.Context, key string) error
+		Quota(ctx context.Context, key string) (accounts.Quota, error)
+		Quotas(ctx context.Context, offset, limit int) ([]accounts.Quota, error)
 	}
 
 	// A Store is a persistent store for the indexer.
@@ -244,6 +250,12 @@ func NewAPI(chain ChainManager, accounts Accounts, contracts ContractManager, ho
 		"PUT    /apps/connect/keys":      a.handlePUTAppConnectKeys,
 		"GET    /apps/connect/keys/:key": a.handleGETAppConnectKeysKey,
 		"DELETE /apps/connect/keys/:key": a.handleDELETEAppConnectKeys,
+
+		// quota endpoints
+		"GET    /quotas":      a.handleGETQuotas,
+		"PUT    /quotas/:key": a.handlePUTQuota,
+		"GET    /quotas/:key": a.handleGETQuota,
+		"DELETE /quotas/:key": a.handleDELETEQuota,
 
 		// wallet endpoints
 		"GET /wallet":            a.handleGETWallet,
@@ -415,6 +427,83 @@ func (a *admin) handleDELETEAppConnectKeys(jc jape.Context) {
 		return
 	}
 	jc.Encode(nil)
+}
+
+func (a *admin) handleGETQuotas(jc jape.Context) {
+	offset, limit, ok := api.ParseOffsetLimit(jc)
+	if !ok {
+		return
+	}
+
+	quotas, err := a.accounts.Quotas(jc.Request.Context(), offset, limit)
+	if jc.Check("failed to get quotas", err) != nil {
+		return
+	}
+	jc.Encode(quotas)
+}
+
+func (a *admin) handleGETQuota(jc jape.Context) {
+	var key string
+	if jc.DecodeParam("key", &key) != nil {
+		return
+	}
+
+	quota, err := a.accounts.Quota(jc.Request.Context(), key)
+	if errors.Is(err, accounts.ErrQuotaNotFound) {
+		jc.Error(err, http.StatusNotFound)
+		return
+	} else if jc.Check("failed to get quota", err) != nil {
+		return
+	}
+	jc.Encode(quota)
+}
+
+func (a *admin) handlePUTQuota(jc jape.Context) {
+	var key string
+	if jc.DecodeParam("key", &key) != nil {
+		return
+	}
+
+	// validate key
+	if key == "" {
+		jc.Error(errors.New("key cannot be empty"), http.StatusBadRequest)
+		return
+	} else if len(key) > 32 {
+		jc.Error(errors.New("key cannot be longer than 32 characters"), http.StatusBadRequest)
+		return
+	} else if strings.Contains(key, " ") {
+		jc.Error(errors.New("key cannot contain spaces"), http.StatusBadRequest)
+		return
+	}
+
+	var req accounts.PutQuotaRequest
+	if jc.Decode(&req) != nil {
+		return
+	}
+
+	quota, err := a.accounts.PutQuota(jc.Request.Context(), key, req)
+	if jc.Check("failed to put quota", err) != nil {
+		return
+	}
+	jc.Encode(quota)
+}
+
+func (a *admin) handleDELETEQuota(jc jape.Context) {
+	var key string
+	if jc.DecodeParam("key", &key) != nil {
+		return
+	}
+
+	err := a.accounts.DeleteQuota(jc.Request.Context(), key)
+	if errors.Is(err, accounts.ErrQuotaNotFound) {
+		jc.Error(err, http.StatusNotFound)
+		return
+	} else if errors.Is(err, accounts.ErrQuotaInUse) {
+		jc.Error(err, http.StatusConflict)
+		return
+	} else if jc.Check("failed to delete quota", err) != nil {
+		return
+	}
 }
 
 func (a *admin) handleGETAccount(jc jape.Context) {

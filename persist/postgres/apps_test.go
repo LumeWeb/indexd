@@ -1,7 +1,6 @@
 package postgres
 
 import (
-	"context"
 	"errors"
 	"reflect"
 	"testing"
@@ -15,12 +14,11 @@ import (
 // addTestQuota creates a test quota with the given parameters
 func (s *Store) addTestQuota(t testing.TB, name string, maxPinnedData uint64, totalUses int) {
 	t.Helper()
-	err := s.transaction(func(ctx context.Context, tx *txn) error {
-		_, err := tx.Exec(ctx, `INSERT INTO quotas (name, description, max_pinned_data, total_uses) VALUES ($1, $2, $3, $4) ON CONFLICT (name) DO NOTHING`,
-			name, "test quota", maxPinnedData, totalUses)
-		return err
-	})
-	if err != nil {
+	if _, err := s.PutQuota(name, accounts.PutQuotaRequest{
+		Description:   "test quota",
+		MaxPinnedData: maxPinnedData,
+		TotalUses:     totalUses,
+	}); err != nil {
 		t.Fatalf("failed to add test quota: %v", err)
 	}
 }

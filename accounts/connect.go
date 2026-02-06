@@ -25,6 +25,10 @@ var (
 	// ErrQuotaNotFound is returned when a quota is not found.
 	ErrQuotaNotFound = errors.New("quota not found")
 
+	// ErrQuotaInUse is returned when deleting a quota with connect keys
+	// associated to it.
+	ErrQuotaInUse = errors.New("quota in use")
+
 	// ErrAppKeyStorageLimitExceeded is returned when an operation fails due to
 	// the connect key exceeding its storage limit.    We use the term "account
 	// storage limit" here because from the user's perspective, the app connect
@@ -75,6 +79,13 @@ type (
 		LogoURL     string        `json:"logoURL"`
 		ServiceURL  string        `json:"serviceURL"`
 	}
+
+	// PutQuotaRequest is the request type for creating or updating a quota.
+	PutQuotaRequest struct {
+		Description   string `json:"description"`
+		MaxPinnedData uint64 `json:"maxPinnedData"`
+		TotalUses     int    `json:"totalUses"`
+	}
 )
 
 // AddAppConnectKey adds a new app connect key.
@@ -117,6 +128,27 @@ func (m *AccountManager) RegisterAppKey(key string, pk types.PublicKey, meta App
 // returns [ErrKeyNotFound].
 func (m *AccountManager) ValidAppConnectKey(ctx context.Context, key string) (bool, error) {
 	return m.store.ValidAppConnectKey(key)
+}
+
+// PutQuota creates or updates a quota.
+func (m *AccountManager) PutQuota(ctx context.Context, key string, req PutQuotaRequest) (Quota, error) {
+	return m.store.PutQuota(key, req)
+}
+
+// DeleteQuota deletes an existing quota. If the quota does not exist, it returns [ErrQuotaNotFound].
+// If the quota is in use by connect keys, it returns [ErrQuotaInUse].
+func (m *AccountManager) DeleteQuota(ctx context.Context, key string) error {
+	return m.store.DeleteQuota(key)
+}
+
+// Quota returns the quota with the given key. If the quota does not exist, it returns [ErrQuotaNotFound].
+func (m *AccountManager) Quota(ctx context.Context, key string) (Quota, error) {
+	return m.store.Quota(key)
+}
+
+// Quotas returns a list of quotas.
+func (m *AccountManager) Quotas(ctx context.Context, offset, limit int) ([]Quota, error) {
+	return m.store.Quotas(offset, limit)
 }
 
 // AppSecret derives a unique application secret using a stored user secret

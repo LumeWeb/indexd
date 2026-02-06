@@ -158,6 +158,128 @@ func TestAppConnectKeys(t *testing.T) {
 	}
 }
 
+func TestQuotasAPI(t *testing.T) {
+	c := testutils.NewConsensusNode(t, zap.NewNop())
+	indexer := testutils.NewIndexer(t, c, zap.NewNop())
+	adminClient := indexer.Admin
+
+	// list quotas - should have the default quota
+	quotas, err := adminClient.Quotas(context.Background(), 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(quotas) != 1 {
+		t.Fatal("expected 1 default quota, got", len(quotas))
+	} else if quotas[0].Key != "default" {
+		t.Fatal("expected default quota")
+	}
+
+	// create a new quota
+	err = adminClient.PutQuota(context.Background(), "test-quota", accounts.PutQuotaRequest{
+		Description:   "Test quota",
+		MaxPinnedData: 1000,
+		TotalUses:     10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// get the quota
+	quota, err := adminClient.Quota(context.Background(), "test-quota")
+	if err != nil {
+		t.Fatal(err)
+	} else if quota.Key != "test-quota" {
+		t.Fatalf("expected key to be 'test-quota', got %q", quota.Key)
+	} else if quota.Description != "Test quota" {
+		t.Fatalf("expected description to be 'Test quota', got %q", quota.Description)
+	} else if quota.MaxPinnedData != 1000 {
+		t.Fatalf("expected max pinned data to be 1000, got %d", quota.MaxPinnedData)
+	} else if quota.TotalUses != 10 {
+		t.Fatalf("expected total uses to be 10, got %d", quota.TotalUses)
+	}
+
+	// list quotas - should now have 2
+	quotas, err = adminClient.Quotas(context.Background(), 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(quotas) != 2 {
+		t.Fatal("expected 2 quotas, got", len(quotas))
+	}
+
+	// update the quota (upsert)
+	err = adminClient.PutQuota(context.Background(), "test-quota", accounts.PutQuotaRequest{
+		Description:   "Updated description",
+		MaxPinnedData: 2000,
+		TotalUses:     20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// verify the update
+	quota, err = adminClient.Quota(context.Background(), "test-quota")
+	if err != nil {
+		t.Fatal(err)
+	} else if quota.Description != "Updated description" {
+		t.Fatalf("expected description to be 'Updated description', got %q", quota.Description)
+	} else if quota.MaxPinnedData != 2000 {
+		t.Fatalf("expected max pinned data to be 2000, got %d", quota.MaxPinnedData)
+	} else if quota.TotalUses != 20 {
+		t.Fatalf("expected total uses to be 20, got %d", quota.TotalUses)
+	}
+
+	// delete the quota
+	err = adminClient.DeleteQuota(context.Background(), "test-quota")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// verify it's deleted
+	_, err = adminClient.Quota(context.Background(), "test-quota")
+	if err == nil {
+		t.Fatal("expected error when getting deleted quota")
+	}
+
+	// list quotas - should be back to 1
+	quotas, err = adminClient.Quotas(context.Background(), 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(quotas) != 1 {
+		t.Fatal("expected 1 quota after deletion, got", len(quotas))
+	}
+
+	// test deleting non-existent quota
+	err = adminClient.DeleteQuota(context.Background(), "non-existent")
+	if err == nil {
+		t.Fatal("expected error when deleting non-existent quota")
+	}
+
+	// test that a quota in use cannot be deleted
+	// first create a quota
+	err = adminClient.PutQuota(context.Background(), "in-use-quota", accounts.PutQuotaRequest{
+		Description:   "Quota in use",
+		MaxPinnedData: 1000,
+		TotalUses:     10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// create a connect key using this quota
+	_, err = adminClient.AddAppConnectKey(context.Background(), accounts.AddConnectKeyRequest{
+		Description: "Test key",
+		Quota:       "in-use-quota",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// try to delete the quota - should fail
+	err = adminClient.DeleteQuota(context.Background(), "in-use-quota")
+	if err == nil {
+		t.Fatal("expected error when deleting quota in use")
+	}
+}
+
 func TestAccountsAPI(t *testing.T) {
 	c := testutils.NewConsensusNode(t, zap.NewNop())
 	indexer := testutils.NewIndexer(t, c, zap.NewNop())

@@ -125,8 +125,11 @@ func (ts TestStore) AddTestAccount(t testing.TB, ak types.PublicKey) {
 	const connectKey = "test"
 	if _, err := ts.ValidAppConnectKey(connectKey); errors.Is(err, accounts.ErrKeyNotFound) {
 		// create testing quota if it doesn't exist
-		if _, err := ts.Exec(t.Context(), `INSERT INTO quotas (name, description, max_pinned_data, total_uses) VALUES ($1, $2, $3, $4) ON CONFLICT (name) DO NOTHING`,
-			TestQuotaName, "Testing quota", uint64(1e12), 10000); err != nil {
+		if _, err := ts.PutQuota(TestQuotaName, accounts.PutQuotaRequest{
+			Description:   "Testing quota",
+			MaxPinnedData: uint64(1e12),
+			TotalUses:     10000,
+		}); err != nil {
 			t.Fatal(err)
 		}
 		_, err := ts.AddAppConnectKey(accounts.UpdateAppConnectKey{
