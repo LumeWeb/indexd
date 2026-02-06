@@ -13,7 +13,6 @@ import (
 	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/contracts"
 	"go.sia.tech/indexd/slabs"
-	"go.uber.org/zap"
 )
 
 const (
@@ -627,7 +626,7 @@ func (s *Store) PinSectors(contractID types.FileContractID, roots []types.Hash25
 		sqlRoots[i] = sqlHash256(root)
 	}
 
-	err := s.transaction(func(ctx context.Context, tx *txn) error {
+	return s.transaction(func(ctx context.Context, tx *txn) error {
 		var hostID, contractMapID int64
 		err := tx.QueryRow(ctx, `
 			SELECT c.host_id, csm.id
@@ -671,11 +670,6 @@ func (s *Store) PinSectors(contractID types.FileContractID, roots []types.Hash25
 
 		return nil
 	})
-	// log unexpected database error
-	if err != nil && !errors.Is(err, contracts.ErrNotFound) {
-		s.log.Error("failed to pin sectors", zap.Stringer("contractID", contractID), zap.Error(err))
-	}
-	return err
 }
 
 // MarkSectorsUnpinnable sets the host ID for sectors that haven't been pinned
