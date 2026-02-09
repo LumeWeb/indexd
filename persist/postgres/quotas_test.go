@@ -12,9 +12,10 @@ func TestQuotas(t *testing.T) {
 
 	// create a quota
 	if err := store.PutQuota("test-quota", accounts.PutQuotaRequest{
-		Description:   "Test quota",
-		MaxPinnedData: 1000,
-		TotalUses:     10,
+		Description:     "Test quota",
+		MaxPinnedData:   1000,
+		TotalUses:       10,
+		FundTargetBytes: 1 << 30,
 	}); err != nil {
 		t.Fatal("failed to create quota:", err)
 	}
@@ -31,6 +32,8 @@ func TestQuotas(t *testing.T) {
 		t.Fatalf("expected max pinned data to be 1000, got %d", got.MaxPinnedData)
 	} else if got.TotalUses != 10 {
 		t.Fatalf("expected total uses to be 10, got %d", got.TotalUses)
+	} else if got.FundTargetBytes != 1<<30 {
+		t.Fatalf("expected fund target bytes to be %d, got %d", 1<<30, got.FundTargetBytes)
 	}
 
 	// list quotas - should include default and test-quota
@@ -72,9 +75,10 @@ func TestQuotas(t *testing.T) {
 
 	// update the test quota
 	if err := store.PutQuota("test-quota", accounts.PutQuotaRequest{
-		Description:   "Updated description",
-		MaxPinnedData: 2000,
-		TotalUses:     20,
+		Description:     "Updated description",
+		MaxPinnedData:   2000,
+		TotalUses:       20,
+		FundTargetBytes: 2 << 30,
 	}); err != nil {
 		t.Fatal("failed to update quota:", err)
 	}
@@ -89,6 +93,8 @@ func TestQuotas(t *testing.T) {
 		t.Fatalf("expected max pinned data to be 2000, got %d", got.MaxPinnedData)
 	} else if got.TotalUses != 20 {
 		t.Fatalf("expected total uses to be 20, got %d", got.TotalUses)
+	} else if got.FundTargetBytes != 2<<30 {
+		t.Fatalf("expected fund target bytes to be %d, got %d", 2<<30, got.FundTargetBytes)
 	}
 
 	// delete the quota

@@ -15,9 +15,10 @@ import (
 func (s *Store) addTestQuota(t testing.TB, name string, maxPinnedData uint64, totalUses int) {
 	t.Helper()
 	if err := s.PutQuota(name, accounts.PutQuotaRequest{
-		Description:   "test quota",
-		MaxPinnedData: maxPinnedData,
-		TotalUses:     totalUses,
+		Description:     "test quota",
+		MaxPinnedData:   maxPinnedData,
+		TotalUses:       totalUses,
+		FundTargetBytes: 16 << 30, // 16 GiB
 	}); err != nil {
 		t.Fatalf("failed to add test quota: %v", err)
 	}

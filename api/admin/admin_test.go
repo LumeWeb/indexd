@@ -177,9 +177,10 @@ func TestQuotasAPI(t *testing.T) {
 
 	// create a new quota
 	err = adminClient.PutQuota(context.Background(), "test-quota", accounts.PutQuotaRequest{
-		Description:   "Test quota",
-		MaxPinnedData: 1000,
-		TotalUses:     10,
+		Description:     "Test quota",
+		MaxPinnedData:   1000,
+		TotalUses:       10,
+		FundTargetBytes: 1 << 30,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -197,6 +198,8 @@ func TestQuotasAPI(t *testing.T) {
 		t.Fatalf("expected max pinned data to be 1000, got %d", quota.MaxPinnedData)
 	} else if quota.TotalUses != 10 {
 		t.Fatalf("expected total uses to be 10, got %d", quota.TotalUses)
+	} else if quota.FundTargetBytes != 1<<30 {
+		t.Fatalf("expected fund target bytes to be %d, got %d", 1<<30, quota.FundTargetBytes)
 	}
 
 	// list quotas - should now have 2
@@ -209,9 +212,10 @@ func TestQuotasAPI(t *testing.T) {
 
 	// update the quota (upsert)
 	err = adminClient.PutQuota(context.Background(), "test-quota", accounts.PutQuotaRequest{
-		Description:   "Updated description",
-		MaxPinnedData: 2000,
-		TotalUses:     20,
+		Description:     "Updated description",
+		MaxPinnedData:   2000,
+		TotalUses:       20,
+		FundTargetBytes: 2 << 30,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -227,6 +231,8 @@ func TestQuotasAPI(t *testing.T) {
 		t.Fatalf("expected max pinned data to be 2000, got %d", quota.MaxPinnedData)
 	} else if quota.TotalUses != 20 {
 		t.Fatalf("expected total uses to be 20, got %d", quota.TotalUses)
+	} else if quota.FundTargetBytes != 2<<30 {
+		t.Fatalf("expected fund target bytes to be %d, got %d", 2<<30, quota.FundTargetBytes)
 	}
 
 	// delete the quota

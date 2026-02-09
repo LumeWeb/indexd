@@ -51,7 +51,7 @@ type (
 	// account information.
 	AccountManager interface {
 		AccountsForFunding(hk types.PublicKey, threshold time.Time, limit int, quotaName string) ([]accounts.HostAccount, error)
-		ActiveAccounts(threshold time.Time) ([]accounts.QuotaFundInfo, error)
+		AccountFundingInfo(threshold time.Time) ([]accounts.QuotaFundInfo, error)
 		Quotas(ctx context.Context, offset, limit int) ([]accounts.Quota, error)
 		ScheduleAccountsForFunding(hostKey types.PublicKey) error
 		ServiceAccounts(hk types.PublicKey) []accounts.HostAccount

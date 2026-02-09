@@ -3,7 +3,7 @@ CREATE TABLE quotas (
     description TEXT NOT NULL,
     max_pinned_data BIGINT NOT NULL CHECK (max_pinned_data >= 0), -- max pinned data in bytes
     total_uses INTEGER NOT NULL CHECK (total_uses >= 0),
-    fund_target_bytes BIGINT NOT NULL CHECK (fund_target_bytes >= 0) -- funding target in bytes per host
+    fund_target_bytes BIGINT NOT NULL CHECK (fund_target_bytes >= 0) -- funding target in bytes per host (0 means no funding)
 );
 
 -- insert default quota: 1TB max data, 5 total uses, 16 GiB fund target

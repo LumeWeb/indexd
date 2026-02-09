@@ -57,7 +57,7 @@ type (
 		Quotas(offset, limit int) ([]Quota, error)
 
 		PruneAccounts(limit int) error
-		ActiveAccounts(threshold time.Time) ([]QuotaFundInfo, error)
+		AccountFundingInfo(threshold time.Time) ([]QuotaFundInfo, error)
 		Account(types.PublicKey) (Account, error)
 		Accounts(offset, limit int, opts ...QueryAccountsOpt) ([]Account, error)
 		HasAccount(types.PublicKey) (bool, error)
@@ -129,9 +129,9 @@ func (m *AccountManager) AccountsForFunding(hk types.PublicKey, threshold time.T
 	return m.store.HostAccountsForFunding(hk, threshold, limit, quotaName)
 }
 
-// ActiveAccounts returns active account counts grouped by quota.
-func (m *AccountManager) ActiveAccounts(threshold time.Time) ([]QuotaFundInfo, error) {
-	return m.store.ActiveAccounts(threshold)
+// AccountFundingInfo returns funding info grouped by quota.
+func (m *AccountManager) AccountFundingInfo(threshold time.Time) ([]QuotaFundInfo, error) {
+	return m.store.AccountFundingInfo(threshold)
 }
 
 // ScheduleAccountsForFunding schedules all accounts for a given host to be funded.

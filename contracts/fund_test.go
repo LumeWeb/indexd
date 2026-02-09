@@ -36,7 +36,7 @@ func (am *accountsManagerMock) AccountsForFunding(hk types.PublicKey, threshold 
 	return cpy, nil
 }
 
-func (am *accountsManagerMock) ActiveAccounts(threshold time.Time) ([]accounts.QuotaFundInfo, error) {
+func (am *accountsManagerMock) AccountFundingInfo(threshold time.Time) ([]accounts.QuotaFundInfo, error) {
 	am.mu.Lock()
 	defer am.mu.Unlock()
 	if len(am.quotaFundInfos) > 0 {

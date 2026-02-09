@@ -360,9 +360,9 @@ func addAccount(ctx context.Context, tx *txn, connectKey string, account types.P
 	return nil
 }
 
-// ActiveAccounts returns active account counts grouped by quota with
+// AccountFundingInfo returns funding info grouped by quota with
 // their fund target bytes.
-func (s *Store) ActiveAccounts(threshold time.Time) ([]accounts.QuotaFundInfo, error) {
+func (s *Store) AccountFundingInfo(threshold time.Time) ([]accounts.QuotaFundInfo, error) {
 	var infos []accounts.QuotaFundInfo
 	if err := s.transaction(func(ctx context.Context, tx *txn) error {
 		rows, err := tx.Query(ctx, `

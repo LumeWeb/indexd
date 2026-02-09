@@ -18,14 +18,14 @@ func scanQuota(s scanner) (quota accounts.Quota, err error) {
 func (s *Store) PutQuota(key string, req accounts.PutQuotaRequest) error {
 	return s.transaction(func(ctx context.Context, tx *txn) error {
 		_, err := tx.Exec(ctx, `
-			INSERT INTO quotas (name, description, max_pinned_data, total_uses)
-			VALUES ($1, $2, $3, $4)
+			INSERT INTO quotas (name, description, max_pinned_data, total_uses, fund_target_bytes)
+			VALUES ($1, $2, $3, $4, $5)
 			ON CONFLICT (name) DO UPDATE SET
 				description = EXCLUDED.description,
 				max_pinned_data = EXCLUDED.max_pinned_data,
-				total_uses = EXCLUDED.total_uses
+				total_uses = EXCLUDED.total_uses,
 				fund_target_bytes = EXCLUDED.fund_target_bytes
-		`, key, req.Description, req.MaxPinnedData, req.TotalUses)
+		`, key, req.Description, req.MaxPinnedData, req.TotalUses, req.FundTargetBytes)
 		return err
 	})
 }
@@ -78,17 +78,12 @@ func (s *Store) Quota(key string) (quota accounts.Quota, err error) {
 func (s *Store) Quotas(offset, limit int) (quotas []accounts.Quota, err error) {
 	err = s.transaction(func(ctx context.Context, tx *txn) error {
 		quotas = quotas[:0] // reset in case of retry
-
-		var sqlLimit *int
-		if limit >= 0 {
-			sqlLimit = &limit
-		}
 		rows, err := tx.Query(ctx, `
 			SELECT name, description, max_pinned_data, total_uses, fund_target_bytes
 			FROM quotas
 			ORDER BY name
 			LIMIT $1 OFFSET $2
-		`, sqlLimit, offset)
+		`, limit, offset)
 		if err != nil {
 			return err
 		}

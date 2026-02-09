@@ -3,6 +3,7 @@ package contracts
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"go.sia.tech/core/types"
@@ -45,12 +46,13 @@ func (cm *ContractManager) FundAccounts(ctx context.Context, host hosts.Host, co
 		}
 	}
 
-	quotas, err := cm.accounts.Quotas(ctx, 0, -1)
+	quotas, err := cm.accounts.Quotas(ctx, 0, math.MaxInt)
 	if err != nil {
 		return fmt.Errorf("failed to fetch quotas: %w", err)
 	}
 
 	threshold := time.Now().Add(-accounts.AccountActivityThreshold)
+OUTER:
 	for _, quota := range quotas {
 		fundTarget := accounts.HostFundTarget(host, quota.FundTargetBytes)
 		if fundTarget.IsZero() {
@@ -84,12 +86,9 @@ func (cm *ContractManager) FundAccounts(ctx context.Context, host hosts.Host, co
 
 			contractIDs = contractIDs[drained:]
 			if len(contractIDs) == 0 {
-				log.Debug("not all accounts could be funded, no more contracts available")
-				break
+				log.Debug("not all accounts could be funded, no more contracts available", zap.String("quota", quota.Key))
+				break OUTER
 			}
-		}
-		if len(contractIDs) == 0 {
-			break
 		}
 	}
 
@@ -114,18 +113,14 @@ func (cm *ContractManager) FundAccounts(ctx context.Context, host hosts.Host, co
 // ContractFundTarget calculates the fund target for a contract on the given
 // host. We scale the fund target by the number of active accounts per quota.
 func (cm *ContractManager) ContractFundTarget(ctx context.Context, host hosts.Host, minAllowance types.Currency) (types.Currency, error) {
-	quotaInfos, err := cm.accounts.ActiveAccounts(time.Now().Add(-accounts.AccountActivityThreshold))
+	quotaInfos, err := cm.accounts.AccountFundingInfo(time.Now().Add(-accounts.AccountActivityThreshold))
 	if err != nil {
 		return types.ZeroCurrency, err
 	}
 
 	var target types.Currency
 	for _, qi := range quotaInfos {
-		n := qi.ActiveAccounts
-		if n == 0 {
-			n = 1
-		}
-		t := accounts.HostFundTarget(host, qi.FundTargetBytes).Mul64(n)
+		t := accounts.HostFundTarget(host, qi.FundTargetBytes).Mul64(qi.ActiveAccounts)
 		target = target.Add(t)
 	}
 
