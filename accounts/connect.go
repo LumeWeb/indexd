@@ -50,7 +50,7 @@ type (
 	ConnectKey struct {
 		Key           string    `json:"key"`
 		Description   string    `json:"description"`
-		Quota         Quota     `json:"quota"`
+		Quota         string    `json:"quota"`
 		RemainingUses int       `json:"remainingUses"`
 		DateCreated   time.Time `json:"dateCreated"`
 		LastUpdated   time.Time `json:"lastUpdated"`

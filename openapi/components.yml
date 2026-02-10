@@ -983,7 +983,8 @@ components:
           type: string
           description: App description
         quota:
-          $ref: "#/components/schemas/Quota"
+          type: string
+          description: The key of the quota associated with this connect key
         remainingUses:
           type: integer
           description: Remaining number of times this key can be used to create accounts

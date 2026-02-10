@@ -20,10 +20,7 @@ func scanConnectKey(s scanner) (key accounts.ConnectKey, err error) {
 		&key.LastUpdated,
 		&lastUsed,
 		&key.PinnedData,
-		&key.Quota.Key,
-		&key.Quota.Description,
-		&key.Quota.MaxPinnedData,
-		&key.Quota.TotalUses,
+		&key.Quota,
 		&key.RemainingUses,
 	)
 	if lastUsed.Valid {
@@ -48,15 +45,15 @@ func (s *Store) AddAppConnectKey(meta accounts.UpdateAppConnectKey) (key account
 
 		userSecret := frand.Bytes(32)
 		key, err = scanConnectKey(tx.QueryRow(ctx, `
-			INSERT INTO app_connect_keys (app_key, user_secret, use_description, quota_name)
+			INSERT INTO app_connect_keys ack (app_key, user_secret, use_description, quota_name)
 			VALUES ($1, $2, $3, $4)
 			RETURNING app_key, use_description, created_at, updated_at, last_used, pinned_data,
-				(SELECT name FROM quotas WHERE name = quota_name),
-				(SELECT description FROM quotas WHERE name = quota_name),
-				(SELECT max_pinned_data FROM quotas WHERE name = quota_name),
-				(SELECT total_uses FROM quotas WHERE name = quota_name),
-				(SELECT total_uses FROM quotas WHERE name = quota_name);
+				quota_name,
+				GREATEST(0, (SELECT total_uses FROM quotas WHERE name = quota_name) - (SELECT COUNT(*) FROM accounts WHERE connect_key_id = ack.id))
 		`, meta.Key, userSecret, meta.Description, meta.Quota))
+		if errors.Is(err, sql.ErrNoRows) {
+			return accounts.ErrKeyNotFound
+		}
 		return err
 	})
 	return
@@ -80,12 +77,12 @@ func (s *Store) UpdateAppConnectKey(meta accounts.UpdateAppConnectKey) (key acco
 		key, err = scanConnectKey(tx.QueryRow(ctx, `
 			UPDATE app_connect_keys ack SET (use_description, quota_name) = ($2, $3) WHERE app_key = $1
 			RETURNING app_key, use_description, created_at, updated_at, last_used, pinned_data,
-				(SELECT name FROM quotas WHERE name = quota_name),
-				(SELECT description FROM quotas WHERE name = quota_name),
-				(SELECT max_pinned_data FROM quotas WHERE name = quota_name),
-				(SELECT total_uses FROM quotas WHERE name = quota_name),
-				GREATEST(0, (SELECT total_uses FROM quotas WHERE name = quota_name) - (SELECT COUNT(*) FROM accounts WHERE connect_key_id = ack.id));
+				quota_name,
+				GREATEST(0, (SELECT total_uses FROM quotas WHERE name = quota_name) - (SELECT COUNT(*) FROM accounts WHERE connect_key_id = ack.id))
 		`, meta.Key, meta.Description, meta.Quota))
+		if errors.Is(err, sql.ErrNoRows) {
+			return accounts.ErrKeyNotFound
+		}
 		return err
 	})
 	return
@@ -115,7 +112,7 @@ func (s *Store) AppConnectKey(key string) (connectKey accounts.ConnectKey, err e
 	err = s.transaction(func(ctx context.Context, tx *txn) error {
 		connectKey, err = scanConnectKey(tx.QueryRow(ctx, `
 			SELECT ack.app_key, ack.use_description, ack.created_at, ack.updated_at, ack.last_used, ack.pinned_data,
-				q.name, q.description, q.max_pinned_data, q.total_uses,
+				ack.quota_name,
 				GREATEST(0, q.total_uses - (SELECT COUNT(*) FROM accounts WHERE connect_key_id = ack.id))
 			FROM app_connect_keys ack
 			INNER JOIN quotas q ON q.name = ack.quota_name
@@ -133,7 +130,7 @@ func (s *Store) AppConnectKeys(offset, limit int) (keys []accounts.ConnectKey, e
 	err = s.transaction(func(ctx context.Context, tx *txn) error {
 		rows, err := tx.Query(ctx, `
 			SELECT ack.app_key, ack.use_description, ack.created_at, ack.updated_at, ack.last_used, ack.pinned_data,
-				q.name, q.description, q.max_pinned_data, q.total_uses,
+				ack.quota_name,
 				GREATEST(0, q.total_uses - (SELECT COUNT(*) FROM accounts WHERE connect_key_id = ack.id))
 			FROM app_connect_keys ack
 			INNER JOIN quotas q ON q.name = ack.quota_name
@@ -206,7 +203,7 @@ func (s *Store) RegisterAppKey(connectKey string, appKey types.PublicKey, meta a
 			UPDATE app_connect_keys ack SET last_used = NOW()
 			FROM quotas q
 			WHERE ack.app_key = $1 AND q.name = ack.quota_name
-			RETURNING q.total_uses - (SELECT COUNT(*) FROM accounts a WHERE a.connect_key_id = ack.id), q.max_pinned_data
+			RETURNING GREATEST(0, q.total_uses - (SELECT COUNT(*) FROM accounts a WHERE a.connect_key_id = ack.id)), q.max_pinned_data
 		`, connectKey).Scan(&remainingUses, &storageLimit)
 		if errors.Is(err, sql.ErrNoRows) {
 			return accounts.ErrKeyNotFound

@@ -137,8 +137,8 @@ func TestApplicationAPI(t *testing.T) {
 		t.Fatal("expected 1 key, got", len(keys))
 	case keys[0].Key != key.Key:
 		t.Fatal("expected key to match", keys[0].Key, key.Key)
-	case keys[0].RemainingUses != keys[0].Quota.TotalUses-1:
-		t.Fatalf("expected remaining uses to be %d, got %d", keys[0].Quota.TotalUses-1, keys[0].RemainingUses)
+	case keys[0].RemainingUses != 4:
+		t.Fatalf("expected remaining uses to be 4, got %d", keys[0].RemainingUses)
 	case keys[0].LastUsed.IsZero():
 		t.Fatal("expected last used to be set, got", keys[0].LastUsed)
 	}

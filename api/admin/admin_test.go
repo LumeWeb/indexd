@@ -72,8 +72,10 @@ func TestAppConnectKeys(t *testing.T) {
 			t.Fatal(err)
 		case len(created.Key) != 64:
 			t.Fatalf("expected key to be %d, got %d", 64, len(created.Key))
-		case created.RemainingUses != created.Quota.TotalUses:
-			t.Fatal("expected remaining uses to match quota total uses")
+		case created.RemainingUses != 5:
+			t.Fatalf("expected remaining uses to be 5, got %d", created.RemainingUses)
+		case created.Quota != "default":
+			t.Fatalf("expected quota to be 'default', got %q", created.Quota)
 		case !created.LastUsed.IsZero():
 			t.Fatal("expected last used to be zero")
 		case created.DateCreated.IsZero():
@@ -122,7 +124,7 @@ func TestAppConnectKeys(t *testing.T) {
 	err = adminClient.UpdateAppConnectKey(context.Background(), accounts.UpdateAppConnectKey{
 		Key:         key.Key,
 		Description: key.Description,
-		Quota:       key.Quota.Key,
+		Quota:       key.Quota,
 	})
 	if err != nil {
 		t.Fatal(err)

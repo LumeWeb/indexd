@@ -90,8 +90,8 @@ func TestAppConnectKeys(t *testing.T) {
 		t.Fatalf("expected 1 app connect key, got %d", len(keys))
 	} else if keys[0].LastUsed.IsZero() {
 		t.Fatal("expected app connect key's last used field to be set")
-	} else if keys[0].Quota.MaxPinnedData != 10 {
-		t.Fatalf("expected app connect key's max pinned data to be 10, got %d", keys[0].Quota.MaxPinnedData)
+	} else if keys[0].Quota != "test-1-use" {
+		t.Fatalf("expected app connect key's quota to be 'test-1-use', got %q", keys[0].Quota)
 	}
 
 	// try again on an exhausted key
@@ -114,8 +114,8 @@ func TestAppConnectKeys(t *testing.T) {
 		t.Fatal("failed to update app connect key:", err)
 	} else if updated.Key != connectKey || updated.Description != "updated key" {
 		t.Fatalf("unexpected updated app connect key: %+v", updated)
-	} else if updated.Quota.MaxPinnedData != 20 {
-		t.Fatalf("expected updated app connect key's max pinned data to be 20, got %d", updated.Quota.MaxPinnedData)
+	} else if updated.Quota != "test-20-data" {
+		t.Fatalf("expected updated app connect key's quota to be 'test-20-data', got %q", updated.Quota)
 	}
 
 	// key should still be invalid since remaining_uses is not updated by UpdateAppConnectKey
