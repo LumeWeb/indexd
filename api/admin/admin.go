@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"net/http"
-	"strings"
+	"regexp"
 
 	"errors"
 	"fmt"
@@ -471,8 +471,8 @@ func (a *admin) handlePUTQuota(jc jape.Context) {
 	} else if len(key) > 32 {
 		jc.Error(errors.New("key cannot be longer than 32 characters"), http.StatusBadRequest)
 		return
-	} else if strings.Contains(key, " ") {
-		jc.Error(errors.New("key cannot contain spaces"), http.StatusBadRequest)
+	} else if !isValidQuotaKey(key) {
+		jc.Error(errors.New("key must only contain letters, digits, hyphens, and underscores"), http.StatusBadRequest)
 		return
 	}
 
@@ -1138,4 +1138,10 @@ func writeResponse(jc jape.Context, resp prometheus.Marshaller) {
 	default:
 		jc.Encode(resp)
 	}
+}
+
+var validQuotaKey = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+func isValidQuotaKey(key string) bool {
+	return validQuotaKey.MatchString(key)
 }
