@@ -783,11 +783,25 @@ func (s *Store) PrunableContractRoots(contractID types.FileContractID, roots []t
 
 	prunable := make([]types.Hash256, 0, len(roots))
 	if err := s.transaction(func(ctx context.Context, tx *txn) error {
+		var wantedCSMID *int64
+		err := tx.QueryRow(ctx, `SELECT id FROM contract_sectors_map WHERE contract_id = $1`, sqlHash256(contractID)).Scan(&wantedCSMID)
+		if err != nil {
+			return fmt.Errorf("failed to fetch contract sectors map ID: %w", err)
+		}
+
+		var wantedHostID int64
+		err = tx.QueryRow(ctx, `
+			SELECT host_id FROM contracts WHERE contract_id = $1
+		`, sqlHash256(contractID)).Scan(&wantedHostID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("contract %q: %w", contractID, contracts.ErrNotFound)
+		}
+
 		rows, err := tx.Query(ctx, `
-			SELECT s.sector_root
+			SELECT s.sector_root, s.host_id, s.contract_sectors_map_id
 			FROM sectors s
-			INNER JOIN contract_sectors_map csm ON s.contract_sectors_map_id = csm.id
-			WHERE csm.contract_id = $1 AND s.sector_root = ANY($2)`, sqlHash256(contractID), sqlRoots)
+			WHERE s.sector_root = ANY($1)
+		`, sqlRoots)
 		if err != nil {
 			return fmt.Errorf("failed to fetch prunable contract roots: %w", err)
 		}
@@ -796,10 +810,18 @@ func (s *Store) PrunableContractRoots(contractID types.FileContractID, roots []t
 		lookup := make(map[sqlHash256]struct{})
 		for rows.Next() {
 			var root sqlHash256
-			if err := rows.Scan(&root); err != nil {
+			var hostID *int64
+			var csmID *int64
+			if err := rows.Scan(&root, &hostID, &csmID); err != nil {
 				return fmt.Errorf("failed to scan root: %w", err)
 			}
-			lookup[root] = struct{}{}
+			rightContract := csmID != nil && wantedCSMID != nil && *csmID == *wantedCSMID
+			rightHost := hostID != nil && *hostID == wantedHostID
+			if rightContract || (rightHost && csmID == nil) {
+				// if the root is associated with the contract or no contract
+				// but the right host, then we should not prune it
+				lookup[root] = struct{}{}
+			}
 		}
 		if err := rows.Err(); err != nil {
 			return fmt.Errorf("failed to iterate over rows: %w", err)

@@ -348,8 +348,8 @@ func TestPruneContractBatchBoundary(t *testing.T) {
 	r6 := types.Hash256{6}
 	r7 := types.Hash256{7}
 
-	// pin r1, r4, r5, r7 to the contract, making r2, r3, r6 prunable
-	store.addPinnedSectors(t, hk, fcid, []types.Hash256{r1, r4, r5, r7})
+	// pin r1, r4 to the contract, making r2, r3, r5, r6, r7 prunable
+	store.addPinnedSectors(t, hk, fcid, []types.Hash256{r1, r4})
 
 	hMock := newHostClientMock(hk)
 	dialer := newDialerMock()
@@ -373,23 +373,16 @@ func TestPruneContractBatchBoundary(t *testing.T) {
 		t.Fatalf("failed to prune contract: %v", err)
 	}
 
-	// assert FreeSectors was called (sectors were pruned)
-	if len(hMock.freeSectorsCalls) == 0 {
-		t.Fatal("expected at least one FreeSectors call")
+	// FreeSectors should be called twice: once for batch 1 (r2, r3) and once
+	// for batch 2 (r5); if the batch boundary bug is present, the second
+	// SectorRoots call requests an out-of-bounds range and fails, so only
+	// batch 1's sectors get freed
+	if len(hMock.freeSectorsCalls) != 2 {
+		t.Fatalf("expected 2 FreeSectors calls, got %d", len(hMock.freeSectorsCalls))
 	}
-
-	// verify the contract's NextPrune is set to the success interval (24h),
-	// not the failure interval (3h); if the batch boundary bug is present,
-	// SectorRoots fails on the second batch causing pruneContract to return
-	// an error, which schedules the next prune at the failure interval
-	allContracts, err := store.Contracts(0, 10)
-	if err != nil {
-		t.Fatalf("failed to fetch contracts: %v", err)
-	} else if len(allContracts) != 1 {
-		t.Fatalf("expected 1 contract, got %d", len(allContracts))
-	}
-	success := time.Now().Add(contracts.PruneIntervalSuccess)
-	if c := allContracts[0]; !(c.NextPrune.After(success.Add(-time.Minute)) && c.NextPrune.Before(success.Add(time.Minute))) {
-		t.Fatalf("expected next prune to be ~24h from now, got %v (expected around %v)", c.NextPrune, success)
+	// 4 sectors should remain: r1, r4 (pinned) + r6, r7 (swapped into earlier
+	// positions by FreeSectors but not visited again in this pruning pass)
+	if len(hMock.sectorRoots[fcid]) != 4 {
+		t.Fatalf("expected 4 remaining sectors, got %d", len(hMock.sectorRoots[fcid]))
 	}
 }

@@ -698,6 +698,17 @@ func TestPrunableContractRoots(t *testing.T) {
 	}
 	slabID := slabIDs[0]
 
+	// freshly pinned slabs shouldn't have prunable roots
+	if indices, err := store.PrunableContractRoots(fcid1, roots[:2]); err != nil {
+		t.Fatal(err)
+	} else if len(indices) != 0 {
+		t.Fatalf("unexpected prunable indices, %+v", indices)
+	} else if indices, err := store.PrunableContractRoots(fcid2, roots[2:]); err != nil {
+		t.Fatal(err)
+	} else if len(indices) != 0 {
+		t.Fatalf("unexpected prunable indices, %+v", indices)
+	}
+
 	// pin sectors for h1
 	if sectors, err := store.UnpinnedSectors(hk1, 10); err != nil {
 		t.Fatal(err)
@@ -712,7 +723,8 @@ func TestPrunableContractRoots(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// assert no prunable roots for either contract
+	// assert there are still no prunable roots for either contract after
+	// pinning
 	if indices, err := store.PrunableContractRoots(fcid1, roots[:2]); err != nil {
 		t.Fatal(err)
 	} else if len(indices) != 0 {
@@ -739,6 +751,7 @@ func TestPrunableContractRoots(t *testing.T) {
 		t.Fatalf("unexpected prunable roots, %+v", prunable)
 	}
 }
+
 func TestPruneExpiredContractElements(t *testing.T) {
 	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
 
