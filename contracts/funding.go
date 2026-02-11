@@ -61,7 +61,7 @@ OUTER:
 
 		var exhausted bool
 		for !exhausted {
-			accs, err := cm.accounts.AccountsForFunding(host.PublicKey, threshold, accounts.AccountFundBatch, quota.Key)
+			accs, err := cm.accounts.AccountsForFunding(host.PublicKey, quota.Key, threshold, accounts.AccountFundBatch)
 			if err != nil {
 				return fmt.Errorf("failed to fetch accounts for funding: %w", err)
 			} else if len(accs) < accounts.AccountFundBatch {

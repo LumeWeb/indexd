@@ -50,7 +50,7 @@ type (
 	// AccountManager defines an interface that allows fetching and updating
 	// account information.
 	AccountManager interface {
-		AccountsForFunding(hk types.PublicKey, threshold time.Time, limit int, quotaName string) ([]accounts.HostAccount, error)
+		AccountsForFunding(hk types.PublicKey, quotaName string, threshold time.Time, limit int) ([]accounts.HostAccount, error)
 		AccountFundingInfo(threshold time.Time) ([]accounts.QuotaFundInfo, error)
 		Quotas(ctx context.Context, offset, limit int) ([]accounts.Quota, error)
 		ScheduleAccountsForFunding(hostKey types.PublicKey) error

@@ -35,7 +35,7 @@ func newAccountsManagerMock() *accountsManagerMock {
 	}
 }
 
-func (am *accountsManagerMock) AccountsForFunding(hk types.PublicKey, threshold time.Time, limit int, quotaName string) ([]accounts.HostAccount, error) {
+func (am *accountsManagerMock) AccountsForFunding(hk types.PublicKey, quotaName string, threshold time.Time, limit int) ([]accounts.HostAccount, error) {
 	am.mu.Lock()
 	defer am.mu.Unlock()
 	cpy := make([]accounts.HostAccount, len(am.accountsToFund))
@@ -94,9 +94,8 @@ func (f *accountFunderMock) FundAccounts(ctx context.Context, host hosts.Host, c
 }
 
 func TestPerformAccountFunding(t *testing.T) {
-	amMock := &accountsManagerMock{
-		accountsToFund: []accounts.HostAccount{{AccountKey: [32]byte{1}}},
-	}
+	amMock := newAccountsManagerMock()
+	amMock.accountsToFund = []accounts.HostAccount{{AccountKey: [32]byte{1}}}
 	funderMock := &accountFunderMock{}
 	store := newTestStore(t)
 	hmMock := newHostManagerMock(store)

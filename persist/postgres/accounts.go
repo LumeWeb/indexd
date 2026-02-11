@@ -222,7 +222,7 @@ RETURNING o.object_key;`, accountID, remaining)
 // HostAccountsForFunding returns up to `limit` active (after the `threshold`
 // time) accounts for the given host key that are due for funding, filtered by
 // quota name.
-func (s *Store) HostAccountsForFunding(hk types.PublicKey, threshold time.Time, limit int, quotaName string) ([]accounts.HostAccount, error) {
+func (s *Store) HostAccountsForFunding(hk types.PublicKey, quotaName string, threshold time.Time, limit int) ([]accounts.HostAccount, error) {
 	if limit < 0 {
 		return nil, errors.New("limit can not be negative")
 	} else if limit == 0 {
@@ -242,7 +242,7 @@ func (s *Store) HostAccountsForFunding(hk types.PublicKey, threshold time.Time, 
 			return err
 		}
 
-		newAccs, err := newHostAccountsForFunding(ctx, tx, hk, hostID, threshold, remaining, quotaName)
+		newAccs, err := newHostAccountsForFunding(ctx, tx, hk, hostID, quotaName, threshold, remaining)
 		if err != nil {
 			return fmt.Errorf("failed to query new accounts for funding: %w", err)
 		} else if len(newAccs) >= remaining {
@@ -251,7 +251,7 @@ func (s *Store) HostAccountsForFunding(hk types.PublicKey, threshold time.Time, 
 		}
 
 		remaining -= len(newAccs)
-		existingAccs, err := existingHostAccountsForFunding(ctx, tx, hk, hostID, threshold, remaining, quotaName)
+		existingAccs, err := existingHostAccountsForFunding(ctx, tx, hk, hostID, quotaName, threshold, remaining)
 		if err != nil {
 			return fmt.Errorf("failed to query existing accounts for funding: %w", err)
 		}
@@ -392,7 +392,7 @@ func (s *Store) AccountFundingInfo(threshold time.Time) ([]accounts.QuotaFundInf
 	return infos, nil
 }
 
-func newHostAccountsForFunding(ctx context.Context, tx *txn, hk types.PublicKey, hostID int64, threshold time.Time, limit int, quotaName string) ([]accounts.HostAccount, error) {
+func newHostAccountsForFunding(ctx context.Context, tx *txn, hk types.PublicKey, hostID int64, quotaName string, threshold time.Time, limit int) ([]accounts.HostAccount, error) {
 	accs := make([]accounts.HostAccount, 0, limit)
 
 	rows, err := tx.Query(ctx, `
@@ -422,7 +422,7 @@ LIMIT $3;`, hostID, threshold, limit, quotaName)
 	return accs, nil
 }
 
-func existingHostAccountsForFunding(ctx context.Context, tx *txn, hk types.PublicKey, hostID int64, threshold time.Time, limit int, quotaName string) ([]accounts.HostAccount, error) {
+func existingHostAccountsForFunding(ctx context.Context, tx *txn, hk types.PublicKey, hostID int64, quotaName string, threshold time.Time, limit int) ([]accounts.HostAccount, error) {
 	accs := make([]accounts.HostAccount, 0, limit)
 
 	rows, err := tx.Query(ctx, `

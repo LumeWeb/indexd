@@ -38,7 +38,7 @@ type (
 	// Store defines an interface to fetch accounts that need to be funded and
 	// update them after funding.
 	Store interface {
-		HostAccountsForFunding(hk types.PublicKey, threshold time.Time, limit int, quotaName string) ([]HostAccount, error)
+		HostAccountsForFunding(hk types.PublicKey, quotaName string, threshold time.Time, limit int) ([]HostAccount, error)
 		ScheduleAccountsForFunding(hostKey types.PublicKey) error
 		UpdateHostAccounts(accounts []HostAccount) error
 
@@ -125,8 +125,8 @@ func (m *AccountManager) DeleteAccount(ctx context.Context, acc proto.Account) e
 
 // AccountsForFunding returns accounts that need funding for a given host,
 // filtered by quota name.
-func (m *AccountManager) AccountsForFunding(hk types.PublicKey, threshold time.Time, limit int, quotaName string) ([]HostAccount, error) {
-	return m.store.HostAccountsForFunding(hk, threshold, limit, quotaName)
+func (m *AccountManager) AccountsForFunding(hk types.PublicKey, quotaName string, threshold time.Time, limit int) ([]HostAccount, error) {
+	return m.store.HostAccountsForFunding(hk, quotaName, threshold, limit)
 }
 
 // AccountFundingInfo returns funding info grouped by quota.
