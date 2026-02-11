@@ -969,6 +969,10 @@ components:
         totalUses:
           type: integer
           description: Total number of accounts that can be created using connect keys with this quota
+        fundTargetBytes:
+          type: integer
+          format: uint64
+          description: Funding target in bytes per host used to calculate how much to fund accounts
 
     PutQuotaRequest:
       type: object
@@ -984,6 +988,11 @@ components:
           type: integer
           minimum: 0
           description: Total number of accounts that can be created using connect keys with this quota
+        fundTargetBytes:
+          type: integer
+          format: uint64
+          minimum: 0
+          description: Funding target in bytes per host used to calculate how much to fund accounts
 
     ConnectKey:
       type: object

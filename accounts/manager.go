@@ -182,8 +182,9 @@ func HostFundTarget(host hosts.Host, fundTargetBytes uint64) types.Currency {
 	if fundTargetBytes == 0 {
 		return types.ZeroCurrency
 	}
-	u1 := host.Settings.Prices.RPCWriteSectorCost(proto.SectorSize).RenterCost().Mul64(fundTargetBytes / proto.SectorSize).Div64(2)
-	u2 := host.Settings.Prices.RPCReadSectorCost(proto.SectorSize).RenterCost().Mul64(fundTargetBytes / proto.SectorSize).Div64(2)
+	sectors := (fundTargetBytes + proto.SectorSize - 1) / proto.SectorSize // ceil div for at least 1 sector if fundTargetBytes > 0
+	u1 := host.Settings.Prices.RPCWriteSectorCost(proto.SectorSize).RenterCost().Mul64(sectors).Div64(2)
+	u2 := host.Settings.Prices.RPCReadSectorCost(proto.SectorSize).RenterCost().Mul64(sectors).Div64(2)
 	return u1.Add(u2)
 }
 

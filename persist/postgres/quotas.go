@@ -73,8 +73,7 @@ func (s *Store) Quota(key string) (quota accounts.Quota, err error) {
 	return
 }
 
-// Quotas retrieves a list of quotas from the database. If limit is -1, all
-// quotas are returned.
+// Quotas retrieves a list of quotas from the database.
 func (s *Store) Quotas(offset, limit int) (quotas []accounts.Quota, err error) {
 	err = s.transaction(func(ctx context.Context, tx *txn) error {
 		quotas = quotas[:0] // reset in case of retry
