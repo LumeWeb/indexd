@@ -2,6 +2,7 @@ package contracts_test
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -22,10 +23,16 @@ type fundAccountsCall struct {
 
 type accountsManagerMock struct {
 	mu             sync.Mutex
-	activeAccounts uint64
 	accountsToFund []accounts.HostAccount
-	quotas         []accounts.Quota
-	quotaFundInfos []accounts.QuotaFundInfo
+	quotaInfos     []accounts.QuotaFundInfo
+}
+
+func newAccountsManagerMock() *accountsManagerMock {
+	return &accountsManagerMock{
+		quotaInfos: []accounts.QuotaFundInfo{
+			{QuotaName: "default", FundTargetBytes: testFundTargetBytes},
+		},
+	}
 }
 
 func (am *accountsManagerMock) AccountsForFunding(hk types.PublicKey, threshold time.Time, limit int, quotaName string) ([]accounts.HostAccount, error) {
@@ -39,29 +46,20 @@ func (am *accountsManagerMock) AccountsForFunding(hk types.PublicKey, threshold 
 func (am *accountsManagerMock) AccountFundingInfo(threshold time.Time) ([]accounts.QuotaFundInfo, error) {
 	am.mu.Lock()
 	defer am.mu.Unlock()
-	if len(am.quotaFundInfos) > 0 {
-		return am.quotaFundInfos, nil
-	}
-	if am.activeAccounts > 0 {
-		return []accounts.QuotaFundInfo{{
-			QuotaName:       "default",
-			FundTargetBytes: testFundTargetBytes,
-			ActiveAccounts:  am.activeAccounts,
-		}}, nil
-	}
-	return nil, nil
+	return slices.Clone(am.quotaInfos), nil
 }
 
 func (am *accountsManagerMock) Quotas(_ context.Context, offset, limit int) ([]accounts.Quota, error) {
 	am.mu.Lock()
 	defer am.mu.Unlock()
-	if len(am.quotas) > 0 {
-		return am.quotas, nil
+	var quotas []accounts.Quota
+	for _, quotaInfo := range am.quotaInfos {
+		quotas = append(quotas, accounts.Quota{
+			Key:             quotaInfo.QuotaName,
+			FundTargetBytes: quotaInfo.FundTargetBytes,
+		})
 	}
-	return []accounts.Quota{{
-		Key:             "default",
-		FundTargetBytes: testFundTargetBytes,
-	}}, nil
+	return quotas, nil
 }
 
 func (am *accountsManagerMock) ScheduleAccountsForFunding(hostKey types.PublicKey) error {
@@ -78,12 +76,6 @@ func (am *accountsManagerMock) UpdateHostAccounts(accs []accounts.HostAccount) e
 
 func (am *accountsManagerMock) UpdateServiceAccounts(ctx context.Context, accs []accounts.HostAccount, balance types.Currency) error {
 	return nil
-}
-
-func (am *accountsManagerMock) SetActiveAccounts(n uint64) {
-	am.mu.Lock()
-	defer am.mu.Unlock()
-	am.activeAccounts = n
 }
 
 type accountFunderMock struct {

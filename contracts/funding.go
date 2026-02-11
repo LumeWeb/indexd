@@ -13,12 +13,12 @@ import (
 )
 
 const (
-	// serviceAccountFundTargetBytes is the default number of bytes used to
-	// calculate the fund target for a host's service account. We fund accounts
-	// to cover this amount of read and write usage. It roughly comes down to
-	// uploading and downloading to and from a host at ~1Gbps for a period of 2
-	// minutes. With 30 good hosts, this results in about 30Gbps of maximum
-	// theoretical throughput.
+	// serviceAccountFundTargetBytes is the number of bytes used to calculate
+	// the fund target for a host's service account. We fund accounts to cover
+	// this amount of read and write usage. It roughly comes down to uploading
+	// and downloading to and from a host at ~1Gbps for a period of 2 minutes.
+	// With 30 good hosts, this results in about 30Gbps of maximum theoretical
+	// throughput.
 	serviceAccountFundTargetBytes = uint64(16 << 30) // 16 GiB
 )
 
