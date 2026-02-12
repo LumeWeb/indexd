@@ -75,6 +75,8 @@ func (s *Store) Quota(key string) (quota accounts.Quota, err error) {
 // Quotas retrieves a list of quotas from the database.
 func (s *Store) Quotas(offset, limit int) (quotas []accounts.Quota, err error) {
 	err = s.transaction(func(ctx context.Context, tx *txn) error {
+		quotas = quotas[:0] // reset in case of retry
+
 		rows, err := tx.Query(ctx, `
 			SELECT name, description, max_pinned_data, total_uses
 			FROM quotas

@@ -475,11 +475,8 @@ func (a *admin) handlePUTQuota(jc jape.Context) {
 	if key == "" {
 		jc.Error(errors.New("key cannot be empty"), http.StatusBadRequest)
 		return
-	} else if len(key) > 32 {
-		jc.Error(errors.New("key cannot be longer than 32 characters"), http.StatusBadRequest)
-		return
 	} else if !isValidQuotaKey(key) {
-		jc.Error(errors.New("key must only contain letters, digits, hyphens, and underscores"), http.StatusBadRequest)
+		jc.Error(errors.New("key must only contain letters, digits, hyphens, underscores and be between 1 and 32 characters long"), http.StatusBadRequest)
 		return
 	}
 
@@ -1149,7 +1146,7 @@ func writeResponse(jc jape.Context, resp prometheus.Marshaller) {
 	}
 }
 
-var validQuotaKey = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+var validQuotaKey = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,32}$`)
 
 func isValidQuotaKey(key string) bool {
 	return validQuotaKey.MatchString(key)

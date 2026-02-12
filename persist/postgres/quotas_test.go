@@ -51,6 +51,25 @@ func TestQuotas(t *testing.T) {
 		t.Fatalf("expected 2 quotas (including default), got %d", len(quotas))
 	}
 
+	// test offset and limit
+	quotas, err = store.Quotas(0, 1)
+	if err != nil {
+		t.Fatal("failed to list quotas:", err)
+	} else if len(quotas) != 1 {
+		t.Fatalf("expected 1 quota, got %d", len(quotas))
+	} else if quotas[0].Key != "default" {
+		t.Fatalf("expected first quota to be 'default', got %q", quotas[0].Key)
+	}
+
+	quotas, err = store.Quotas(1, 1)
+	if err != nil {
+		t.Fatal("failed to list quotas:", err)
+	} else if len(quotas) != 1 {
+		t.Fatalf("expected 1 quota, got %d", len(quotas))
+	} else if quotas[0].Key != "test-quota" {
+		t.Fatalf("expected first quota to be 'test-quota', got %q", quotas[0].Key)
+	}
+
 	// update the test quota
 	if err := store.PutQuota("test-quota", accounts.PutQuotaRequest{
 		Description:   "Updated description",
