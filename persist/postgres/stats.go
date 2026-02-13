@@ -126,10 +126,33 @@ func (s *Store) AccountStats() (admin.AccountStatsResponse, error) {
 	return stats, err
 }
 
-// ScanStats reports statistics about host scans for all hosts.
-func (s *Store) ScanStats() (stats admin.ScansStatsResponse, err error) {
+// AggregatedHostStats reports aggregated statistics about all hosts, including the
+// number of active hosts and scan counts.
+func (s *Store) AggregatedHostStats() (stats admin.AggregatedHostStatsResponse, err error) {
 	err = s.transaction(func(ctx context.Context, tx *txn) error {
-		return tx.QueryRow(ctx, "SELECT num_scans, num_scans_failed FROM stats").Scan(&stats.Total, &stats.Failed)
+		if err := tx.QueryRow(ctx, "SELECT num_scans, num_scans_failed FROM stats").Scan(&stats.TotalScans, &stats.FailedScans); err != nil {
+			return fmt.Errorf("failed to get scan stats: %w", err)
+		}
+		if err := tx.QueryRow(ctx, `
+			WITH globals AS (
+				SELECT scanned_height FROM global_settings
+			)
+			SELECT
+				COUNT(DISTINCT c.host_id),
+				COUNT(DISTINCT c.host_id) FILTER (WHERE h.settings_remaining_storage > 0)
+			FROM contracts c
+			INNER JOIN hosts h ON c.host_id = h.id
+			CROSS JOIN globals
+			WHERE
+				c.good = TRUE AND
+				c.state IN (0,1) AND
+				c.renewed_to IS NULL AND
+				c.proof_height > globals.scanned_height AND
+				h.stuck_since IS NULL
+		`).Scan(&stats.Active, &stats.GoodForUpload); err != nil {
+			return fmt.Errorf("failed to get active hosts: %w", err)
+		}
+		return nil
 	})
 	return
 }
@@ -139,6 +162,8 @@ func (s *Store) ScanStats() (stats admin.ScansStatsResponse, err error) {
 func (s *Store) HostStats(offset, limit int) ([]hosts.HostStats, error) {
 	var stats []hosts.HostStats
 	err := s.transaction(func(ctx context.Context, tx *txn) error {
+		stats = stats[:0] // reuse same slice if transaction retries
+
 		rows, err := tx.Query(ctx, `
 			WITH globals AS (
 				SELECT scanned_height FROM global_settings
@@ -215,9 +240,8 @@ func (s *Store) HostStats(offset, limit int) ([]hosts.HostStats, error) {
 			); err != nil {
 				return err
 			}
-			if stuckSince.Valid && time.Since(stuckSince.Time) >= 24*time.Hour {
+			if stuckSince.Valid {
 				hs.StuckSince = &stuckSince.Time
-				hs.Stuck = true
 			}
 			stats = append(stats, hs)
 		}

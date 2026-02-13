@@ -17,6 +17,14 @@ type (
 		BuildTime time.Time `json:"buildTime"`
 	}
 
+	// AggregatedHostStatsResponse is the response body for the [GET] /stats/hosts
+	AggregatedHostStatsResponse struct {
+		Active        uint64 `json:"active"`
+		GoodForUpload uint64 `json:"goodForUpload"`
+		TotalScans    int64  `json:"totalScans"`
+		FailedScans   int64  `json:"failedScans"`
+	}
+
 	// ContractsStatsResponse is the response body for the [GET] /stats/contracts
 	ContractsStatsResponse struct {
 		Contracts    uint64 `json:"contracts"`
@@ -51,19 +59,13 @@ type (
 		CheckFailed int64 `json:"checkFailed"`
 	}
 
-	// ScansStatsResponse is the response body for [GET] /stats/scans.
-	ScansStatsResponse struct {
-		Total  int64 `json:"total"`
-		Failed int64 `json:"failed"`
-	}
-
 	// AccountStatsResponse is the response body for the [GET] /stats/accounts.
 	AccountStatsResponse struct {
 		Registered uint64 `json:"registered"`
 		Active     uint64 `json:"active"`
 	}
 
-	// HostStatsResponse is the response body for the [GET] /stats/hosts.
+	// HostStatsResponse is the response body for the [GET] /stats/hosts/detailed.
 	HostStatsResponse []HostStats
 
 	// HostStats wraps hosts.HostStats to provide a custom PrometheusMetric method.

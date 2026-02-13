@@ -23,7 +23,30 @@ func (s AccountStatsResponse) PrometheusMetric() (metrics []prometheus.Metric) {
 }
 
 // PrometheusMetric implements the prometheus.Marshaller interface for the
-// sector stats response.
+// aggregated hosts stats response.
+func (s AggregatedHostStatsResponse) PrometheusMetric() (metrics []prometheus.Metric) {
+	return []prometheus.Metric{
+		{
+			Name:  "indexd_hosts_active",
+			Value: float64(s.Active),
+		},
+		{
+			Name:  "indexd_hosts_good_for_upload",
+			Value: float64(s.GoodForUpload),
+		},
+		{
+			Name:  "indexd_total_host_scans",
+			Value: float64(s.TotalScans),
+		},
+		{
+			Name:  "indexd_total_host_scans_failed",
+			Value: float64(s.FailedScans),
+		},
+	}
+}
+
+// PrometheusMetric implements the prometheus.Marshaller interface for the
+// contracts stats response.
 func (s ContractsStatsResponse) PrometheusMetric() (metrics []prometheus.Metric) {
 	return []prometheus.Metric{
 		{
@@ -54,21 +77,6 @@ func (s ContractsStatsResponse) PrometheusMetric() (metrics []prometheus.Metric)
 func (h HostStatsResponse) PrometheusMetric() (metrics []prometheus.Metric) {
 	metrics = prometheus.Slice([]HostStats(h)).PrometheusMetric()
 	return
-}
-
-// PrometheusMetric implements the prometheus.Marshaller interface for the
-// host scan stats response.
-func (s ScansStatsResponse) PrometheusMetric() (metrics []prometheus.Metric) {
-	return []prometheus.Metric{
-		{
-			Name:  "indexd_total_host_scans",
-			Value: float64(s.Total),
-		},
-		{
-			Name:  "indexd_total_host_scans_failed",
-			Value: float64(s.Failed),
-		},
-	}
 }
 
 // PrometheusMetric implements the prometheus.Marshaller interface for a single
@@ -135,7 +143,7 @@ func (h HostStats) PrometheusMetric() []prometheus.Metric {
 			Name:   "indexd_host_stuck",
 			Labels: labels,
 			Value: func() float64 {
-				if h.Stuck {
+				if h.StuckSince != nil {
 					return 1
 				}
 				return 0

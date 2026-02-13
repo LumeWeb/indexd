@@ -97,6 +97,32 @@ func (c *Client) UpdateAppConnectKey(ctx context.Context, req accounts.UpdateApp
 	return c.c.PUT(ctx, "/apps/connect/keys", req)
 }
 
+// Quotas retrieves a paginated list of quotas.
+func (c *Client) Quotas(ctx context.Context, offset, limit int) (quotas []accounts.Quota, err error) {
+	values := url.Values{}
+	values.Set("offset", fmt.Sprintf("%d", offset))
+	values.Set("limit", fmt.Sprintf("%d", limit))
+	err = c.c.GET(ctx, "/quotas?"+values.Encode(), &quotas)
+	return
+}
+
+// Quota retrieves a single quota by its key.
+func (c *Client) Quota(ctx context.Context, key string) (quota accounts.Quota, err error) {
+	err = c.c.GET(ctx, fmt.Sprintf("/quotas/%s", url.PathEscape(key)), &quota)
+	return
+}
+
+// PutQuota creates or updates a quota.
+func (c *Client) PutQuota(ctx context.Context, key string, req accounts.PutQuotaRequest) error {
+	return c.c.PUT(ctx, fmt.Sprintf("/quotas/%s", url.PathEscape(key)), req)
+}
+
+// DeleteQuota deletes a quota by its key.
+func (c *Client) DeleteQuota(ctx context.Context, key string) (err error) {
+	err = c.c.DELETE(ctx, fmt.Sprintf("/quotas/%s", url.PathEscape(key)))
+	return
+}
+
 // Account returns the account with the given public key.
 func (c *Client) Account(ctx context.Context, ak types.PublicKey) (account accounts.Account, err error) {
 	err = c.c.GET(ctx, fmt.Sprintf("/account/%s", ak), &account)
@@ -333,18 +359,18 @@ func (c *Client) StatsContracts(ctx context.Context) (resp ContractsStatsRespons
 	return
 }
 
-// StatsHosts returns statistics about the hosts managed by the indexer.
-func (c *Client) StatsHosts(ctx context.Context, offset, limit int) (resp HostStatsResponse, err error) {
-	values := url.Values{}
-	values.Set("offset", fmt.Sprintf("%d", offset))
-	values.Set("limit", fmt.Sprintf("%d", limit))
-	err = c.c.GET(ctx, "/stats/hosts?"+values.Encode(), &resp)
+// StatsHosts returns aggregated statistics about all hosts.
+func (c *Client) StatsHosts(ctx context.Context) (resp AggregatedHostStatsResponse, err error) {
+	err = c.c.GET(ctx, "/stats/hosts", &resp)
 	return
 }
 
-// StatsScans returns statistics about host scans for all hosts.
-func (c *Client) StatsScans(ctx context.Context) (resp ScansStatsResponse, err error) {
-	err = c.c.GET(ctx, "/stats/scans", &resp)
+// StatsHostsDetailed returns statistics about the hosts managed by the indexer.
+func (c *Client) StatsHostsDetailed(ctx context.Context, offset, limit int) (resp HostStatsResponse, err error) {
+	values := url.Values{}
+	values.Set("offset", fmt.Sprintf("%d", offset))
+	values.Set("limit", fmt.Sprintf("%d", limit))
+	err = c.c.GET(ctx, "/stats/hosts/detailed?"+values.Encode(), &resp)
 	return
 }
 

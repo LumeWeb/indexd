@@ -1380,7 +1380,7 @@ func TestStuckHosts(t *testing.T) {
 
 		var count int
 		for _, h := range stats {
-			if h.Stuck {
+			if h.StuckSince != nil {
 				count++
 			}
 		}
@@ -1397,29 +1397,11 @@ func TestStuckHosts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// hk1 should still not be returned as stuck yet (less than 24 hours)
-	assertStuckHosts(nil)
-
-	// manually set stuck_since to 25 hours ago for hk1 to simulate the 24h threshold
-	_, err := db.pool.Exec(t.Context(), `UPDATE hosts SET stuck_since = NOW() - INTERVAL '25 hours' WHERE public_key = $1`, sqlPublicKey(hk1))
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	// now hk1 should be stuck
 	assertStuckHosts([]types.PublicKey{hk1})
 
 	// mark hk2 as stuck too (but recent, so not returned yet), keeping hk1 stuck
 	if err := db.UpdateStuckHosts([]types.PublicKey{hk1, hk2}); err != nil {
-		t.Fatal(err)
-	}
-
-	// still only hk1 should be returned (hk2 is recent)
-	assertStuckHosts([]types.PublicKey{hk1})
-
-	// manually set stuck_since to 25 hours ago for hk2
-	_, err = db.pool.Exec(t.Context(), `UPDATE hosts SET stuck_since = NOW() - INTERVAL '25 hours' WHERE public_key = $1`, sqlPublicKey(hk2))
-	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -1436,7 +1418,7 @@ func TestStuckHosts(t *testing.T) {
 
 	// check UpdateStuckHosts preserves stuck_since if already set
 	var stuckSince time.Time
-	err = db.pool.QueryRow(t.Context(), `SELECT stuck_since FROM hosts WHERE public_key = $1`, sqlPublicKey(hk2)).Scan(&stuckSince)
+	err := db.pool.QueryRow(t.Context(), `SELECT stuck_since FROM hosts WHERE public_key = $1`, sqlPublicKey(hk2)).Scan(&stuckSince)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3134,9 +3116,9 @@ func BenchmarkStuckHosts(b *testing.B) {
 				return err
 			}
 
-			// 10% of hosts are stuck (stuck_since > 24 hours ago)
+			// 10% of hosts are stuck
 			if i%10 == 0 {
-				_, err := tx.Exec(ctx, `UPDATE hosts SET stuck_since = NOW() - INTERVAL '48 hours' WHERE id = $1`, hostID)
+				_, err := tx.Exec(ctx, `UPDATE hosts SET stuck_since = NOW() WHERE id = $1`, hostID)
 				if err != nil {
 					return err
 				}
