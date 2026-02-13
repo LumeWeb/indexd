@@ -972,7 +972,7 @@ components:
         fundTargetBytes:
           type: integer
           format: uint64
-          description: Funding target in bytes per host used to calculate how much to fund accounts
+          description: Funding target in bytes per host used to calculate how much data equivalent funds to fund accounts with. 0 means no funding.
 
     PutQuotaRequest:
       type: object
@@ -992,7 +992,7 @@ components:
           type: integer
           format: uint64
           minimum: 0
-          description: Funding target in bytes per host used to calculate how much to fund accounts
+          description: Funding target in bytes per host used to calculate how much data equivalent funds to fund accounts with. 0 means no funding.
 
     ConnectKey:
       type: object
