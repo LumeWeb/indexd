@@ -186,6 +186,17 @@ func TestQuotasAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// creating a quota without target should not work
+	err = adminClient.PutQuota(context.Background(), "test-quota", accounts.PutQuotaRequest{
+		Description:     "Missing target",
+		MaxPinnedData:   1000,
+		TotalUses:       10,
+		FundTargetBytes: nil,
+	})
+	if err == nil || !strings.Contains(err.Error(), "fundTargetBytes is required") {
+		t.Fatal("expected error about missing fund target bytes, got", err)
+	}
+
 	// get the quota
 	quota, err := adminClient.Quota(context.Background(), "test-quota")
 	if err != nil {
