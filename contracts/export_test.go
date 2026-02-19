@@ -5,9 +5,7 @@ import (
 	"time"
 
 	"go.sia.tech/core/consensus"
-	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
-	"go.sia.tech/coreutils/rhp/v4"
 	"go.sia.tech/coreutils/wallet"
 	"go.sia.tech/indexd/hosts"
 	"go.uber.org/zap"
@@ -32,27 +30,7 @@ var (
 	IsBeyondMaxRevisionHeight = isBeyondMaxRevisionHeight
 )
 
-const DefaultRevisionSubmissionBuffer = defaultRevisionSubmissionBuffer
-
 type CandidateContract = candidateContract
-
-type TestLatestRevisionClient interface {
-	LatestRevision(ctx context.Context, hostKey types.PublicKey, contractID types.FileContractID) (proto.RPCLatestRevisionResponse, error)
-}
-
-type TestRevisionManager struct {
-	rm *revisionManager
-}
-
-func NewTestRevisionManager(client TestLatestRevisionClient, chain ChainManager, store RevisionStore, buffer uint64, log *zap.Logger) *TestRevisionManager {
-	return &TestRevisionManager{
-		rm: newRevisionManager(client, chain, store, buffer, log),
-	}
-}
-
-func (trm *TestRevisionManager) WithRevision(ctx context.Context, contractID types.FileContractID, reviseFn func(contract rhp.ContractRevision) (rhp.ContractRevision, proto.Usage, error)) error {
-	return trm.rm.withRevision(ctx, contractID, reviseFn)
-}
 
 func NewCandidateContract(goodForAppend, goodForFunding, goodForRefresh error) CandidateContract {
 	return CandidateContract{

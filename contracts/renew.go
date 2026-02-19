@@ -65,7 +65,7 @@ func (cm *ContractManager) renewContract(ctx context.Context, contract Contract,
 		defer cancel()
 
 		var res rhp.RPCRenewContractResult
-		err = cm.rev.withRevision(renewCtx, contract.ID, func(rev rhp.ContractRevision) (rhp.ContractRevision, proto.Usage, error) {
+		err = cm.rev.WithRevision(renewCtx, contract.ID, func(rev rhp.ContractRevision) (rhp.ContractRevision, proto.Usage, error) {
 			cappedCollateral := collateral
 			estimatedRenewal, _ := proto.RenewContract(rev.Revision, settings.Prices, proto.RPCRenewContractParams{
 				Allowance:   allowance,

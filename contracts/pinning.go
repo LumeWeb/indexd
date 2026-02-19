@@ -126,7 +126,7 @@ func (cm *ContractManager) pinSectors(ctx context.Context, hostKey types.PublicK
 
 		var res rhp.RPCAppendSectorsResult
 		var attempted int
-		err = cm.rev.withRevision(ctx, contractID, func(contract rhp.ContractRevision) (_ rhp.ContractRevision, _ proto.Usage, err error) {
+		err = cm.rev.WithRevision(ctx, contractID, func(contract rhp.ContractRevision) (_ rhp.ContractRevision, _ proto.Usage, err error) {
 			if contract.Revision.Filesize >= maxSize {
 				return rhp.ContractRevision{}, proto.Usage{}, fmt.Errorf("contract is too large, %d > %d: %w", contract.Revision.Filesize, maxSize, ErrContractMaxSize)
 			}

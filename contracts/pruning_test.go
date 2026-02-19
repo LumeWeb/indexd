@@ -13,6 +13,7 @@ import (
 	"go.sia.tech/indexd/contracts"
 	"go.sia.tech/indexd/hosts"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest"
 )
 
 func TestPerformContractPruningOnHost(t *testing.T) {
@@ -144,7 +145,8 @@ func TestPerformContractPruningOnHost(t *testing.T) {
 	store.scheduleContractsForPruningHelper(t)
 
 	// prepare contract manager
-	cm := contracts.NewTestContractManager(types.PublicKey{}, nil, nil, cmMock, store, mock, nil, hmMock, nil, nil, contracts.WithSubmissionBuffer(1))
+	rev := contracts.NewRevisionManager(mock, cmMock, store, 1, zaptest.NewLogger(t))
+	cm := contracts.NewTestContractManager(types.PublicKey{}, nil, nil, cmMock, store, mock, nil, rev, hmMock, nil, nil)
 
 	// prune contracts on h1
 	err := cm.PerformContractPruningOnHost(context.Background(), h1, zap.NewNop())
@@ -300,7 +302,8 @@ func TestPruneContractBatchBoundary(t *testing.T) {
 	// FreeSectors removes sectors in the first batch, subsequent batches must
 	// account for the reduced sector count to avoid requesting out-of-bounds
 	// ranges from the host
-	cm := contracts.NewTestContractManager(types.PublicKey{}, nil, nil, cmMock, store, mock, nil, hmMock, nil, nil, contracts.WithSectorRootsBatchSize(3), contracts.WithSubmissionBuffer(1))
+	rev := contracts.NewRevisionManager(mock, cmMock, store, 1, zaptest.NewLogger(t))
+	cm := contracts.NewTestContractManager(types.PublicKey{}, nil, nil, cmMock, store, mock, nil, rev, hmMock, nil, nil, contracts.WithSectorRootsBatchSize(3))
 
 	err := cm.PerformContractPruningOnHost(context.Background(), h, zap.NewNop())
 	if err != nil {

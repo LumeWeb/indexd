@@ -111,7 +111,8 @@ func TestFunder(t *testing.T) {
 	}
 
 	// prepare funder
-	f := NewFunder(hc, hc, nil, &mockChainManager{}, &mockStore{target: target}, zap.NewNop(), WithRevisionSubmissionBuffer(1))
+	rev := NewRevisionManager(hc, &mockChainManager{}, &mockStore{target: target}, 1, zap.NewNop())
+	f := NewFunder(hc, rev, nil, &mockChainManager{}, zap.NewNop())
 
 	// assert contract is marked as drained if it is out of funds
 	funded, drained, err := f.FundAccounts(context.Background(), host, []types.FileContractID{{1}}, accs, target, zap.NewNop())

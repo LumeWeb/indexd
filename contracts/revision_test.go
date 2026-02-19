@@ -45,7 +45,7 @@ func TestWithRevision(t *testing.T) {
 	store.addTestHost(t, goodHost(1))
 
 	latest := &latestRevisionMock{}
-	rm := contracts.NewTestRevisionManager(latest, chain, store, revisionSubmissionBuffer, zaptest.NewLogger(t))
+	rm := contracts.NewRevisionManager(latest, chain, store, revisionSubmissionBuffer, zaptest.NewLogger(t))
 
 	addContract := func(fcid types.FileContractID) {
 		t.Helper()
@@ -147,7 +147,7 @@ func TestWithRevision(t *testing.T) {
 	fcid5 := types.FileContractID{5, 0, 0}
 	addContract(fcid5)
 	errStore := &persistErrorStore{testStore: store, errorContractID: fcid5}
-	rmErr := contracts.NewTestRevisionManager(latest, chain, errStore, revisionSubmissionBuffer, zaptest.NewLogger(t))
+	rmErr := contracts.NewRevisionManager(latest, chain, errStore, revisionSubmissionBuffer, zaptest.NewLogger(t))
 	err = rmErr.WithRevision(context.Background(), fcid5, func(contract rhp.ContractRevision) (rhp.ContractRevision, proto.Usage, error) {
 		contract.Revision.RevisionNumber = update
 		return contract, proto.Usage{}, nil

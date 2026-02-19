@@ -131,7 +131,7 @@ func (cm *ContractManager) pruneContract(ctx context.Context, contractID types.F
 		}
 
 		var roots []types.Hash256
-		err = cm.rev.withRevision(ctx, contractID, func(rev rhp.ContractRevision) (rhp.ContractRevision, proto.Usage, error) {
+		err = cm.rev.WithRevision(ctx, contractID, func(rev rhp.ContractRevision) (rhp.ContractRevision, proto.Usage, error) {
 			res, err := cm.client.SectorRoots(ctx, cm.signer, cm.chain, prices, rev, offset, length)
 			if err != nil {
 				return rhp.ContractRevision{}, proto.Usage{}, err
@@ -173,7 +173,7 @@ func (cm *ContractManager) pruneContract(ctx context.Context, contractID types.F
 			return pruned, fmt.Errorf("failed to get host prices: %w", err)
 		}
 
-		err = cm.rev.withRevision(ctx, contractID, func(rev rhp.ContractRevision) (rhp.ContractRevision, proto.Usage, error) {
+		err = cm.rev.WithRevision(ctx, contractID, func(rev rhp.ContractRevision) (rhp.ContractRevision, proto.Usage, error) {
 			res, err := cm.client.FreeSectors(ctx, cm.signer, cm.chain, prices, rev, indices)
 			if err != nil {
 				return rhp.ContractRevision{}, proto.Usage{}, err

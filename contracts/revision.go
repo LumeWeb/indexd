@@ -14,11 +14,11 @@ import (
 )
 
 const (
-	// defaultRevisionSubmissionBuffer is a buffer that mainnet hosts apply on
+	// DefaultRevisionSubmissionBuffer is a buffer that mainnet hosts apply on
 	// the contract's proof height before they consider a contract revisable, so
 	// if the current block height plus the buffer exceed the proof height, the
 	// contract is not revisable.
-	defaultRevisionSubmissionBuffer = 144
+	DefaultRevisionSubmissionBuffer = 144
 )
 
 var (
@@ -49,9 +49,9 @@ var (
 )
 
 type (
-	// latestRevisionClient defines the interface for fetching the latest
+	// LatestRevisionClient defines the interface for fetching the latest
 	// revision from a host.
-	latestRevisionClient interface {
+	LatestRevisionClient interface {
 		LatestRevision(ctx context.Context, hostKey types.PublicKey, contractID types.FileContractID) (proto.RPCLatestRevisionResponse, error)
 	}
 
@@ -63,10 +63,10 @@ type (
 		MarkContractBad(contractID types.FileContractID) error
 	}
 
-	// revisionManager handles contract revision management including syncing
+	// RevisionManager handles contract revision management including syncing
 	// with the host when revisions become out of sync.
-	revisionManager struct {
-		client latestRevisionClient
+	RevisionManager struct {
+		client LatestRevisionClient
 		chain  ChainManager
 		store  RevisionStore
 		buffer uint64
@@ -74,8 +74,9 @@ type (
 	}
 )
 
-func newRevisionManager(client latestRevisionClient, chain ChainManager, store RevisionStore, buffer uint64, log *zap.Logger) *revisionManager {
-	return &revisionManager{
+// NewRevisionManager creates a new RevisionManager.
+func NewRevisionManager(client LatestRevisionClient, chain ChainManager, store RevisionStore, buffer uint64, log *zap.Logger) *RevisionManager {
+	return &RevisionManager{
 		client: client,
 		chain:  chain,
 		store:  store,
@@ -84,7 +85,7 @@ func newRevisionManager(client latestRevisionClient, chain ChainManager, store R
 	}
 }
 
-func (rm *revisionManager) syncRevision(ctx context.Context, contractID types.FileContractID, revision types.V2FileContract) (types.V2FileContract, bool, error) {
+func (rm *RevisionManager) syncRevision(ctx context.Context, contractID types.FileContractID, revision types.V2FileContract) (types.V2FileContract, bool, error) {
 	// apply a sane timeout for syncing the revision
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
@@ -123,12 +124,12 @@ func (rm *revisionManager) syncRevision(ctx context.Context, contractID types.Fi
 	return resp.Contract, resp.Renewed, nil
 }
 
-// withRevision retrieves the current revision of the specified contract ID from
+// WithRevision retrieves the current revision of the specified contract ID from
 // the database and executes the provided revise function with it. If the host
 // reports an invalid signature, suggesting the local revision is out of sync,
 // it will synchronize with the host and retry the function using the updated
 // revision. Therefore, the revise function must be idempotent.
-func (rm *revisionManager) withRevision(ctx context.Context, contractID types.FileContractID, reviseFn func(contract rhp.ContractRevision) (rhp.ContractRevision, proto.Usage, error)) error {
+func (rm *RevisionManager) WithRevision(ctx context.Context, contractID types.FileContractID, reviseFn func(contract rhp.ContractRevision) (rhp.ContractRevision, proto.Usage, error)) error {
 	cs := rm.chain.TipState()
 	bh := cs.Index.Height
 

@@ -85,7 +85,6 @@ func defaultIndexerCfg(log *zap.Logger) *indexerCfg {
 			contracts.WithLogger(log.Named("contracts")),
 			contracts.WithMaintenanceFrequency(500 * time.Millisecond),
 			contracts.WithMinHostDistance(0), // disable location checks in tests
-			contracts.WithSubmissionBuffer(1),
 			contracts.WithSyncPollInterval(500 * time.Millisecond),
 			contracts.WithSectorRootsBatchSize(5), // small batch size for testing
 		},
@@ -175,8 +174,9 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger, opts ...Indexer
 		t.Fatalf("failed to create accounts manager: %v", err)
 	}
 
-	f := contracts.NewFunder(client2, client2, signer, c.cm, store, log.Named("funder"), contracts.WithRevisionSubmissionBuffer(1))
-	contracts, err := contracts.NewManager(walletKey, am, f, c.cm, store, client2, signer, hm, s, wm, cfg.contractOpts...)
+	rev := contracts.NewRevisionManager(client2, c.cm, store, 1, log.Named("revision"))
+	f := contracts.NewFunder(client2, rev, signer, c.cm, log.Named("funder"))
+	contracts, err := contracts.NewManager(walletKey, am, f, c.cm, store, client2, signer, rev, hm, s, wm, cfg.contractOpts...)
 	if err != nil {
 		t.Fatalf("failed to create contract manager: %v", err)
 	}

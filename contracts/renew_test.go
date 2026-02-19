@@ -8,6 +8,7 @@ import (
 	"go.sia.tech/indexd/contracts"
 	"go.sia.tech/indexd/hosts"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest"
 )
 
 func TestPerformContractRenewals(t *testing.T) {
@@ -55,7 +56,8 @@ func TestPerformContractRenewals(t *testing.T) {
 	mock := newClientMock()
 	renterKey := types.PublicKey{1, 2, 3, 4, 5}
 	wallet := &walletMock{}
-	contractsMgr := contracts.NewTestContractManager(renterKey, amMock, nil, cmMock, store, mock, nil, hmMock, syncerMock, wallet, contracts.WithSubmissionBuffer(1))
+	rev := contracts.NewRevisionManager(mock, cmMock, store, 1, zaptest.NewLogger(t))
+	contractsMgr := contracts.NewTestContractManager(renterKey, amMock, nil, cmMock, store, mock, nil, rev, hmMock, syncerMock, wallet)
 
 	assertRenewal := func(renewedFrom types.FileContractID, proofHeight uint64, call renewContractCall) {
 		t.Helper()
@@ -162,7 +164,8 @@ func TestRenewalAllowance(t *testing.T) {
 	mock := newClientMock()
 	renterKey := types.PublicKey{1, 2, 3, 4, 5}
 	wallet := &walletMock{}
-	cm := contracts.NewTestContractManager(renterKey, amMock, nil, cmMock, store, mock, nil, hmMock, syncerMock, wallet, contracts.WithSubmissionBuffer(1))
+	rev := contracts.NewRevisionManager(mock, cmMock, store, 1, zaptest.NewLogger(t))
+	cm := contracts.NewTestContractManager(renterKey, amMock, nil, cmMock, store, mock, nil, rev, hmMock, syncerMock, wallet)
 
 	assertRenewal := func(allowance types.Currency, call renewContractCall) {
 		t.Helper()

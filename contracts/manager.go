@@ -202,7 +202,7 @@ type (
 
 		client    HostClient
 		signer    rhp.FormContractSigner
-		rev       *revisionManager
+		rev       *RevisionManager
 		renterKey types.PublicKey
 
 		triggerFundingChan     chan bool
@@ -230,7 +230,6 @@ type (
 func WithLogger(l *zap.Logger) ContractManagerOpt {
 	return func(cm *ContractManager) {
 		cm.log = l
-		cm.rev.log = l.Named("revision")
 	}
 }
 
@@ -259,17 +258,6 @@ func WithSectorRootsBatchSize(batchSize uint64) ContractManagerOpt {
 	}
 	return func(cm *ContractManager) {
 		cm.sectorRootsBatchSize = batchSize
-	}
-}
-
-// WithSubmissionBuffer sets the revision submission buffer for the
-// ContractManager.
-func WithSubmissionBuffer(buffer uint64) ContractManagerOpt {
-	if buffer == 0 {
-		panic("revisionSubmissionBuffer mustn't be 0") // developer error
-	}
-	return func(cm *ContractManager) {
-		cm.rev.buffer = buffer
 	}
 }
 
@@ -480,7 +468,7 @@ func (cm *ContractManager) Close() error {
 	return nil
 }
 
-func newContractManager(renterKey types.PublicKey, accounts AccountManager, accountFunder AccountFunder, chain ChainManager, store Store, client HostClient, signer rhp.FormContractSigner, hosts HostManager, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) *ContractManager {
+func newContractManager(renterKey types.PublicKey, accounts AccountManager, accountFunder AccountFunder, chain ChainManager, store Store, client HostClient, signer rhp.FormContractSigner, rev *RevisionManager, hosts HostManager, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) *ContractManager {
 	cm := &ContractManager{
 		accounts:      accounts,
 		accountFunder: accountFunder,
@@ -493,7 +481,7 @@ func newContractManager(renterKey types.PublicKey, accounts AccountManager, acco
 
 		client: client,
 		signer: signer,
-		rev:    newRevisionManager(client, chain, store, defaultRevisionSubmissionBuffer, zap.NewNop()),
+		rev:    rev,
 
 		renterKey: renterKey,
 
@@ -525,8 +513,8 @@ func newContractManager(renterKey types.PublicKey, accounts AccountManager, acco
 // NewManager creates a new contract manager. It is responsible for forming and
 // renewing contracts as well as any interactions with hosts that require
 // contracts.
-func NewManager(renterKey types.PrivateKey, accountManager AccountManager, accountFunder AccountFunder, chainManager ChainManager, store Store, client HostClient, signer rhp.FormContractSigner, hm HostManager, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) (*ContractManager, error) {
-	cm := newContractManager(renterKey.PublicKey(), accountManager, accountFunder, chainManager, store, client, signer, hm, syncer, wallet, opts...)
+func NewManager(renterKey types.PrivateKey, accountManager AccountManager, accountFunder AccountFunder, chainManager ChainManager, store Store, client HostClient, signer rhp.FormContractSigner, rev *RevisionManager, hm HostManager, syncer Syncer, wallet Wallet, opts ...ContractManagerOpt) (*ContractManager, error) {
+	cm := newContractManager(renterKey.PublicKey(), accountManager, accountFunder, chainManager, store, client, signer, rev, hm, syncer, wallet, opts...)
 
 	ctx, cancel, err := cm.tg.AddContext(context.Background())
 	if err != nil {

@@ -25,39 +25,21 @@ type (
 		client FunderHostClient
 		signer rhp.ContractSigner
 		chain  ChainManager
-		rev    *revisionManager
+		rev    *RevisionManager
 
 		log *zap.Logger
 	}
 )
 
-// FunderOption is a functional option type for configuring the Funder.
-type FunderOption func(*Funder)
-
-// WithRevisionSubmissionBuffer sets the revision submission buffer for the
-// Funder.
-func WithRevisionSubmissionBuffer(buffer uint64) FunderOption {
-	if buffer == 0 {
-		panic("revisionSubmissionBuffer mustn't be 0") // developer error
-	}
-	return func(f *Funder) {
-		f.rev.buffer = buffer
-	}
-}
-
 // NewFunder creates a new Funder.
-func NewFunder(client FunderHostClient, latestRevisionClient latestRevisionClient, signer rhp.ContractSigner, chain ChainManager, store RevisionStore, log *zap.Logger, opts ...FunderOption) *Funder {
-	f := &Funder{
+func NewFunder(client FunderHostClient, rev *RevisionManager, signer rhp.ContractSigner, chain ChainManager, log *zap.Logger) *Funder {
+	return &Funder{
 		client: client,
 		signer: signer,
 		chain:  chain,
-		rev:    newRevisionManager(latestRevisionClient, chain, store, defaultRevisionSubmissionBuffer, log),
+		rev:    rev,
 		log:    log,
 	}
-	for _, opt := range opts {
-		opt(f)
-	}
-	return f
 }
 
 // FundAccounts tops up the provided accounts to the target balance using the
@@ -89,7 +71,7 @@ func (f *Funder) FundAccounts(ctx context.Context, host hosts.Host, contractIDs 
 
 		var res rhp.RPCReplenishAccountsResult
 		var err error
-		err = f.rev.withRevision(ctx, contractID, func(contract rhp.ContractRevision) (rhp.ContractRevision, proto.Usage, error) {
+		err = f.rev.WithRevision(ctx, contractID, func(contract rhp.ContractRevision) (rhp.ContractRevision, proto.Usage, error) {
 			if contract.Revision.RenterOutput.Value.Cmp(target) < 0 {
 				return rhp.ContractRevision{}, proto.Usage{}, ErrContractInsufficientFunds
 			}

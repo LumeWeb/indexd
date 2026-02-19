@@ -158,7 +158,7 @@ func (cm *ContractManager) refreshContract(ctx context.Context, contract Contrac
 		allowance, collateral := contractFunding(host.Settings, contract.Size, fundTarget, duration)
 
 		var res rhp.RPCRefreshContractResult
-		err := cm.rev.withRevision(refreshCtx, contract.ID, func(rev rhp.ContractRevision) (rhp.ContractRevision, proto.Usage, error) {
+		err := cm.rev.WithRevision(refreshCtx, contract.ID, func(rev rhp.ContractRevision) (rhp.ContractRevision, proto.Usage, error) {
 			if host.Settings.ProtocolVersion.Cmp(rhp.ProtocolVersion500) < 0 {
 				return rhp.ContractRevision{}, proto.Usage{}, fmt.Errorf("host does not support contract refresh, protocol version %s < %s", host.Settings.ProtocolVersion, rhp.ProtocolVersion500)
 			}
