@@ -19,6 +19,11 @@ func TestCORSOptions(t *testing.T) {
 			"GET /auth/connect/:id/status":    panicHandler,
 			"POST /auth/connect/:id/register": panicHandler,
 			"GET /auth/check":                 panicHandler,
+
+			// this route overlaps with a static handler and will panic
+			// if two OPTIONS handlers are added.
+			"GET /slabs/:id":    panicHandler,
+			"POST /slabs/prune": panicHandler,
 		},
 		map[string]jape.Handler{
 			// both disabled routes have the same path but different methods,
