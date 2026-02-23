@@ -667,51 +667,40 @@ func NewAPI(advertiseURL string, store Store, am Accounts, contracts Contracts, 
 		}
 	}
 
-	wrapCORS := func(h jape.Handler) jape.Handler {
-		return func(jc jape.Context) {
-			jc.ResponseWriter.Header().Set("Access-Control-Allow-Origin", "*")
-			jc.ResponseWriter.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE")
-			jc.ResponseWriter.Header().Set("Access-Control-Allow-Headers", "*")
-			if jc.Request.Method == http.MethodOptions {
-				jc.ResponseWriter.WriteHeader(http.StatusNoContent)
-				return
-			}
-			h(jc)
-		}
-	}
-
-	return jape.Mux(map[string]jape.Handler{
-		"GET /account": wrapCORS(wrapSignedAuth(a.handleGETAccount)),
+	return corsMux(map[string]jape.Handler{
+		"GET /account": wrapSignedAuth(a.handleGETAccount),
 
 		// auth is a multi-step process designed to protect privacy while allowing arbitrary apps to connect:
 		// 1. app requests connection by POSTing to /auth/connect
-		"POST /auth/connect": wrapCORS(a.handleAuthRequest),
 		// 2. user is redirected to /auth/connect/:requestID to approve or reject the connection.
 		// Approval requires the user to enter their indexd credentials.
-		"GET /auth/connect/:requestID": a.handleGETAuthConnectUI,
 		// 3. web UI sends approval/rejection by POSTing to /auth/connect/:requestID
-		"POST /auth/connect/:requestID": wrapBasicAuth(a.handlePOSTAuthConnect), // accept/reject
 		// 4. app polls /auth/connect/:requestID/status to check if the user approved or rejected the connection.
 		// If the user approves, the app receives a shared secret.
-		"GET /auth/connect/:requestID/status": wrapCORS(a.handleGETAuthConnectStatus),
 		// 5. once approved, the app derives an ed25519 keypair using `HKDF(user's mnemonic, its app ID, user secret)`
 		// app registers the public key with indexd using a request signed with the derived private key
-		"POST /auth/connect/:requestID/register": wrapCORS(a.handleAuthRegister),
-		// basic auth endpoint to check if an app key is already approved
-		"GET /auth/check": wrapCORS(wrapSignedAuth(a.handleGETAuthCheck)),
+		"POST /auth/connect":                     a.handleAuthRequest,
+		"GET /auth/connect/:requestID/status":    a.handleGETAuthConnectStatus,
+		"POST /auth/connect/:requestID/register": a.handleAuthRegister,
+		"GET /auth/check":                        wrapSignedAuth(a.handleGETAuthCheck),
 
-		"GET /hosts": wrapCORS(wrapSignedAuth(a.handleGETHosts)),
+		"GET /hosts": wrapSignedAuth(a.handleGETHosts),
 
-		"GET /objects":             wrapCORS(wrapSignedAuth(a.handleGETObjects)),
-		"GET /objects/:key":        wrapCORS(wrapSignedAuth(a.handleGETObject)),
-		"GET /objects/:key/shared": wrapCORS(wrapSignedAuth(a.handleGETObjectShared)),
-		"POST /objects":            wrapCORS(wrapSignedAuth(a.handlePOSTObjects)),
-		"DELETE /objects/:key":     wrapCORS(wrapSignedAuth(a.handleDELETEObjects)),
+		"GET /objects":             wrapSignedAuth(a.handleGETObjects),
+		"GET /objects/:key":        wrapSignedAuth(a.handleGETObject),
+		"GET /objects/:key/shared": wrapSignedAuth(a.handleGETObjectShared),
+		"POST /objects":            wrapSignedAuth(a.handlePOSTObjects),
+		"DELETE /objects/:key":     wrapSignedAuth(a.handleDELETEObjects),
 
-		"GET /slabs":            wrapCORS(wrapSignedAuth(a.handleGETSlabs)),
-		"POST /slabs":           wrapCORS(wrapSignedAuth(a.handlePOSTSlabs)),
-		"POST /slabs/prune":     wrapCORS(wrapSignedAuth(a.handlePOSTSlabsPrune)),
-		"GET /slabs/:slabid":    wrapCORS(wrapSignedAuth(a.handleGETSlab)),
-		"DELETE /slabs/:slabid": wrapCORS(wrapSignedAuth(a.handleDELETESlab)),
+		"GET /slabs":            wrapSignedAuth(a.handleGETSlabs),
+		"POST /slabs":           wrapSignedAuth(a.handlePOSTSlabs),
+		"POST /slabs/prune":     wrapSignedAuth(a.handlePOSTSlabsPrune),
+		"GET /slabs/:slabid":    wrapSignedAuth(a.handleGETSlab),
+		"DELETE /slabs/:slabid": wrapSignedAuth(a.handleDELETESlab),
+	}, map[string]jape.Handler{
+		// CORS is disabled on these routes because we don't want to encourage programmatic access. It can't be
+		// blocked entirely, but it's less convenient without CORS support.
+		"GET /auth/connect/:requestID":  a.handleGETAuthConnectUI,               // UI for accept/reject connection requests
+		"POST /auth/connect/:requestID": wrapBasicAuth(a.handlePOSTAuthConnect), // API for accept/reject connection requests
 	}), nil
 }

@@ -47,7 +47,8 @@ func (s *Store) MarkSectorsLost(hostKey types.PublicKey, roots []types.Hash256) 
 		rows, err := tx.Query(ctx, `
 			SELECT id, contract_sectors_map_id
 			FROM sectors
-			WHERE host_id = $1 AND sector_root = ANY($2)`, hostID, sqlRoots)
+			WHERE host_id = $1 AND sector_root = ANY($2)
+			FOR UPDATE`, hostID, sqlRoots)
 		if err != nil {
 			return fmt.Errorf("failed to query sectors: %w", err)
 		}
@@ -185,6 +186,7 @@ func (s *Store) markFailingSectorsLostBatch(hostKey types.PublicKey, maxChecks, 
 			FROM sectors
 			WHERE host_id = $1 AND consecutive_failed_checks >= $2
 			LIMIT $3
+			FOR UPDATE
 		`, hostID, maxChecks, batchSize)
 		if err != nil {
 			return fmt.Errorf("failed to mark failing sectors as lost: %w", err)
@@ -234,7 +236,7 @@ func (s *Store) PinSlabs(account proto.Account, nextIntegrityCheck time.Time, to
 			return err
 		}
 
-		hostRows, err := tx.Query(ctx, `SELECT h.public_key FROM contracts c INNER JOIN hosts h ON c.host_id = h.id WHERE state IN (0,1) AND renewed_to IS NULL AND good`)
+		hostRows, err := tx.Query(ctx, `WITH globals AS (SELECT scanned_height FROM global_settings) SELECT h.public_key FROM contracts c INNER JOIN hosts h ON c.host_id = h.id CROSS JOIN globals WHERE state IN (0,1) AND renewed_to IS NULL AND good AND proof_height > globals.scanned_height`)
 		if err != nil {
 			return fmt.Errorf("failed to get good hosts: %w", err)
 		}
@@ -648,7 +650,8 @@ func (s *Store) PinSectors(contractID types.FileContractID, roots []types.Hash25
 		rows, err := tx.Query(ctx, `
 			SELECT id, contract_sectors_map_id
 			FROM sectors
-			WHERE sector_root = ANY($1) AND (contract_sectors_map_id IS NULL OR contract_sectors_map_id != $2)`, sqlRoots, contractMapID)
+			WHERE sector_root = ANY($1) AND (contract_sectors_map_id IS NULL OR contract_sectors_map_id != $2)
+			FOR UPDATE`, sqlRoots, contractMapID)
 		if err != nil {
 			return fmt.Errorf("failed to query sectors: %w", err)
 		}
@@ -680,7 +683,21 @@ func (s *Store) PinSectors(contractID types.FileContractID, roots []types.Hash25
 // MarkSectorsUnpinnable sets the host ID for sectors that haven't been pinned
 // by the threshold time to NULL.
 func (s *Store) MarkSectorsUnpinnable(threshold time.Time) error {
+	const batchSize = 1000
+	for {
+		done, err := s.markSectorsUnpinnableBatch(threshold, batchSize)
+		if err != nil {
+			return err
+		} else if done {
+			return nil
+		}
+	}
+}
+
+func (s *Store) markSectorsUnpinnableBatch(threshold time.Time, limit uint64) (bool, error) {
+	var done bool
 	err := s.transaction(func(ctx context.Context, tx *txn) error {
+		done = false // reset on retry
 		rows, err := tx.Query(ctx, `
 			WITH selected AS (
 				SELECT id, host_id
@@ -688,6 +705,8 @@ func (s *Store) MarkSectorsUnpinnable(threshold time.Time) error {
 				WHERE host_id IS NOT NULL
 					AND contract_sectors_map_id IS NULL
 					AND uploaded_at <= $1
+				LIMIT $2
+				FOR UPDATE
 			), updated AS (
 				UPDATE sectors s
 				SET host_id = NULL, consecutive_failed_checks = 0
@@ -695,7 +714,7 @@ func (s *Store) MarkSectorsUnpinnable(threshold time.Time) error {
 				WHERE s.id = selected.id
 				RETURNING selected.host_id
 			)
-			SELECT host_id, COUNT(*) FROM updated GROUP BY host_id`, threshold)
+			SELECT host_id, COUNT(*) FROM updated GROUP BY host_id`, threshold, limit)
 		if err != nil {
 			return fmt.Errorf("failed to prune unpinnable sectors: %w", err)
 		}
@@ -714,6 +733,7 @@ func (s *Store) MarkSectorsUnpinnable(threshold time.Time) error {
 		if err := rows.Err(); err != nil {
 			return err
 		} else if totalUnpinnable == 0 {
+			done = true
 			return nil
 		}
 
@@ -726,7 +746,7 @@ func (s *Store) MarkSectorsUnpinnable(threshold time.Time) error {
 		}
 		return nil
 	})
-	return err
+	return done, err
 }
 
 // UnpinnedSectors returns up to 'limit' sectors which have been uploaded to a host but
@@ -847,7 +867,9 @@ func (s *Store) MigrateSector(root types.Hash256, hostKey types.PublicKey) (migr
 		err := tx.QueryRow(ctx, `
 			SELECT id, host_id, contract_sectors_map_id
 			FROM sectors
-			WHERE sector_root = $1`, sqlHash256(root)).Scan(&sectorID, &oldHostID, &contractMapID)
+			WHERE sector_root = $1
+			FOR UPDATE
+		`, sqlHash256(root)).Scan(&sectorID, &oldHostID, &contractMapID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil // not migrated
 		} else if err != nil {

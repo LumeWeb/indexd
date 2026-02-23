@@ -233,16 +233,20 @@ func (s *Store) Contracts(offset, limit int, queryOpts ...contracts.ContractQuer
 		contracts = contracts[:0] // reuse same slice if transaction retries
 
 		rows, err := tx.Query(ctx, fmt.Sprintf(`
+WITH globals AS (
+	SELECT scanned_height FROM global_settings
+)
 SELECT c.contract_id, c.formation, h.public_key, c.proof_height, c.expiration_height, c.renewed_from, c.renewed_to, c.revision_number, c.state, c.capacity, c.size, c.contract_price, c.initial_allowance, c.remaining_allowance, c.miner_fee, c.used_collateral, c.total_collateral, c.good, c.append_sector_spending, c.free_sector_spending, c.fund_account_spending, c.sector_roots_spending, c.next_prune, c.last_broadcast_attempt
 FROM contracts c
 INNER JOIN hosts h ON c.host_id = h.id
+CROSS JOIN globals
 WHERE
 	-- good filter
 	(($1::boolean IS NULL) OR ($1::boolean = c.good)) AND
 	-- revisable filter
 	(
 		$2::boolean IS NULL OR
-		($2::boolean = TRUE AND c.state IN (0,1) AND c.renewed_to IS NULL) OR
+		($2::boolean = TRUE AND c.state IN (0,1) AND c.renewed_to IS NULL AND c.proof_height > globals.scanned_height) OR
 		($2::boolean = FALSE AND c.state IN (2,3,4))
 	)
 	-- ID filter
@@ -329,9 +333,13 @@ func (s *Store) ContractsForBroadcasting(minBroadcast time.Time, limit int) ([]t
 		fcids = fcids[:0] // reuse same slice if transaction retries
 
 		rows, err := tx.Query(ctx, `
+			WITH globals AS (
+				SELECT scanned_height FROM global_settings
+			)
 			SELECT c.contract_id
 			FROM contracts c
-			WHERE c.state IN (0, 1) AND c.renewed_to IS NULL AND c.last_broadcast_attempt < $1
+			CROSS JOIN globals
+			WHERE c.state IN (0, 1) AND c.renewed_to IS NULL AND c.last_broadcast_attempt < $1 AND c.proof_height > globals.scanned_height
 			ORDER BY c.last_broadcast_attempt ASC
 			LIMIT $2`, minBroadcast, limit)
 		if err != nil {
@@ -361,14 +369,19 @@ func (s *Store) ContractsForFunding(hk types.PublicKey, limit int) ([]types.File
 		fcids = fcids[:0] // reuse same slice if transaction retries
 
 		rows, err := tx.Query(ctx, `
+WITH globals AS (
+	SELECT scanned_height FROM global_settings
+)
 SELECT c.contract_id
 FROM contracts c
+CROSS JOIN globals
 WHERE
 	c.host_id = (SELECT id FROM hosts WHERE public_key = $1) AND
 	c.state IN (0, 1) AND
 	c.renewed_to IS NULL AND
 	c.good AND
-	c.remaining_allowance > 0
+	c.remaining_allowance > 0 AND
+	c.proof_height > globals.scanned_height
 ORDER BY c.remaining_allowance DESC
 LIMIT $2
 `, sqlPublicKey(hk), limit)
@@ -400,15 +413,20 @@ func (s *Store) ContractsForPinning(hk types.PublicKey, maxContractSize uint64) 
 
 		// covered by index contracts_host_id_active_good_idx
 		rows, err := tx.Query(ctx, `
+WITH globals AS (
+	SELECT scanned_height FROM global_settings
+)
 SELECT c.contract_id
 FROM contracts c
+CROSS JOIN globals
 WHERE
 	c.host_id = (SELECT id FROM hosts WHERE public_key = $1) AND
 	c.state IN (0, 1) AND
 	c.renewed_to IS NULL AND
 	c.good AND
 	c.remaining_allowance > 0 AND
-	c.size < $2
+	c.size < $2 AND
+	c.proof_height > globals.scanned_height
 ORDER BY (c.capacity - c.size) DESC`, sqlPublicKey(hk), maxContractSize)
 		if err != nil {
 			return fmt.Errorf("failed to fetch contracts for pinning: %w", err)
@@ -436,15 +454,20 @@ func (s *Store) ContractsForPruning(hk types.PublicKey) ([]types.FileContractID,
 		fcids = fcids[:0] // reuse same slice if transaction retries
 
 		rows, err := tx.Query(ctx, `
+WITH globals AS (
+	SELECT scanned_height FROM global_settings
+)
 SELECT c.contract_id
 FROM contracts c
+CROSS JOIN globals
 WHERE
 	c.host_id = (SELECT id FROM hosts WHERE public_key = $1) AND
 	c.state IN (0, 1) AND
 	c.renewed_to IS NULL AND
 	c.good AND
 	c.remaining_allowance > 0 AND
-	c.next_prune < NOW()
+	c.next_prune < NOW() AND
+	c.proof_height > globals.scanned_height
 ORDER BY c.size DESC`, sqlPublicKey(hk))
 		if err != nil {
 			return fmt.Errorf("failed to fetch contracts for pruning: %w", err)
@@ -716,17 +739,10 @@ func (s *Store) DeleteContract(contractID types.FileContractID) error {
 			return fmt.Errorf("failed to get contract sectors map ID: %w", err)
 		}
 
-		// count the number of sectors pinned to this contract
-		var pinned, hostID int64
-		err = tx.QueryRow(ctx, `SELECT COUNT(*), any_value(host_id) FROM sectors WHERE contract_sectors_map_id = $1`, contractMapID).Scan(&pinned, &hostID)
-		if err != nil {
-			return fmt.Errorf("failed to count pinned sectors: %w", err)
-		}
-
 		// unpin all sectors by setting contract_sectors_map_id to NULL and
 		// updating uploaded_at to prevent MarkSectorsUnpinnable from immediately
 		// marking them as unpinnable
-		_, err = tx.Exec(ctx, `UPDATE sectors SET contract_sectors_map_id = NULL, uploaded_at = NOW() WHERE contract_sectors_map_id = $1`, contractMapID)
+		res, err := tx.Exec(ctx, `UPDATE sectors SET contract_sectors_map_id = NULL, uploaded_at = NOW() WHERE contract_sectors_map_id = $1`, contractMapID)
 		if err != nil {
 			return fmt.Errorf("failed to unpin sectors: %w", err)
 		}
@@ -738,7 +754,13 @@ func (s *Store) DeleteContract(contractID types.FileContractID) error {
 		}
 
 		// update stats
-		if pinned > 0 {
+		if pinned := res.RowsAffected(); pinned > 0 {
+			var hostID int64
+			err = tx.QueryRow(ctx, `SELECT host_id FROM contracts WHERE contract_id = $1`, sqlHash256(contractID)).Scan(&hostID)
+			if err != nil {
+				return fmt.Errorf("failed to get host ID: %w", err)
+			}
+
 			if err := incrementNumPinnedSectors(ctx, tx, -pinned); err != nil {
 				return fmt.Errorf("failed to update pinned sectors stat: %w", err)
 			} else if err := incrementNumUnpinnedSectors(ctx, tx, pinned); err != nil {

@@ -165,30 +165,58 @@ func (s *Store) HostStats(offset, limit int) ([]hosts.HostStats, error) {
 		stats = stats[:0] // reuse same slice if transaction retries
 
 		rows, err := tx.Query(ctx, `
-			WITH globals AS (
-				SELECT scanned_height FROM global_settings
-			),
+			WITH `+sqlGlobalsCTE+`,
 			selected_hosts AS (
 				SELECT
-					h.id,
-					h.public_key,
-					h.lost_sectors,
-					h.unpinned_sectors,
-					h.usage_account_funding,
-					h.usage_total_spent,
-					h.settings_protocol_version,
-					h.settings_release,
-					h.scans,
-					h.scans_failed,
-					hb.public_key IS NOT NULL AS blocked,
-					COALESCE(hb.reasons, ARRAY[]::TEXT[]) AS blocked_reasons,
-					h.stuck_since
-				FROM hosts h
-				LEFT JOIN hosts_blocklist hb ON hb.public_key = h.public_key
-				WHERE h.usage_total_spent > 0
-				ORDER BY h.usage_total_spent DESC
-				OFFSET $1
-				LIMIT $2
+					host.*,
+					COALESCE(NOT host.blocked AND (`+sqlUsabilityFilter+`
+					) AND EXISTS (
+						SELECT 1
+						FROM contracts
+						WHERE host_id = host.id
+							AND state IN (0,1)
+							AND renewed_to IS NULL
+							AND good
+							AND proof_height > globals.scanned_height
+					), FALSE) AS usable
+				FROM (
+					SELECT
+						h.id,
+						h.public_key,
+						h.lost_sectors,
+						h.unpinned_sectors,
+						h.usage_account_funding,
+						h.usage_total_spent,
+						h.settings_protocol_version,
+						h.settings_release,
+						h.scans,
+						h.scans_failed,
+						hb.public_key IS NOT NULL AS blocked,
+						COALESCE(hb.reasons, ARRAY[]::TEXT[]) AS blocked_reasons,
+						h.stuck_since,
+						h.settings_remaining_storage,
+						h.last_successful_scan IS NOT NULL AS has_settings,
+						(get_byte(h.settings_protocol_version, 0) << 16) + (get_byte(h.settings_protocol_version, 1) << 8) + (get_byte(h.settings_protocol_version, 2)) AS settings_version,
+						h.recent_uptime,
+						h.settings_max_contract_duration,
+						h.settings_max_collateral,
+						h.settings_collateral,
+						h.settings_valid_until,
+						h.last_successful_scan,
+						h.settings_accepting_contracts,
+						h.settings_contract_price,
+						h.settings_storage_price,
+						h.settings_ingress_price,
+						h.settings_egress_price,
+						h.settings_free_sector_price
+					FROM hosts h
+					LEFT JOIN hosts_blocklist hb ON hb.public_key = h.public_key
+					WHERE h.usage_total_spent > 0
+					ORDER BY h.usage_total_spent DESC
+					OFFSET $1
+					LIMIT $2
+				) host
+				CROSS JOIN globals
 			)
 			SELECT
 				h.public_key,
@@ -203,7 +231,9 @@ func (s *Store) HostStats(offset, limit int) ([]hosts.HostStats, error) {
 				h.scans_failed,
 				h.blocked,
 				h.blocked_reasons,
-				h.stuck_since
+				h.stuck_since,
+				h.usable,
+				h.usable AND h.stuck_since IS NULL AND h.settings_remaining_storage > 0 AS good_for_upload
 			FROM selected_hosts h
 			LEFT JOIN LATERAL (
 			SELECT SUM(size) AS total_contracts_size
@@ -237,6 +267,8 @@ func (s *Store) HostStats(offset, limit int) ([]hosts.HostStats, error) {
 				&hs.Blocked,
 				&hs.BlockedReasons,
 				&stuckSince,
+				&hs.Usable,
+				&hs.GoodForUpload,
 			); err != nil {
 				return err
 			}
