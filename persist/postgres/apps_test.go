@@ -202,4 +202,69 @@ func TestAppConnectKey(t *testing.T) {
 	} else if !reflect.DeepEqual(key, got) {
 		t.Fatalf("expected app connect key %v, got %v", key, got)
 	}
+
+	// assert ErrKeyAlreadyExists is returned when adding an existing key
+	_, err = store.AddAppConnectKey(accounts.UpdateAppConnectKey{
+		Key:         "foobar",
+		Description: "test key",
+		Quota:       "test-quota",
+	})
+	if !errors.Is(err, accounts.ErrKeyAlreadyExists) {
+		t.Fatalf("expected err %q, got %q", accounts.ErrKeyAlreadyExists, err)
+	}
+
+	// assert ErrQuotaNotFound is returned when adding a key with an unknown
+	// quota
+	if _, err := store.AddAppConnectKey(accounts.UpdateAppConnectKey{
+		Key:         "bar baz",
+		Description: "test key",
+		Quota:       "i-dont-exist",
+	}); !errors.Is(err, accounts.ErrQuotaNotFound) {
+		t.Fatalf("expected err %q, got %q", accounts.ErrQuotaNotFound, err)
+	}
+}
+
+func TestUpdateConnectKey(t *testing.T) {
+	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
+
+	store.addTestQuota(t, "test-quota", 10, 1)
+	store.addTestQuota(t, "updated-quota", 10, 1)
+
+	key, err := store.AddAppConnectKey(accounts.UpdateAppConnectKey{
+		Key:         "foobar",
+		Description: "test key",
+		Quota:       "test-quota",
+	})
+	if err != nil {
+		t.Fatal("failed to add app connect key:", err)
+	}
+
+	updated, err := store.UpdateAppConnectKey(accounts.UpdateAppConnectKey{
+		Key:         "foobar",
+		Description: "updated key",
+		Quota:       "updated-quota",
+	})
+	if err != nil {
+		t.Fatal("failed to update app connect key:", err)
+	} else if updated.Key != key.Key || updated.Description != "updated key" || updated.Quota != "updated-quota" {
+		t.Fatalf("expected updated app connect key %v, got %v", key, updated)
+	}
+
+	// assert ErrQuotaNotFound is returned when updating to unknown quota
+	if _, err := store.UpdateAppConnectKey(accounts.UpdateAppConnectKey{
+		Key:         "foobar",
+		Description: "updated key",
+		Quota:       "i-dont-exist",
+	}); !errors.Is(err, accounts.ErrQuotaNotFound) {
+		t.Fatalf("expected err %q, got %q", accounts.ErrQuotaNotFound, err)
+	}
+
+	// assert ErrKeyNotFound is returned when updating a non-existent key
+	if _, err := store.UpdateAppConnectKey(accounts.UpdateAppConnectKey{
+		Key:         "i-dont-exist",
+		Description: "updated key",
+		Quota:       "updated-quota",
+	}); !errors.Is(err, accounts.ErrKeyNotFound) {
+		t.Fatalf("expected err %q, got %q", accounts.ErrKeyNotFound, err)
+	}
 }
