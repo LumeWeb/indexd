@@ -430,8 +430,9 @@ func TestAppStats(t *testing.T) {
 	assertStats(appID1, 2, 2, 300)
 	assertStats(appID2, 1, 1, 500)
 
-	// make acc1 inactive by setting last_used to 8 days ago
-	if _, err := store.pool.Exec(t.Context(), `UPDATE accounts SET last_used = $1 WHERE public_key = $2`, time.Now().Add(-8*24*time.Hour), sqlPublicKey(acc1)); err != nil {
+	// make acc1 inactive by setting last_used sufficiently before the inactivity threshold
+	inactiveTime := time.Now().Add(-accounts.AccountActivityThreshold - time.Hour)
+	if _, err := store.pool.Exec(t.Context(), `UPDATE accounts SET last_used = $1 WHERE public_key = $2`, inactiveTime, sqlPublicKey(acc1)); err != nil {
 		t.Fatal(err)
 	}
 	assertStats(appID1, 2, 1, 300)
