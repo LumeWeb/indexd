@@ -131,18 +131,13 @@ func (s *Store) AccountStats() (admin.AccountStatsResponse, error) {
 func (s *Store) ConnectKeyStats() (admin.ConnectKeyStatsResponse, error) {
 	var stats admin.ConnectKeyStatsResponse
 	err := s.transaction(func(ctx context.Context, tx *txn) error {
-		err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM app_connect_keys`).Scan(&stats.Total)
-		if err != nil {
-			return fmt.Errorf("failed to get total connect keys: %w", err)
-		}
-
 		rows, err := tx.Query(ctx, `
 			SELECT quota_name, COUNT(*)
 			FROM app_connect_keys
 			GROUP BY quota_name
 			ORDER BY quota_name`)
 		if err != nil {
-			return fmt.Errorf("failed to get connect key quota breakdown: %w", err)
+			return fmt.Errorf("failed to get connect key stats: %w", err)
 		}
 		defer rows.Close()
 
@@ -151,6 +146,7 @@ func (s *Store) ConnectKeyStats() (admin.ConnectKeyStatsResponse, error) {
 			if err := rows.Scan(&qs.Quota, &qs.Total); err != nil {
 				return err
 			}
+			stats.Total += qs.Total
 			stats.Quotas = append(stats.Quotas, qs)
 		}
 		return rows.Err()
