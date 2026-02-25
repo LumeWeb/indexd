@@ -26,7 +26,8 @@ var (
 	ShouldReplaceContract  = shouldReplaceContract
 	NewTestContractManager = newContractManager
 
-	ContractFunding = contractFunding
+	ContractFunding           = contractFunding
+	IsBeyondMaxRevisionHeight = isBeyondMaxRevisionHeight
 )
 
 type CandidateContract = candidateContract

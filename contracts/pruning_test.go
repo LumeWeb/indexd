@@ -3,83 +3,23 @@ package contracts_test
 import (
 	"context"
 	"errors"
-	"fmt"
-	"sort"
 	"testing"
 	"time"
 
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/chain"
-	"go.sia.tech/coreutils/rhp/v4"
 	"go.sia.tech/coreutils/rhp/v4/siamux"
 	"go.sia.tech/indexd/contracts"
 	"go.sia.tech/indexd/hosts"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest"
 )
-
-type sectorRootsCall struct {
-	hostPrices proto.HostPrices
-	contractID types.FileContractID
-	offset     uint64
-	length     uint64
-}
-
-type freeSectorsCall struct {
-	hostPrices proto.HostPrices
-	contractID types.FileContractID
-	indices    []uint64
-}
-
-func (c *hostClientMock) SectorRoots(ctx context.Context, hostPrices proto.HostPrices, contractID types.FileContractID, offset, length uint64) (rhp.RPCSectorRootsResult, error) {
-	if c.failsRPCs {
-		return rhp.RPCSectorRootsResult{}, fmt.Errorf("mocked error")
-	}
-
-	c.sectorRootsCalls = append(c.sectorRootsCalls, sectorRootsCall{
-		hostPrices: hostPrices,
-		contractID: contractID,
-		offset:     offset,
-		length:     length,
-	})
-	roots, ok := c.sectorRoots[contractID]
-	if !ok || offset > uint64(len(roots)) {
-		return rhp.RPCSectorRootsResult{}, nil
-	}
-	roots = roots[offset:]
-	if length > uint64(len(roots)) {
-		return rhp.RPCSectorRootsResult{}, errors.New("out of bounds")
-	}
-	return rhp.RPCSectorRootsResult{Roots: roots[:length]}, nil
-}
-
-func (c *hostClientMock) FreeSectors(ctx context.Context, hostPrices proto.HostPrices, contractID types.FileContractID, indices []uint64) (rhp.RPCFreeSectorsResult, error) {
-	if c.failsRPCs {
-		return rhp.RPCFreeSectorsResult{}, fmt.Errorf("mocked error")
-	}
-
-	c.freeSectorsCalls = append(c.freeSectorsCalls, freeSectorsCall{
-		hostPrices: hostPrices,
-		contractID: contractID,
-		indices:    indices,
-	})
-
-	// swap removed sectors with sectors from the end like the host would
-	roots := c.sectorRoots[contractID]
-	sortedIndices := append([]uint64{}, indices...)
-	sort.Slice(sortedIndices, func(i, j int) bool { return sortedIndices[i] > sortedIndices[j] })
-	for _, idx := range sortedIndices {
-		roots[idx] = roots[len(roots)-1]
-		roots = roots[:len(roots)-1]
-	}
-	c.sectorRoots[contractID] = roots
-
-	return rhp.RPCFreeSectorsResult{}, nil
-}
 
 func TestPerformContractPruningOnHost(t *testing.T) {
 	store := newTestStore(t)
 	hmMock := newHostManagerMock(store)
+	cmMock := newChainManagerMock()
 
 	// h1 is good
 	hk1 := types.PublicKey{1}
@@ -150,10 +90,10 @@ func TestPerformContractPruningOnHost(t *testing.T) {
 	fcid4 := store.addTestContract(t, hk5, true, types.FileContractID{4})
 
 	// set remaining allowance for all contracts
-	store.setContractRemainingAllowance(t, fcid1, types.Siacoins(1))
-	store.setContractRemainingAllowance(t, fcid2, types.Siacoins(1))
-	store.setContractRemainingAllowance(t, fcid3, types.Siacoins(1))
-	store.setContractRemainingAllowance(t, fcid4, types.Siacoins(1))
+	store.setRevisionRemainingAllowance(t, fcid1, types.Siacoins(1))
+	store.setRevisionRemainingAllowance(t, fcid2, types.Siacoins(1))
+	store.setRevisionRemainingAllowance(t, fcid3, types.Siacoins(1))
+	store.setRevisionRemainingAllowance(t, fcid4, types.Siacoins(1))
 
 	// prepare roots
 	r1 := types.Hash256{1}
@@ -177,18 +117,13 @@ func TestPerformContractPruningOnHost(t *testing.T) {
 	// r10 pinned to fcid4 (host has r10, but RPCs fail)
 	store.addPinnedSectors(t, hk5, fcid4, []types.Hash256{r10})
 
-	// prepare dialer
-	h1Mock := newHostClientMock(hk1)
-	h2Mock := newHostClientMock(hk2)
-	h4Mock := newHostClientMock(hk4)
-	h5Mock := newHostClientMock(hk5)
+	// prepare client mock
+	mock := newClientMock()
+	h1Mock := mock.host(hk1)
+	h2Mock := mock.host(hk2)
+	mock.host(hk4) // just create it
+	h5Mock := mock.host(hk5)
 	h5Mock.failsRPCs = true
-
-	dialer := newDialerMock()
-	dialer.clients[hk1] = h1Mock
-	dialer.clients[hk2] = h2Mock
-	dialer.clients[hk4] = h4Mock
-	dialer.clients[hk5] = h5Mock
 
 	// prepare roots
 	h1Mock.sectorRoots[fcid1] = []types.Hash256{r1, r2, r3}
@@ -210,7 +145,8 @@ func TestPerformContractPruningOnHost(t *testing.T) {
 	store.scheduleContractsForPruningHelper(t)
 
 	// prepare contract manager
-	cm := contracts.NewTestContractManager(types.PublicKey{}, nil, nil, nil, store, dialer, hmMock, nil, nil)
+	rev := contracts.NewRevisionManager(mock, cmMock, store, 1, zaptest.NewLogger(t))
+	cm := contracts.NewTestContractManager(types.PublicKey{}, nil, nil, cmMock, store, mock, nil, rev, hmMock, nil, nil)
 
 	// prune contracts on h1
 	err := cm.PerformContractPruningOnHost(context.Background(), h1, zap.NewNop())
@@ -255,7 +191,7 @@ func TestPerformContractPruningOnHost(t *testing.T) {
 	if len(h2Mock.sectorRootsCalls) != 1 {
 		t.Fatalf("expected 1 sector roots calls, got %d", len(h2Mock.sectorRootsCalls))
 	} else if call := h2Mock.sectorRootsCalls[0]; call.contractID != fcid3 {
-		t.Fatalf("expected contract ID %v, got %v", fcid2, call.contractID)
+		t.Fatalf("expected contract ID %v, got %v", fcid3, call.contractID)
 	} else if call.offset != 0 || call.length != 1 {
 		t.Fatalf("expected offset 0 and length 1, got offset %d and length %d", call.offset, call.length)
 	} else if len(h2Mock.freeSectorsCalls) != 0 {
@@ -325,6 +261,7 @@ func TestPerformContractPruningOnHost(t *testing.T) {
 func TestPruneContractBatchBoundary(t *testing.T) {
 	store := newTestStore(t)
 	hmMock := newHostManagerMock(store)
+	cmMock := newChainManagerMock()
 
 	hk := types.PublicKey{1}
 	h := hosts.Host{
@@ -337,7 +274,7 @@ func TestPruneContractBatchBoundary(t *testing.T) {
 	hmMock.settings[hk] = h.Settings
 
 	fcid := store.addTestContract(t, hk, true, types.FileContractID{1})
-	store.setContractRemainingAllowance(t, fcid, types.Siacoins(1))
+	store.setRevisionRemainingAllowance(t, fcid, types.Siacoins(1))
 
 	// prepare 7 sector roots, with batch size 3 this spans 3 batches
 	r1 := types.Hash256{1}
@@ -351,9 +288,8 @@ func TestPruneContractBatchBoundary(t *testing.T) {
 	// pin r1, r4 to the contract, making r2, r3, r5, r6, r7 prunable
 	store.addPinnedSectors(t, hk, fcid, []types.Hash256{r1, r4})
 
-	hMock := newHostClientMock(hk)
-	dialer := newDialerMock()
-	dialer.clients[hk] = hMock
+	mock := newClientMock()
+	hMock := mock.host(hk)
 
 	// host has all 7 sectors
 	hMock.sectorRoots[fcid] = []types.Hash256{r1, r2, r3, r4, r5, r6, r7}
@@ -366,7 +302,8 @@ func TestPruneContractBatchBoundary(t *testing.T) {
 	// FreeSectors removes sectors in the first batch, subsequent batches must
 	// account for the reduced sector count to avoid requesting out-of-bounds
 	// ranges from the host
-	cm := contracts.NewTestContractManager(types.PublicKey{}, nil, nil, nil, store, dialer, hmMock, nil, nil, contracts.WithSectorRootsBatchSize(3))
+	rev := contracts.NewRevisionManager(mock, cmMock, store, 1, zaptest.NewLogger(t))
+	cm := contracts.NewTestContractManager(types.PublicKey{}, nil, nil, cmMock, store, mock, nil, rev, hmMock, nil, nil, contracts.WithSectorRootsBatchSize(3))
 
 	err := cm.PerformContractPruningOnHost(context.Background(), h, zap.NewNop())
 	if err != nil {

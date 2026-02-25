@@ -26,8 +26,7 @@ import (
 	"go.sia.tech/indexd/alerts"
 	"go.sia.tech/indexd/api/admin"
 	"go.sia.tech/indexd/api/app"
-	"go.sia.tech/indexd/client"
-	client2 "go.sia.tech/indexd/client/v2"
+	client "go.sia.tech/indexd/client/v2"
 	"go.sia.tech/indexd/config"
 	"go.sia.tech/indexd/contracts"
 	"go.sia.tech/indexd/explorer"
@@ -125,31 +124,31 @@ func runRootCmd(ctx context.Context, cfg config.Config, walletKey types.PrivateK
 		return fmt.Errorf("failed to create MaxMind locator: %w", err)
 	}
 
-	client2 := client2.New(client2.NewProvider(hosts.NewHostStore(store)))
+	client := client.New(client.NewProvider(hosts.NewHostStore(store)))
 
 	alerter := alerts.NewManager()
-	hm, err := hosts.NewManager(s, locator, client2, store, alerter, hosts.WithLogger(log.Named("hosts")))
+	hm, err := hosts.NewManager(s, locator, client, store, alerter, hosts.WithLogger(log.Named("hosts")))
 	if err != nil {
 		return fmt.Errorf("failed to create host manager: %w", err)
 	}
 	defer hm.Close()
 
 	signer := contracts.NewFormContractSigner(wm, walletKey)
-	dialer := client.NewDialer(cm, signer, store, log)
 	am, err := accounts.NewManager(store, accounts.WithLogger(log.Named("accounts")))
 	if err != nil {
 		return fmt.Errorf("failed to create accounts manager: %w", err)
 	}
 	defer am.Close()
 
-	f := contracts.NewFunder(client2, signer, cm, store, log)
-	contracts, err := contracts.NewManager(walletKey, am, f, cm, store, dialer, hm, s, wm, contracts.WithLogger(log.Named("contracts")))
+	rev := contracts.NewRevisionManager(client, cm, store, contracts.DefaultRevisionSubmissionBuffer, log.Named("revision"))
+	f := contracts.NewFunder(client, rev, signer, cm, log.Named("funder"))
+	contracts, err := contracts.NewManager(walletKey, am, f, cm, store, client, signer, rev, hm, s, wm, contracts.WithLogger(log.Named("contracts")))
 	if err != nil {
 		return fmt.Errorf("failed to create contracts manager: %w", err)
 	}
 	defer contracts.Close()
 
-	slabs, err := slabs.NewManager(cm, am, contracts, hm, store, client2, alerter, keys.DerivePrivateKey(walletKey, "migration"), keys.DerivePrivateKey(walletKey, "integrity"), slabs.WithLogger(log.Named("slabs")))
+	slabs, err := slabs.NewManager(cm, am, contracts, hm, store, client, alerter, keys.DerivePrivateKey(walletKey, "migration"), keys.DerivePrivateKey(walletKey, "integrity"), slabs.WithLogger(log.Named("slabs")))
 	if err != nil {
 		return fmt.Errorf("failed to create slabs manager: %w", err)
 	}

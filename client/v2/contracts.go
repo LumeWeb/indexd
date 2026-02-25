@@ -146,7 +146,6 @@ func (c *Client) SectorRoots(ctx context.Context, signer rhp.ContractSigner, cha
 		if err != nil {
 			return fmt.Errorf("failed to get host prices: %w", err)
 		}
-
 		result, err = rhp.RPCSectorRoots(ctx, transport, chain.TipState(), prices, signer, contract, offset, length)
 		return err
 	})
@@ -166,7 +165,6 @@ func (c *Client) FreeSectors(ctx context.Context, signer rhp.ContractSigner, cha
 		if err != nil {
 			return fmt.Errorf("failed to get host prices: %w", err)
 		}
-
 		result, err = rhp.RPCFreeSectors(ctx, transport, signer, chain.TipState(), prices, contract, indices)
 		return err
 	})
