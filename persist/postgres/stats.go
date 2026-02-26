@@ -8,7 +8,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/api/admin"
 	"go.sia.tech/indexd/hosts"
@@ -110,21 +109,37 @@ func (s *Store) SectorStats() (admin.SectorsStatsResponse, error) {
 }
 
 // AppStats reports per-app statistics including total accounts, active
-// accounts, and total pinned data.
-func (s *Store) AppStats(appID types.Hash256) (admin.AppStatsResponse, error) {
-	stats := admin.AppStatsResponse{
-		AppID: appID,
-	}
+// accounts, and total pinned data for all apps.
+func (s *Store) AppStats(offset, limit int) ([]admin.AppStats, error) {
+	var stats []admin.AppStats
 	err := s.transaction(func(ctx context.Context, tx *txn) error {
-		return tx.QueryRow(ctx, `
+		stats = stats[:0] // reuse same slice if transaction retries
+		rows, err := tx.Query(ctx, `
 SELECT
+	app_id,
 	COUNT(*),
-	COUNT(*) FILTER (WHERE last_used >= $2),
+	COUNT(*) FILTER (WHERE last_used >= $1),
 	COALESCE(SUM(pinned_data), 0)
 FROM accounts
-WHERE app_id = $1 AND deleted_at IS NULL`,
-			sqlHash256(appID), time.Now().Add(-accounts.AccountActivityThreshold),
-		).Scan(&stats.Accounts, &stats.Active, &stats.PinnedData)
+WHERE deleted_at IS NULL
+GROUP BY app_id
+ORDER BY COUNT(*) DESC
+OFFSET $2 LIMIT $3`,
+			time.Now().Add(-accounts.AccountActivityThreshold), offset, limit,
+		)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var as admin.AppStats
+			if err := rows.Scan((*sqlHash256)(&as.AppID), &as.Accounts, &as.Active, &as.PinnedData); err != nil {
+				return err
+			}
+			stats = append(stats, as)
+		}
+		return rows.Err()
 	})
 	return stats, err
 }

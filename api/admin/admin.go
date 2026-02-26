@@ -111,7 +111,7 @@ type (
 	Store interface {
 		AccountStats() (AccountStatsResponse, error)
 		AggregatedHostStats() (AggregatedHostStatsResponse, error)
-		AppStats(types.Hash256) (AppStatsResponse, error)
+		AppStats(offset, limit int) ([]AppStats, error)
 		ContractsStats() (ContractsStatsResponse, error)
 		HostStats(offset, limit int) ([]hosts.HostStats, error)
 		SectorStats() (SectorsStatsResponse, error)
@@ -265,7 +265,7 @@ func NewAPI(chain ChainManager, accounts Accounts, contracts ContractManager, ho
 
 		// stats endpoints
 		"GET /stats/accounts":       a.handleGETStatsAccounts,
-		"GET /stats/apps/:id":       a.handleGETStatsApp,
+		"GET /stats/apps":           a.handleGETStatsApps,
 		"GET /stats/contracts":      a.handleGETStatsContracts,
 		"GET /stats/hosts":          a.handleGETStatsHostsAggregated,
 		"GET /stats/hosts/detailed": a.handleGETStatsHostsDetailed,
@@ -1082,16 +1082,16 @@ func (a *admin) handleGETStatsAccounts(jc jape.Context) {
 	writeResponse(jc, stats)
 }
 
-func (a *admin) handleGETStatsApp(jc jape.Context) {
-	var id types.Hash256
-	if jc.DecodeParam("id", &id) != nil {
+func (a *admin) handleGETStatsApps(jc jape.Context) {
+	offset, limit, ok := api.ParseOffsetLimit(jc)
+	if !ok {
 		return
 	}
-	stats, err := a.store.AppStats(id)
+	stats, err := a.store.AppStats(offset, limit)
 	if jc.Check("failed to retrieve app stats", err) != nil {
 		return
 	}
-	writeResponse(jc, stats)
+	writeResponse(jc, AppStatsResponse(stats))
 }
 
 func (a *admin) handleGETStatsContracts(jc jape.Context) {

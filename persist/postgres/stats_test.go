@@ -12,6 +12,7 @@ import (
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/rhp/v4"
 	"go.sia.tech/indexd/accounts"
+	"go.sia.tech/indexd/api/admin"
 	"go.sia.tech/indexd/geoip"
 	"go.sia.tech/indexd/hosts"
 	"go.sia.tech/indexd/slabs"
@@ -384,11 +385,25 @@ func TestAppStats(t *testing.T) {
 		}
 	}
 
-	assertStats := func(appID types.Hash256, expectedAccounts, expectedActive, expectedPinnedData uint64) {
+	findApp := func(appID types.Hash256) (admin.AppStats, bool) {
 		t.Helper()
-		stats, err := store.AppStats(appID)
+		all, err := store.AppStats(0, 100)
 		if err != nil {
 			t.Fatal(err)
+		}
+		for _, s := range all {
+			if s.AppID == appID {
+				return s, true
+			}
+		}
+		return admin.AppStats{}, false
+	}
+
+	assertStats := func(appID types.Hash256, expectedAccounts, expectedActive, expectedPinnedData uint64) {
+		t.Helper()
+		stats, ok := findApp(appID)
+		if !ok {
+			t.Fatalf("app %s not found in stats", appID)
 		}
 		if stats.Accounts != expectedAccounts {
 			t.Fatalf("expected %d accounts, got %d", expectedAccounts, stats.Accounts)
@@ -398,10 +413,6 @@ func TestAppStats(t *testing.T) {
 			t.Fatalf("expected %d pinned data, got %d", expectedPinnedData, stats.PinnedData)
 		}
 	}
-
-	// empty stats for both apps
-	assertStats(appID1, 0, 0, 0)
-	assertStats(appID2, 0, 0, 0)
 
 	// add accounts to app1
 	acc1 := types.GeneratePrivateKey().PublicKey()

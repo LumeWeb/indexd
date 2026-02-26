@@ -65,8 +65,11 @@ type (
 		Active     uint64 `json:"active"`
 	}
 
-	// AppStatsResponse is the response body for the [GET] /stats/apps/:id.
-	AppStatsResponse struct {
+	// AppStatsResponse is the response body for the [GET] /stats/apps.
+	AppStatsResponse []AppStats
+
+	// AppStats contains per-app statistics.
+	AppStats struct {
 		AppID      types.Hash256 `json:"appID"`
 		Accounts   uint64        `json:"accounts"`
 		Active     uint64        `json:"active"`

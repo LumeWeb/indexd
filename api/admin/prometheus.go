@@ -25,6 +25,12 @@ func (s AccountStatsResponse) PrometheusMetric() (metrics []prometheus.Metric) {
 // PrometheusMetric implements the prometheus.Marshaller interface for the
 // app stats response.
 func (s AppStatsResponse) PrometheusMetric() []prometheus.Metric {
+	return prometheus.Slice([]AppStats(s)).PrometheusMetric()
+}
+
+// PrometheusMetric implements the prometheus.Marshaller interface for a single
+// app's stats.
+func (s AppStats) PrometheusMetric() []prometheus.Metric {
 	labels := map[string]any{
 		"app_id": s.AppID.String(),
 	}

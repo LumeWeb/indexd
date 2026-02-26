@@ -1273,20 +1273,23 @@ func TestAccountStatsAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if stats, err := adminClient.StatsApp(t.Context(), appID); err != nil {
+	apps, err := adminClient.StatsApps(t.Context(), 0, 100)
+	if err != nil {
 		t.Fatal(err)
-	} else if stats.AppID != appID {
-		t.Fatalf("expected app id %s, got %s", appID, stats.AppID)
-	} else if stats.Accounts != 1 {
-		t.Fatalf("expected 1 app account, got %d", stats.Accounts)
-	} else if stats.Active != 1 {
-		t.Fatalf("expected 1 active app account, got %d", stats.Active)
 	}
-
-	if stats, err := adminClient.StatsApp(t.Context(), types.Hash256{2}); err != nil {
-		t.Fatal(err)
-	} else if stats.Accounts != 0 {
-		t.Fatalf("expected 0 app accounts, got %d", stats.Accounts)
+	var found bool
+	for _, s := range apps {
+		if s.AppID == appID {
+			found = true
+			if s.Accounts != 1 {
+				t.Fatalf("expected 1 app account, got %d", s.Accounts)
+			} else if s.Active != 1 {
+				t.Fatalf("expected 1 active app account, got %d", s.Active)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected app %s in stats response", appID)
 	}
 }
 

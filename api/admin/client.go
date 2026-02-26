@@ -354,9 +354,12 @@ func (c *Client) StatsAccounts(ctx context.Context) (resp AccountStatsResponse, 
 	return
 }
 
-// StatsApp returns statistics about a specific app.
-func (c *Client) StatsApp(ctx context.Context, id types.Hash256) (resp AppStatsResponse, err error) {
-	err = c.c.GET(ctx, fmt.Sprintf("/stats/apps/%s", id), &resp)
+// StatsApps returns per-app statistics for all apps.
+func (c *Client) StatsApps(ctx context.Context, offset, limit int) (resp AppStatsResponse, err error) {
+	values := url.Values{}
+	values.Set("offset", fmt.Sprintf("%d", offset))
+	values.Set("limit", fmt.Sprintf("%d", limit))
+	err = c.c.GET(ctx, "/stats/apps?"+values.Encode(), &resp)
 	return
 }
 
