@@ -174,3 +174,7 @@ func (m *SlabManager) downloadShard(ctx context.Context, hostKey types.PublicKey
 func isErrLostSector(err error) bool {
 	return err != nil && strings.Contains(err.Error(), proto.ErrSectorNotFound.Error())
 }
+
+func isErrNotEnoughFunds(err error) bool {
+	return err != nil && strings.Contains(err.Error(), proto.ErrNotEnoughFunds.Error())
+}

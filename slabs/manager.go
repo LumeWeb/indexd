@@ -335,23 +335,46 @@ func (m *SlabManager) performSlabMigrations(ctx context.Context) error {
 	log := m.log.Named("migrations")
 	log.Debug("starting slab migrations")
 
-	var exhausted bool
-	for !exhausted {
+	allHosts, goodContracts, err := m.migrationCandidates()
+	if err != nil {
+		return err
+	}
+
+	// start a worker pool that pulls slabs from a channel
+	slabCh := make(chan SlabID, m.migrationBatchSize)
+	var wg sync.WaitGroup
+	for range m.migrationBatchSize {
+		wg.Go(func() {
+			for slabID := range slabCh {
+				m.migrateSlab(ctx, slabID, allHosts, goodContracts, log.With(zap.Stringer("slab", slabID)))
+			}
+		})
+	}
+
+	// fetch unhealthy slabs and feed them to the workers
+	for {
 		batch, err := m.store.UnhealthySlabs(m.migrationBatchSize)
 		if err != nil {
+			close(slabCh)
+			wg.Wait()
 			return err
-		} else if len(batch) < m.migrationBatchSize {
-			exhausted = true
 		}
-
-		err = m.migrateSlabs(ctx, batch, log)
-		if errors.Is(err, context.Canceled) {
+		for _, id := range batch {
+			select {
+			case slabCh <- id:
+			case <-ctx.Done():
+				close(slabCh)
+				wg.Wait()
+				return nil
+			}
+		}
+		if len(batch) < m.migrationBatchSize {
 			break
-		} else if err != nil {
-			return fmt.Errorf("failed to migrate slabs: %w", err)
 		}
 	}
 
+	close(slabCh)
+	wg.Wait()
 	log.Debug("finished slab migrations", zap.Duration("elapsed", time.Since(start)))
 	return nil
 }
