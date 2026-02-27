@@ -215,6 +215,9 @@ func (p *Provider) AddWriteSample(hostKey types.PublicKey, latency time.Duration
 
 // AddFailedRPC records a failed RPC attempt to the specified host.
 func (p *Provider) AddFailedRPC(hostKey types.PublicKey, err error) {
+	if errors.Is(err, ErrAbortedRPC) {
+		return // do not record aborted RPCs as failures
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	metric, exists := p.metrics[hostKey]

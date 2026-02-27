@@ -154,7 +154,11 @@ raceLoop:
 			wg.Go(func() {
 				if err := downloadShard(overdriveCtx, hostKey, slabHosts[hostKey], log); err != nil {
 					log.Debug("shard download failed", zap.Error(err))
-					failedCh <- struct{}{}
+					// non-blocking send to indicate a failure
+					select {
+					case failedCh <- struct{}{}:
+					default:
+					}
 				}
 			})
 		case <-ctx.Done():
