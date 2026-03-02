@@ -130,15 +130,17 @@ func TestContractPruning(t *testing.T) {
 		}
 		nSectors := contract.Revision.Filesize / proto.SectorSize
 
-		// fetch host client
-		hc := indexer.HostClient(t, hk)
-		hs, err := hc.Settings(t.Context())
+		// fetch sector roots (ignore error, so we can retry without failing)
+		res, err := indexer.Client().SectorRoots(t.Context(), indexer.Signer(), indexer.ChainManager(), contract, 0, nSectors)
 		if err != nil {
+			return nil
+		}
+		// persist the updated revision so subsequent calls use the correct
+		// revision number
+		contract.Revision = res.Revision
+		if err := indexer.Store().UpdateContractRevision(contract, res.Usage); err != nil {
 			t.Fatal(err)
 		}
-
-		// fetch sector roots (ignore error, so we can retry without failing)
-		res, _ := hc.SectorRoots(t.Context(), hs.Prices, contractID, 0, nSectors)
 		return res.Roots
 	}
 

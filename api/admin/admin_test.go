@@ -298,6 +298,94 @@ func TestQuotasAPI(t *testing.T) {
 	}
 }
 
+func TestRegisterAppKey(t *testing.T) {
+	c := testutils.NewConsensusNode(t, zap.NewNop())
+	indexer := testutils.NewIndexer(t, c, zap.NewNop())
+	adminClient := indexer.Admin
+
+	// create a connect key
+	connectKey, err := adminClient.AddAppConnectKey(context.Background(), accounts.AppConnectKeyRequest{
+		Description: "test key",
+		Quota:       "default",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// register an app key
+	appKey := types.GeneratePrivateKey().PublicKey()
+	err = adminClient.RegisterAppKey(context.Background(), admin.RegisterAppKeyRequest{
+		ConnectKey: connectKey.Key,
+		AppKey:     appKey,
+		Meta: accounts.AppMeta{
+			ID:          frand.Entropy256(),
+			Description: "test app",
+			ServiceURL:  "http://test-app.com",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// verify the account exists
+	acc, err := adminClient.Account(context.Background(), appKey)
+	if err != nil {
+		t.Fatal(err)
+	} else if types.PublicKey(acc.AccountKey) != appKey {
+		t.Fatalf("expected account key %v, got %v", appKey, acc.AccountKey)
+	}
+
+	// registering the same key again is a no-op
+	err = adminClient.RegisterAppKey(context.Background(), admin.RegisterAppKeyRequest{
+		ConnectKey: connectKey.Key,
+		AppKey:     appKey,
+	})
+	if err != nil {
+		t.Fatal("expected duplicate registration to succeed, got", err)
+	}
+
+	// create a 1-use quota and connect key, then verify re-auth works after the
+	// key is exhausted
+	oneUseTarget := testutils.TestQuotaFundTargetBytes
+	if err := adminClient.PutQuota(context.Background(), "one-use", accounts.PutQuotaRequest{
+		Description:     "One use quota",
+		MaxPinnedData:   1000,
+		TotalUses:       1,
+		FundTargetBytes: &oneUseTarget,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	oneUseKey, err := adminClient.AddAppConnectKey(context.Background(), accounts.AppConnectKeyRequest{
+		Quota: "one-use",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exhaustedAppKey := types.GeneratePrivateKey().PublicKey()
+	if err := adminClient.RegisterAppKey(context.Background(), admin.RegisterAppKeyRequest{
+		ConnectKey: oneUseKey.Key,
+		AppKey:     exhaustedAppKey,
+	}); err != nil {
+		t.Fatal("expected first registration on 1-use key to succeed, got", err)
+	}
+	// re-registering the same app key on the now-exhausted connect key should succeed
+	if err := adminClient.RegisterAppKey(context.Background(), admin.RegisterAppKeyRequest{
+		ConnectKey: oneUseKey.Key,
+		AppKey:     exhaustedAppKey,
+	}); err != nil {
+		t.Fatal("expected re-auth on exhausted key to succeed, got", err)
+	}
+
+	// registering with unknown connect key should fail
+	err = adminClient.RegisterAppKey(context.Background(), admin.RegisterAppKeyRequest{
+		ConnectKey: "nonexistent",
+		AppKey:     types.GeneratePrivateKey().PublicKey(),
+	})
+	if err == nil || !strings.Contains(err.Error(), accounts.ErrKeyNotFound.Error()) {
+		t.Fatal("expected ErrKeyNotFound, got", err)
+	}
+}
+
 func TestAccountsAPI(t *testing.T) {
 	c := testutils.NewConsensusNode(t, zap.NewNop())
 	indexer := testutils.NewIndexer(t, c, zap.NewNop())
@@ -657,6 +745,22 @@ func TestContractsAPI(t *testing.T) {
 		t.Fatal("expected host account funding to remain the same", before, host.AccountFunding)
 	} else if host.TotalSpent.Cmp(before.TotalSpent) <= 0 {
 		t.Fatal("expected host total spent to have increased", before.TotalSpent, host.TotalSpent)
+	}
+
+	// test deletion
+	contracts, err = adminClient.Contracts(context.Background(), admin.WithRevisable(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range contracts {
+		if err := adminClient.DeleteContract(context.Background(), c.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if remaining, err := adminClient.Contracts(context.Background(), admin.WithRevisable(false)); err != nil {
+		t.Fatal(err)
+	} else if len(remaining) != 0 {
+		t.Fatalf("expected 0 contracts after deletion, got %d", len(remaining))
 	}
 }
 
@@ -1258,6 +1362,38 @@ func TestAccountStatsAPI(t *testing.T) {
 		t.Fatal(err)
 	} else if stats.Registered != 1 {
 		t.Fatalf("expected 1 registered accounts, got %d", stats.Registered)
+	}
+
+	appID := types.Hash256{1}
+	connectKey, err := adminClient.AddAppConnectKey(t.Context(), accounts.AppConnectKeyRequest{
+		Description: "app stats test key",
+		Quota:       "default",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	appAccount := types.GeneratePrivateKey().PublicKey()
+	if err := indexer.Store().RegisterAppKey(connectKey.Key, appAccount, accounts.AppMeta{ID: appID}); err != nil {
+		t.Fatal(err)
+	}
+
+	apps, err := adminClient.StatsApps(t.Context(), 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, s := range apps {
+		if s.AppID == appID {
+			found = true
+			if s.Accounts != 1 {
+				t.Fatalf("expected 1 app account, got %d", s.Accounts)
+			} else if s.Active != 1 {
+				t.Fatalf("expected 1 active app account, got %d", s.Active)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected app %s in stats response", appID)
 	}
 }
 

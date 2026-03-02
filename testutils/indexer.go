@@ -12,20 +12,19 @@ import (
 
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/chain"
+	rhp "go.sia.tech/coreutils/rhp/v4"
 	"go.sia.tech/coreutils/wallet"
 	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/alerts"
 	"go.sia.tech/indexd/api/admin"
 	"go.sia.tech/indexd/api/app"
+	client "go.sia.tech/indexd/client/v2"
+	"go.sia.tech/indexd/contracts"
 	"go.sia.tech/indexd/geoip"
+	"go.sia.tech/indexd/hosts"
 	"go.sia.tech/indexd/keys"
 	"go.sia.tech/indexd/pins"
 	"go.sia.tech/indexd/slabs"
-
-	"go.sia.tech/indexd/client"
-	client2 "go.sia.tech/indexd/client/v2"
-	"go.sia.tech/indexd/contracts"
-	"go.sia.tech/indexd/hosts"
 	"go.sia.tech/indexd/subscriber"
 	"go.sia.tech/jape"
 	"go.uber.org/zap"
@@ -52,13 +51,16 @@ type (
 	// Indexer is a test utility combining an indexer, an http client for the
 	// indexer and useful helpers for testing.
 	Indexer struct {
-		appApiAddr string
+		AdminURL      string
+		AdminPassword string
+		AppURL        string
 
 		Admin *admin.Client
 		App   *app.Client
 
 		cm        *chain.Manager
-		dialer    *client.Dialer
+		client    *client.Client
+		signer    rhp.FormContractSigner
 		accounts  *accounts.AccountManager
 		contracts *contracts.ContractManager
 		hosts     *hosts.HostManager
@@ -72,6 +74,7 @@ type (
 	IndexerOpt func(*indexerCfg)
 
 	indexerCfg struct {
+		advertiseURL        string
 		maintenanceSettings contracts.MaintenanceSettings
 		slabOpts            []slabs.Option
 		contractOpts        []contracts.ContractManagerOpt
@@ -96,6 +99,13 @@ func defaultIndexerCfg(log *zap.Logger) *indexerCfg {
 	}
 }
 
+// WithAdvertiseURL sets the advertise URL for the indexer.
+func WithAdvertiseURL(url string) IndexerOpt {
+	return func(cfg *indexerCfg) {
+		cfg.advertiseURL = url
+	}
+}
+
 // WithMaintenanceSettings allows for passing maintenance settings to the indexer
 func WithMaintenanceSettings(ms contracts.MaintenanceSettings) IndexerOpt {
 	return func(cfg *indexerCfg) {
@@ -115,11 +125,6 @@ func WithSlabOptions(opts ...slabs.Option) IndexerOpt {
 	return func(cfg *indexerCfg) {
 		cfg.slabOpts = append(cfg.slabOpts, opts...)
 	}
-}
-
-// AppAPIAddr returns the application API address of the indexer.
-func (i *Indexer) AppAPIAddr() string {
-	return i.appApiAddr
 }
 
 // Accounts returns the account manager for the indexer.
@@ -159,29 +164,29 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger, opts ...Indexer
 	}
 	syncer := NewSyncer(t, c.genesis.ID(), c.cm)
 
-	client2 := client2.New(client2.NewProvider(hosts.NewHostStore(store)))
+	client := client.New(client.NewProvider(hosts.NewHostStore(store)))
 
 	alerter := alerts.NewManager()
 
-	hm, err := hosts.NewManager(syncer, locator, client2, store, alerter, hosts.WithLogger(log.Named("hosts")), hosts.WithScanFrequency(200*time.Millisecond), hosts.WithScanInterval(time.Second))
+	hm, err := hosts.NewManager(syncer, locator, client, store, alerter, hosts.WithLogger(log.Named("hosts")), hosts.WithScanFrequency(200*time.Millisecond), hosts.WithScanInterval(time.Second))
 	if err != nil {
 		t.Fatalf("failed to create host manager: %v", err)
 	}
 
 	signer := contracts.NewFormContractSigner(wm, walletKey)
-	dialer := client.NewDialer(c.cm, signer, store, log, client.WithRevisionSubmissionBuffer(1))
 	am, err := accounts.NewManager(store, accounts.WithPruneAccountsInterval(100*time.Millisecond), accounts.WithLogger(log.Named("accounts")))
 	if err != nil {
 		t.Fatalf("failed to create accounts manager: %v", err)
 	}
 
-	f := contracts.NewFunder(client2, signer, c.cm, store, log, contracts.WithRevisionSubmissionBuffer(1))
-	contracts, err := contracts.NewManager(walletKey, am, f, c.cm, store, dialer, hm, s, wm, cfg.contractOpts...)
+	rev := contracts.NewRevisionManager(client, c.cm, store, 1, log.Named("revision"))
+	f := contracts.NewFunder(client, rev, signer, c.cm, log.Named("funder"))
+	contracts, err := contracts.NewManager(walletKey, am, f, c.cm, store, client, signer, rev, hm, s, wm, cfg.contractOpts...)
 	if err != nil {
 		t.Fatalf("failed to create contract manager: %v", err)
 	}
 
-	slabs, err := slabs.NewManager(c.cm, am, contracts, hm, store, client2, alerter, keys.DerivePrivateKey(walletKey, "migration"), keys.DerivePrivateKey(walletKey, "integrity"), cfg.slabOpts...)
+	slabs, err := slabs.NewManager(c.cm, am, contracts, hm, store, client, alerter, keys.DerivePrivateKey(walletKey, "migration"), keys.DerivePrivateKey(walletKey, "integrity"), cfg.slabOpts...)
 	if err != nil {
 		t.Fatalf("failed to create slab manager: %v", err)
 	}
@@ -238,7 +243,10 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger, opts ...Indexer
 		t.Fatalf("failed to listen on application address: %v", err)
 	}
 	appAPIAddr := fmt.Sprintf("http://%s", appListener.Addr().String())
-	appHandler, err := app.NewAPI(appAPIAddr, store, am, contracts, slabs, appAPIOpts...)
+	if cfg.advertiseURL == "" {
+		cfg.advertiseURL = appAPIAddr
+	}
+	appHandler, err := app.NewAPI(cfg.advertiseURL, store, am, contracts, slabs, appAPIOpts...)
 	if err != nil {
 		t.Fatalf("failed to create application API: %v", err)
 	}
@@ -291,16 +299,19 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger, opts ...Indexer
 	})
 
 	return &Indexer{
-		appApiAddr: appAPIAddr,
+		AdminURL:      adminAPIAddr,
+		AdminPassword: password,
+		AppURL:        appAPIAddr,
 
 		Admin: admin.NewClient(adminAPIAddr, password),
 		App:   app.NewClient(appAPIAddr),
 
 		cm:        c.cm,
+		client:    client,
+		signer:    signer,
 		accounts:  am,
 		hosts:     hm,
 		contracts: contracts,
-		dialer:    dialer,
 		alerter:   alerter,
 		store:     store,
 		syncer:    syncer,
@@ -318,18 +329,19 @@ func (idx *Indexer) AddTestAccount(t *testing.T, pk types.PublicKey) {
 	time.Sleep(50 * time.Millisecond) // wait for funding to complete
 }
 
-// HostClient returns a host client for the given host public key.
-func (idx *Indexer) HostClient(t *testing.T, hk types.PublicKey) *client.HostClient {
-	h, err := idx.store.Host(hk)
-	if err != nil {
-		t.Fatalf("failed to get host %s: %v", hk, err) // developer error
-	}
-	hc, err := idx.dialer.DialHost(context.Background(), hk, h.RHP4Addrs())
-	if err != nil {
-		t.Fatalf("failed to dial host %s: %v", hk, err) // developer error
-	}
-	t.Cleanup(func() { hc.Close() })
-	return hc
+// Client returns the underlying client/v2 client.
+func (idx *Indexer) Client() *client.Client {
+	return idx.client
+}
+
+// Signer returns the contract signer.
+func (idx *Indexer) Signer() rhp.FormContractSigner {
+	return idx.signer
+}
+
+// ChainManager returns the underlying chain manager.
+func (idx *Indexer) ChainManager() *chain.Manager {
+	return idx.cm
 }
 
 // Alerter returns the underlying alert manager.

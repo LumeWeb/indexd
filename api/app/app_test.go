@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"reflect"
 	"strings"
@@ -50,7 +51,8 @@ func respondToAppConnection(t *testing.T, responseURL string, connectKey string,
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusNoContent {
-		t.Fatal("unexpected response status:", resp.Status)
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatal("unexpected response status:", resp.Status, string(body))
 	}
 }
 
@@ -599,6 +601,50 @@ func TestAppConnect(t *testing.T) {
 	} else if status.UserSecret != secondStatus.UserSecret {
 		t.Fatal("expected same user secret")
 	}
+
+	// verify re-auth succeeds even when the connect key is exhausted
+	oneUseTarget := testutils.TestQuotaFundTargetBytes
+	if err := adminClient.PutQuota(ctx, "one-use", accounts.PutQuotaRequest{
+		Description:     "One use quota",
+		MaxPinnedData:   1000,
+		TotalUses:       1,
+		FundTargetBytes: &oneUseTarget,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	oneUseKey, err := adminClient.AddAppConnectKey(ctx, accounts.AppConnectKeyRequest{
+		Quota: "one-use",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sk2 := types.GeneratePrivateKey()
+	appMeta := app.RegisterAppRequest{
+		AppID:       frand.Entropy256(),
+		Name:        "test-app-2",
+		Description: "test-app-2",
+		ServiceURL:  "http://example.com",
+	}
+	// first connection — uses the single remaining use
+	resp, err = appClient.RequestAppConnection(ctx, appMeta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	respondToAppConnection(t, resp.ResponseURL, oneUseKey.Key, true)
+	if err := appClient.RegisterApp(ctx, resp.RegisterURL, sk2); err != nil {
+		t.Fatal("expected first registration on 1-use key to succeed:", err)
+	}
+
+	// second connection with the same key — key is now exhausted, but re-auth should succeed
+	resp, err = appClient.RequestAppConnection(ctx, appMeta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	respondToAppConnection(t, resp.ResponseURL, oneUseKey.Key, true)
+	if err := appClient.RegisterApp(ctx, resp.RegisterURL, sk2); err != nil {
+		t.Fatal("expected re-auth on exhausted key to succeed:", err)
+	}
 }
 
 func TestSharedObjects(t *testing.T) {
@@ -629,6 +675,8 @@ func TestSharedObjects(t *testing.T) {
 	sk1, _ := newAccount(t, cluster)
 	sk2, _ := newAccount(t, cluster)
 	appClient := indexer.App
+
+	time.Sleep(time.Second)
 
 	// generate and pin a slab
 	slab1Params := uploadRandomSlab(t, client, sk1, hosts)

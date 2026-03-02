@@ -1,8 +1,6 @@
 module go.sia.tech/indexd
 
-go 1.25
-
-toolchain go1.25.5
+go 1.26.0
 
 require (
 	github.com/jackc/pgerrcode v0.0.0-20240316143900-6e2875d9b438
@@ -11,10 +9,10 @@ require (
 	github.com/oschwald/geoip2-golang v1.13.0
 	github.com/shopspring/decimal v1.4.0
 	go.sia.tech/core v0.19.0
-	go.sia.tech/coreutils v0.21.1-0.20260218210936-16ee0158d195
+	go.sia.tech/coreutils v0.21.1
 	go.sia.tech/jape v0.14.1
 	go.sia.tech/mux v1.4.0
-	go.sia.tech/web/indexd v0.14.0
+	go.sia.tech/web/indexd v0.15.0
 	go.uber.org/goleak v1.3.0
 	go.uber.org/zap v1.27.1
 	golang.org/x/crypto v0.48.0

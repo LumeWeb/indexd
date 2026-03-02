@@ -98,6 +98,11 @@ func (c *Client) UpdateAppConnectKey(ctx context.Context, req accounts.AppConnec
 	return c.c.PUT(ctx, "/apps/connect/keys", req)
 }
 
+// RegisterAppKey registers an app key with the given connect key.
+func (c *Client) RegisterAppKey(ctx context.Context, req RegisterAppKeyRequest) error {
+	return c.c.POST(ctx, "/apps/register", req, nil)
+}
+
 // Quotas retrieves a paginated list of quotas.
 func (c *Client) Quotas(ctx context.Context, offset, limit int) (quotas []accounts.Quota, err error) {
 	values := url.Values{}
@@ -171,6 +176,12 @@ func (c *Client) DismissAlerts(ctx context.Context, ids ...types.Hash256) (err e
 // Contract returns the contract with the given ID.
 func (c *Client) Contract(ctx context.Context, contractID types.FileContractID) (contract contracts.Contract, err error) {
 	err = c.c.GET(ctx, fmt.Sprintf("/contract/%s", contractID), &contract)
+	return
+}
+
+// DeleteContract deletes the contract with the given ID.
+func (c *Client) DeleteContract(ctx context.Context, contractID types.FileContractID) (err error) {
+	err = c.c.DELETE(ctx, fmt.Sprintf("/contract/%s", contractID))
 	return
 }
 
@@ -358,6 +369,15 @@ func (c *Client) StatsAccounts(ctx context.Context) (resp AccountStatsResponse, 
 // indexer.
 func (c *Client) StatsConnectKeys(ctx context.Context) (resp ConnectKeyStatsResponse, err error) {
 	err = c.c.GET(ctx, "/stats/connectkeys", &resp)
+	return
+}
+
+// StatsApps returns per-app statistics for all apps.
+func (c *Client) StatsApps(ctx context.Context, offset, limit int) (resp AppStatsResponse, err error) {
+	values := url.Values{}
+	values.Set("offset", fmt.Sprintf("%d", offset))
+	values.Set("limit", fmt.Sprintf("%d", limit))
+	err = c.c.GET(ctx, "/stats/apps?"+values.Encode(), &resp)
 	return
 }
 

@@ -5,6 +5,7 @@ import (
 
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/wallet"
+	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/hosts"
 )
 
@@ -78,6 +79,17 @@ type (
 		Quotas []ConnectKeyQuotaStats `json:"quotas"`
 	}
 
+	// AppStatsResponse is the response body for the [GET] /stats/apps.
+	AppStatsResponse []AppStats
+
+	// AppStats contains per-app statistics.
+	AppStats struct {
+		AppID      types.Hash256 `json:"appID"`
+		Accounts   uint64        `json:"accounts"`
+		Active     uint64        `json:"active"`
+		PinnedData uint64        `json:"pinnedData"`
+	}
+
 	// HostStatsResponse is the response body for the [GET] /stats/hosts/detailed.
 	HostStatsResponse []HostStats
 
@@ -101,6 +113,14 @@ type (
 		wallet.Balance
 
 		Address types.Address `json:"address"`
+	}
+
+	// RegisterAppKeyRequest is the request body for the [POST] /apps/register
+	// endpoint.
+	RegisterAppKeyRequest struct {
+		ConnectKey string           `json:"connectKey"`
+		AppKey     types.PublicKey  `json:"appKey"`
+		Meta       accounts.AppMeta `json:"meta"`
 	}
 
 	// WalletSendSiacoinsRequest is the request body for the [POST] /wallet/send

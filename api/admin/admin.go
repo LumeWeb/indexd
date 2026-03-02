@@ -36,6 +36,12 @@ const (
 
 var startTime = time.Now()
 
+var (
+	// ErrInternalError is returned when a signed URL can not be authenticated
+	// because of an unexpected issue.
+	ErrInternalError = errors.New("internal error")
+)
+
 type (
 	// A ChainManager retrieves the current blockchain state
 	ChainManager interface {
@@ -100,6 +106,7 @@ type (
 		DeleteAppConnectKey(context.Context, string) error
 		AppConnectKey(ctx context.Context, key string) (accounts.ConnectKey, error)
 		AppConnectKeys(ctx context.Context, offset, limit int) ([]accounts.ConnectKey, error)
+		RegisterAppKey(string, types.PublicKey, accounts.AppMeta) error
 
 		PutQuota(ctx context.Context, key string, req accounts.PutQuotaRequest) error
 		DeleteQuota(ctx context.Context, key string) error
@@ -112,6 +119,7 @@ type (
 		AccountStats() (AccountStatsResponse, error)
 		AggregatedHostStats() (AggregatedHostStatsResponse, error)
 		ConnectKeyStats() (ConnectKeyStatsResponse, error)
+		AppStats(offset, limit int) ([]AppStats, error)
 		ContractsStats() (ContractsStatsResponse, error)
 		HostStats(offset, limit int) ([]hosts.HostStats, error)
 		SectorStats() (SectorsStatsResponse, error)
@@ -249,6 +257,7 @@ func NewAPI(chain ChainManager, accounts Accounts, contracts ContractManager, ho
 		"PUT    /apps/connect/keys":      a.handlePUTAppConnectKeys,
 		"GET    /apps/connect/keys/:key": a.handleGETAppConnectKeysKey,
 		"DELETE /apps/connect/keys/:key": a.handleDELETEAppConnectKeys,
+		"POST   /apps/register":          a.handlePOSTAppsRegister,
 
 		// quota endpoints
 		"GET    /quotas":      a.handleGETQuotas,
@@ -265,6 +274,7 @@ func NewAPI(chain ChainManager, accounts Accounts, contracts ContractManager, ho
 
 		// stats endpoints
 		"GET /stats/accounts":       a.handleGETStatsAccounts,
+		"GET /stats/apps":           a.handleGETStatsApps,
 		"GET /stats/connectkeys":    a.handleGETStatsConnectKeys,
 		"GET /stats/contracts":      a.handleGETStatsContracts,
 		"GET /stats/hosts":          a.handleGETStatsHostsAggregated,
@@ -431,6 +441,41 @@ func (a *admin) handleDELETEAppConnectKeys(jc jape.Context) {
 		return
 	}
 	jc.Encode(nil)
+}
+
+func (a *admin) handlePOSTAppsRegister(jc jape.Context) {
+	var req RegisterAppKeyRequest
+	if jc.Decode(&req) != nil {
+		return
+	}
+
+	// basic validation of required fields
+	if req.ConnectKey == "" {
+		jc.Error(errors.New("connect key is required"), http.StatusBadRequest)
+		return
+	} else if req.AppKey == (types.PublicKey{}) {
+		jc.Error(errors.New("app key is required"), http.StatusBadRequest)
+		return
+	}
+
+	err := a.accounts.RegisterAppKey(req.ConnectKey, req.AppKey, req.Meta)
+	switch {
+	case errors.Is(err, accounts.ErrExists):
+		jc.Encode(nil)
+	case errors.Is(err, accounts.ErrKeyExhausted):
+		jc.Error(accounts.ErrKeyExhausted, http.StatusForbidden)
+	case errors.Is(err, accounts.ErrKeyNotFound):
+		jc.Error(accounts.ErrKeyNotFound, http.StatusUnauthorized)
+	case err != nil:
+		a.log.Debug("failed to use app connect key", zap.Error(err))
+		jc.Error(ErrInternalError, http.StatusInternalServerError)
+	default:
+		if err := a.contracts.TriggerAccountFunding(false); err != nil {
+			// error is ignored since the account is already connected
+			a.log.Debug("failed to trigger account funding", zap.Error(err))
+		}
+		jc.Encode(nil)
+	}
 }
 
 func (a *admin) handleGETQuotas(jc jape.Context) {
@@ -1088,6 +1133,18 @@ func (a *admin) handleGETStatsConnectKeys(jc jape.Context) {
 		return
 	}
 	writeResponse(jc, stats)
+}
+
+func (a *admin) handleGETStatsApps(jc jape.Context) {
+	offset, limit, ok := api.ParseOffsetLimit(jc)
+	if !ok {
+		return
+	}
+	stats, err := a.store.AppStats(offset, limit)
+	if jc.Check("failed to retrieve app stats", err) != nil {
+		return
+	}
+	writeResponse(jc, AppStatsResponse(stats))
 }
 
 func (a *admin) handleGETStatsContracts(jc jape.Context) {

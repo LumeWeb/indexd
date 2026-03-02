@@ -27,9 +27,7 @@ type (
 	}
 )
 
-func (*funderHostClientMock) Close() error { return nil }
-
-func (h *funderHostClientMock) LatestRevision(ctx context.Context, hostKey types.PublicKey, contractID types.FileContractID) (proto.RPCLatestRevisionResponse, error) {
+func (h *funderHostClientMock) LatestRevision(_ context.Context, _ types.PublicKey, _ types.FileContractID) (proto.RPCLatestRevisionResponse, error) {
 	return proto.RPCLatestRevisionResponse{}, nil
 }
 func (h *funderHostClientMock) ReplenishAccounts(ctx context.Context, signer rhp.ContractSigner, chain client.ChainManager, params rhp.RPCReplenishAccountsParams) (rhp.RPCReplenishAccountsResult, error) {
@@ -41,6 +39,10 @@ func (h *funderHostClientMock) ReplenishAccounts(ctx context.Context, signer rhp
 }
 
 type mockChainManager struct{}
+
+func (cm *mockChainManager) Block(id types.BlockID) (types.Block, bool) {
+	return types.Block{}, false
+}
 
 func (cm *mockChainManager) TipState() consensus.State {
 	return consensus.State{}
@@ -109,7 +111,8 @@ func TestFunder(t *testing.T) {
 	}
 
 	// prepare funder
-	f := NewFunder(hc, nil, &mockChainManager{}, &mockStore{target: target}, zap.NewNop(), WithRevisionSubmissionBuffer(1))
+	rev := NewRevisionManager(hc, &mockChainManager{}, &mockStore{target: target}, 1, zap.NewNop())
+	f := NewFunder(hc, rev, nil, &mockChainManager{}, zap.NewNop())
 
 	// assert contract is marked as drained if it is out of funds
 	funded, drained, err := f.FundAccounts(context.Background(), host, []types.FileContractID{{1}}, accs, target, zap.NewNop())

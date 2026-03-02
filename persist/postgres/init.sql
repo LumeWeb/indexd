@@ -6,9 +6,9 @@ CREATE TABLE quotas (
     fund_target_bytes BIGINT NOT NULL CHECK (fund_target_bytes >= 0) -- funding target in bytes per host (0 means no funding)
 );
 
--- insert default quota: 1TB max data, 5 total uses, 16 GiB fund target
+-- insert default quota: 1TB max data, 5 total uses, 16 GB fund target
 INSERT INTO quotas (name, description, max_pinned_data, total_uses, fund_target_bytes)
-VALUES ('default', 'Default quota', 1000000000000, 5, 17179869184);
+VALUES ('default', 'Default quota', 1000000000000, 5, 16000000000);
 
 CREATE TABLE app_connect_keys (
     id SERIAL PRIMARY KEY,
@@ -40,6 +40,7 @@ CREATE TABLE accounts (
 CREATE INDEX accounts_last_used_idx ON accounts(last_used);
 CREATE INDEX accounts_deleted_at_idx ON accounts(deleted_at);
 CREATE INDEX accounts_connect_key_id_idx ON accounts(connect_key_id);
+CREATE INDEX accounts_app_id_idx ON accounts(app_id) WHERE deleted_at IS NULL;
 
 CREATE TABLE hosts (
     id SERIAL PRIMARY KEY,
