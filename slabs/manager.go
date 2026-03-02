@@ -34,8 +34,8 @@ type (
 		migrationAccount    proto.Account
 		migrationAccountKey types.PrivateKey
 
-		migrationBatchSize int
-		shardTimeout       time.Duration
+		numMigrationGoroutines int
+		shardTimeout           time.Duration
 
 		alerter AlertsManager
 		chain   ChainManager
@@ -147,18 +147,18 @@ func WithIntegrityCheckIntervals(success, failure time.Duration) Option {
 	}
 }
 
-// WithMigrationBatchSize sets the number of slabs to migrate in a single batch.
+// WithNumMigrationGoroutines sets the number of slabs to migrate in parallel.
 // This directly impacts the number of concurrent downloads/uploads the contract
 // manager will perform when repairing slabs and the number of slabs held in
 // memory during repairs.
 //
 // The default is runtime.NumCPU().
-func WithMigrationBatchSize(size int) Option {
+func WithNumMigrationGoroutines(size int) Option {
 	return func(m *SlabManager) {
 		if size <= 0 {
 			panic("migration batch size must be positive") // developer error
 		}
-		m.migrationBatchSize = size
+		m.numMigrationGoroutines = size
 	}
 }
 
@@ -206,8 +206,8 @@ func newSlabManager(chain ChainManager, am AccountManager, cm ContractManager, h
 		migrationAccount:    proto.Account(migrationAccount.PublicKey()),
 		migrationAccountKey: migrationAccount,
 
-		shardTimeout:       2 * time.Minute,
-		migrationBatchSize: runtime.NumCPU(),
+		shardTimeout:           2 * time.Minute,
+		numMigrationGoroutines: runtime.NumCPU(),
 
 		chain:   chain,
 		am:      am,
@@ -335,40 +335,47 @@ func (m *SlabManager) performSlabMigrations(ctx context.Context) error {
 	log := m.log.Named("migrations")
 	log.Debug("starting slab migrations")
 
-	allHosts, goodContracts, err := m.migrationCandidates()
-	if err != nil {
-		return err
-	}
-
 	// start a worker pool that pulls slabs from a channel
-	slabCh := make(chan SlabID, m.migrationBatchSize)
+	type slab struct {
+		id            SlabID
+		allHosts      []hosts.Host
+		goodContracts []contracts.Contract
+	}
+	slabCh := make(chan slab, m.numMigrationGoroutines)
 	var wg sync.WaitGroup
-	for range m.migrationBatchSize {
+	for range m.numMigrationGoroutines {
 		wg.Go(func() {
-			for slabID := range slabCh {
-				m.migrateSlab(ctx, slabID, allHosts, goodContracts, log.With(zap.Stringer("slab", slabID)))
+			for slab := range slabCh {
+				m.migrateSlab(ctx, slab.id, slab.allHosts, slab.goodContracts, log.With(zap.Stringer("slab", slab.id)))
 			}
 		})
 	}
 
 	// fetch unhealthy slabs and feed them to the workers
 	for {
-		batch, err := m.store.UnhealthySlabs(m.migrationBatchSize)
+		batch, err := m.store.UnhealthySlabs(m.numMigrationGoroutines)
 		if err != nil {
 			close(slabCh)
 			wg.Wait()
 			return err
 		}
+
+		// update the candidates for every batch
+		allHosts, goodContracts, err := m.migrationCandidates()
+		if err != nil {
+			return err
+		}
+
 		for _, id := range batch {
 			select {
-			case slabCh <- id:
+			case slabCh <- slab{id: id, allHosts: allHosts, goodContracts: goodContracts}:
 			case <-ctx.Done():
 				close(slabCh)
 				wg.Wait()
 				return nil
 			}
 		}
-		if len(batch) < m.migrationBatchSize {
+		if len(batch) < m.numMigrationGoroutines {
 			break
 		}
 	}

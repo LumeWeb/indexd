@@ -58,7 +58,6 @@ type (
 		Usable          *bool             // return usable hosts
 		PublicKeys      []types.PublicKey // do not return hosts with public keys outside of this list
 		Sorting         []HostSortOpt     // return hosts sorted by the provided options
-		Stuck           *bool             // return stuck hosts or not
 	}
 )
 
@@ -70,14 +69,6 @@ func WithSorting(field string, descending bool) HostQueryOpt {
 			Field:      field,
 			Descending: descending,
 		})
-	}
-}
-
-// WithStuck causes only stuck or non-stuck hosts being returned depending on
-// whether 'stuck' is true or false.
-func WithStuck(stuck bool) HostQueryOpt {
-	return func(opts *hostsQueryOpts) {
-		opts.Stuck = &stuck
 	}
 }
 
@@ -135,6 +126,7 @@ type (
 		UnpinnedSectors        uint64              `json:"unpinnedSectors"`
 		AccountFunding         types.Currency      `json:"accountFunding"`
 		TotalSpent             types.Currency      `json:"totalSpent"`
+		StuckSince             time.Time           `json:"stuckSince,omitempty"`
 	}
 
 	// HostInfo is a subset of the Host struct that contains only the public

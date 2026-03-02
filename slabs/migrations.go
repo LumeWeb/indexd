@@ -3,7 +3,6 @@ package slabs
 import (
 	"context"
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/klauspost/reedsolomon"
@@ -27,9 +26,7 @@ func (m *SlabManager) migrationCandidates() ([]hosts.Host, []contracts.Contract,
 	for offset := 0; ; offset += batchSize {
 		batch, err := m.store.Hosts(offset, batchSize,
 			hosts.WithBlocked(false),
-			hosts.WithActiveContracts(true),
-			hosts.WithUsable(true),
-			hosts.WithStuck(false))
+			hosts.WithActiveContracts(true))
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to fetch hosts: %w", err)
 		}
@@ -39,10 +36,6 @@ func (m *SlabManager) migrationCandidates() ([]hosts.Host, []contracts.Contract,
 			break
 		}
 	}
-
-	allHosts = slices.DeleteFunc(allHosts, func(h hosts.Host) bool {
-		return h.Settings.RemainingStorage == 0
-	})
 
 	return allHosts, goodContracts, nil
 }
@@ -206,8 +199,19 @@ func sectorsToMigrate(slab Slab, allHosts []hosts.Host, goodContracts []contract
 	}
 	var candidates []types.PublicKey
 	for _, host := range hostsMap {
-		// must have a good contract and be sufficiently far apart
-		if _, ok := hasGoodContract[host.PublicKey]; ok && set.Add(host) {
+		if _, ok := hasGoodContract[host.PublicKey]; !ok {
+			// must have a good contract
+			continue
+		} else if !host.StuckSince.IsZero() {
+			// can't migrate to stuck hosts
+			continue
+		} else if host.Settings.RemainingStorage == 0 {
+			// can't migrate to hosts without storage
+			continue
+		}
+
+		// must be sufficiently far apart
+		if set.Add(host) {
 			candidates = append(candidates, host.PublicKey)
 		}
 	}
