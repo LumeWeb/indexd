@@ -23,6 +23,7 @@ const (
 	maxContractSize     = 10 * 1 << 40                              // 10TB
 
 	fundTimeout = 2 * time.Minute
+	pinTimeout  = 2 * time.Minute
 
 	unpinnableSectorThreshold = 3 * 24 * time.Hour
 
