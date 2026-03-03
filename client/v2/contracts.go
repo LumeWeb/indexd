@@ -3,18 +3,12 @@ package client
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"go.sia.tech/core/consensus"
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/rhp/v4"
 )
-
-// contractRenewalTimeout is a more generous timeout for contract
-// renewals/refreshes. Since that operation involves a lot of disk I/O for large
-// contracts, we want to make sure to give it enough time to finish.
-const contractRenewalTimeout = 10 * time.Minute
 
 // A ChainManager provides access to the current consensus state
 // and mempool.
@@ -79,9 +73,6 @@ func (c *Client) RefreshContract(ctx context.Context, chain ChainManager, signer
 	}
 	defer done()
 
-	ctx, cancel := context.WithTimeout(ctx, contractRenewalTimeout)
-	defer cancel()
-
 	revision := params.Contract.Revision
 	rpcParams := proto.RPCRefreshContractParams{
 		ContractID: params.Contract.ID,
@@ -107,9 +98,6 @@ func (c *Client) RenewContract(ctx context.Context, chain ChainManager, signer r
 		return rhp.RPCRenewContractResult{}, err
 	}
 	defer done()
-
-	ctx, cancel := context.WithTimeout(ctx, contractRenewalTimeout)
-	defer cancel()
 
 	revision := params.Contract.Revision
 	rpcParams := proto.RPCRenewContractParams{
