@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	proto "go.sia.tech/core/rhp/v4"
@@ -71,6 +72,10 @@ type (
 		store  RevisionStore
 		buffer uint64
 		log    *zap.Logger
+
+		// revision locking
+		mu    sync.Mutex
+		locks map[types.FileContractID]*sync.Mutex
 	}
 )
 
@@ -129,9 +134,10 @@ func (rm *RevisionManager) syncRevision(ctx context.Context, contractID types.Fi
 // reports an invalid signature, suggesting the local revision is out of sync,
 // it will synchronize with the host and retry the function using the updated
 // revision. Therefore, the revise function must be idempotent.
-func (rm *RevisionManager) WithRevision(ctx context.Context, contractID types.FileContractID, reviseFn func(contract rhp.ContractRevision) (rhp.ContractRevision, proto.Usage, error)) error {
+func (rm *RevisionManager) WithRevision(ctx context.Context, lc *LockedContract, reviseFn func(contract rhp.ContractRevision) (rhp.ContractRevision, proto.Usage, error)) error {
 	cs := rm.chain.TipState()
 	bh := cs.Index.Height
+	contractID := lc.id
 
 	// fetch revision from database
 	contract, renewed, err := rm.store.ContractRevision(contractID)

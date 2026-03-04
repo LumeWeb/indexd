@@ -180,7 +180,8 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger, opts ...Indexer
 	}
 
 	rev := contracts.NewRevisionManager(client, c.cm, store, 1, log.Named("revision"))
-	f := contracts.NewFunder(client, rev, signer, c.cm, log.Named("funder"))
+	cl := contracts.NewContractLocker()
+	f := contracts.NewFunder(client, cl, rev, signer, c.cm, log.Named("funder"))
 	contracts, err := contracts.NewManager(walletKey, am, f, c.cm, store, client, signer, rev, hm, s, wm, cfg.contractOpts...)
 	if err != nil {
 		t.Fatalf("failed to create contract manager: %v", err)

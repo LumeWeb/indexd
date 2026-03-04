@@ -196,6 +196,7 @@ type (
 		accounts      AccountManager
 		accountFunder AccountFunder
 		chain         ChainManager
+		cl            *ContractLocker
 		hosts         HostManager
 		syncer        Syncer
 		wallet        Wallet
@@ -481,6 +482,7 @@ func newContractManager(renterKey types.PublicKey, accounts AccountManager, acco
 		store:  store,
 
 		client: client,
+		cl:     NewContractLocker(),
 		signer: signer,
 		rev:    rev,
 

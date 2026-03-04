@@ -23,6 +23,7 @@ type (
 	// Funder dials a host and replenish a set of ephemeral accounts.
 	Funder struct {
 		client FunderHostClient
+		locker *ContractLocker
 		signer rhp.ContractSigner
 		chain  ChainManager
 		rev    *RevisionManager
@@ -32,9 +33,10 @@ type (
 )
 
 // NewFunder creates a new Funder.
-func NewFunder(client FunderHostClient, rev *RevisionManager, signer rhp.ContractSigner, chain ChainManager, log *zap.Logger) *Funder {
+func NewFunder(client FunderHostClient, cl *ContractLocker, rev *RevisionManager, signer rhp.ContractSigner, chain ChainManager, log *zap.Logger) *Funder {
 	return &Funder{
 		client: client,
+		locker: cl,
 		signer: signer,
 		chain:  chain,
 		rev:    rev,
@@ -69,9 +71,16 @@ func (f *Funder) FundAccounts(ctx context.Context, host hosts.Host, contractIDs 
 	for _, contractID := range contractIDs {
 		contractLog := log.With(zap.Stringer("contractID", contractID))
 
+		lc, unlock := f.locker.TryLockContract(contractID)
+		if lc == nil {
+			contractLog.Debug("ignoring locked contract for funding")
+			continue
+		}
+		defer unlock()
+
 		var res rhp.RPCReplenishAccountsResult
 		var err error
-		err = f.rev.WithRevision(ctx, contractID, func(contract rhp.ContractRevision) (rhp.ContractRevision, proto.Usage, error) {
+		err = f.rev.WithRevision(ctx, lc, func(contract rhp.ContractRevision) (rhp.ContractRevision, proto.Usage, error) {
 			if contract.Revision.RenterOutput.Value.Cmp(target) < 0 {
 				return rhp.ContractRevision{}, proto.Usage{}, ErrContractInsufficientFunds
 			}

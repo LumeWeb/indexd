@@ -120,6 +120,9 @@ func (cm *ContractManager) pinSectors(ctx context.Context, hostKey types.PublicK
 		}
 		log := log.With(zap.Stringer("contractID", contractID))
 
+		lc, unlock := cm.cl.LockContract(contractID)
+		defer unlock()
+
 		prices, err := cm.client.Prices(ctx, hostKey)
 		if err != nil {
 			log.Debug("failed to get host prices", zap.Error(err))
@@ -128,7 +131,7 @@ func (cm *ContractManager) pinSectors(ctx context.Context, hostKey types.PublicK
 
 		var res rhp.RPCAppendSectorsResult
 		var attempted int
-		err = cm.rev.WithRevision(ctx, contractID, func(contract rhp.ContractRevision) (_ rhp.ContractRevision, _ proto.Usage, err error) {
+		err = cm.rev.WithRevision(ctx, lc, func(contract rhp.ContractRevision) (_ rhp.ContractRevision, _ proto.Usage, err error) {
 			if contract.Revision.Filesize >= maxSize {
 				return rhp.ContractRevision{}, proto.Usage{}, fmt.Errorf("contract is too large, %d > %d: %w", contract.Revision.Filesize, maxSize, ErrContractMaxSize)
 			}

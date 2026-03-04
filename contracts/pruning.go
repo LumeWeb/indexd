@@ -114,6 +114,11 @@ loop:
 func (cm *ContractManager) pruneContract(ctx context.Context, contractID types.FileContractID) (int, error) {
 	const dbRootsBatchSize = 10000
 
+	// lock contract first before doing anything else to avoid anything else
+	// modifying the contract while we loop over offsets and roots
+	lc, unlock := cm.cl.LockContract(contractID)
+	defer unlock()
+
 	contract, renewed, err := cm.store.ContractRevision(contractID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to fetch contract revision: %w", err)
@@ -128,7 +133,7 @@ func (cm *ContractManager) pruneContract(ctx context.Context, contractID types.F
 		length := min(cm.sectorRootsBatchSize, contractSectors-offset)
 
 		var roots []types.Hash256
-		err = cm.rev.WithRevision(ctx, contractID, func(rev rhp.ContractRevision) (rhp.ContractRevision, proto.Usage, error) {
+		err = cm.rev.WithRevision(ctx, lc, func(rev rhp.ContractRevision) (rhp.ContractRevision, proto.Usage, error) {
 			res, err := cm.client.SectorRoots(ctx, cm.signer, cm.chain, rev, offset, length)
 			if err != nil {
 				return rhp.ContractRevision{}, proto.Usage{}, err
@@ -165,7 +170,7 @@ func (cm *ContractManager) pruneContract(ctx context.Context, contractID types.F
 			continue
 		}
 
-		err = cm.rev.WithRevision(ctx, contractID, func(rev rhp.ContractRevision) (rhp.ContractRevision, proto.Usage, error) {
+		err = cm.rev.WithRevision(ctx, lc, func(rev rhp.ContractRevision) (rhp.ContractRevision, proto.Usage, error) {
 			res, err := cm.client.FreeSectors(ctx, cm.signer, cm.chain, rev, indices)
 			if err != nil {
 				return rhp.ContractRevision{}, proto.Usage{}, err
