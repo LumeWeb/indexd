@@ -35,6 +35,9 @@ type (
 		dataShards   uint8
 		parityShards uint8
 
+		// pin function, set by SDK
+		pinResultFn pinResultFn
+
 		// upload state
 		reader  *io.PipeReader
 		writer  *io.PipeWriter
@@ -59,7 +62,33 @@ type (
 		slabs []slabs.SlabSlice
 		err   error
 	}
+
+	pinResultFn func(ctx context.Context, result packedResult) error
 )
+
+func (pr packedResult) PinParams() []slabs.SlabPinParams {
+	params := make([]slabs.SlabPinParams, len(pr.slabs))
+	for i, slab := range pr.slabs {
+		params[i] = slabs.SlabPinParams{
+			EncryptionKey: slab.EncryptionKey,
+			MinShards:     slab.MinShards,
+			Sectors:       slab.Sectors,
+		}
+	}
+	return params
+}
+
+func (pr packedResult) VerifySlabIDs(uploaded []slabs.SlabID) error {
+	if len(pr.slabs) != len(uploaded) {
+		return fmt.Errorf("unexpected number of slabs: got %d, expected %d", len(uploaded), len(pr.slabs))
+	}
+	for i, slab := range pr.slabs {
+		if slab.Digest() != uploaded[i] {
+			return fmt.Errorf("slab %d: unexpected slab ID: got %s, expected %s", i, uploaded[i], slab.Digest())
+		}
+	}
+	return nil
+}
 
 // Add adds a new object to the upload. The data will be read until EOF and
 // packed into the upload. The caller must call Finalize to get the resulting
@@ -130,12 +159,11 @@ func (u *PackedUpload) Close() error {
 	return nil
 }
 
-// Finalize finalizes the upload and returns the resulting objects. This will
-// wait for all slabs to be uploaded before returning. The resulting objects
-// will contain the metadata needed to download the objects.
-//
-// The caller must pin the resulting objects to the indexer when ready. Finalize
-// is idempotent and can be called multiple times.
+// Finalize finalizes the upload, pins the resulting slabs, and returns the
+// resulting objects. This will wait for all slabs to be uploaded before
+// returning. The resulting objects will contain the metadata needed to
+// download the objects. The caller must call SaveObject for each returned
+// object to persist it to the indexer.
 func (u *PackedUpload) Finalize(ctx context.Context) ([]Object, error) {
 	// close the writer to signal EOF to the uploader
 	_ = u.writer.Close()
@@ -148,6 +176,11 @@ func (u *PackedUpload) Finalize(ctx context.Context) ([]Object, error) {
 		if u.result.err != nil {
 			return nil, u.result.err
 		}
+	}
+
+	// pin slabs
+	if err := u.pinResultFn(ctx, u.result); err != nil {
+		return nil, err
 	}
 
 	// build objects
@@ -256,6 +289,14 @@ func (s *SDK) UploadPacked(opts ...UploadOption) (*PackedUpload, error) {
 	u := &PackedUpload{
 		dataShards:   uo.dataShards,
 		parityShards: uo.parityShards,
+
+		pinResultFn: func(ctx context.Context, result packedResult) error {
+			slabIDs, err := s.client.PinSlabs(ctx, s.appKey, result.PinParams()...)
+			if err != nil {
+				return fmt.Errorf("failed to pin slabs: %w", err)
+			}
+			return result.VerifySlabIDs(slabIDs)
+		},
 
 		reader: reader,
 		writer: writer,
