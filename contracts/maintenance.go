@@ -134,8 +134,6 @@ func (cm *ContractManager) maintenanceLoop(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
-			case <-cm.triggerMaintenanceChan:
-				log.Debug("triggering scheduled contract maintenance")
 			case <-t.C:
 				log.Debug("starting scheduled contract maintenance")
 			}
