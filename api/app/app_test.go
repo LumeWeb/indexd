@@ -119,6 +119,17 @@ func uploadRandomSlab(t testing.TB, client *client.Client, sk types.PrivateKey, 
 		var sector [proto.SectorSize]byte
 		frand.Read(sector[:])
 
+		// wait for account to be funded
+		for i := 0; i < 10; i++ {
+			balance, err := client.AccountBalance(context.Background(), h.PublicKey, proto.Account(sk.PublicKey()))
+			if err != nil {
+				t.Fatal("failed to obtain account balance:", err)
+			} else if !balance.IsZero() {
+				break // funded
+			}
+			time.Sleep(time.Second)
+		}
+
 		// upload sector
 		hk := h.PublicKey
 		if result, err := client.WriteSector(context.Background(), sk, hk, sector[:]); err != nil {
