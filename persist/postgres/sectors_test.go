@@ -256,7 +256,7 @@ func TestRecordIntegrityCheck(t *testing.T) {
 		err := store.pool.QueryRow(t.Context(), "SELECT next_integrity_check, consecutive_failed_checks FROM sectors WHERE sector_root = $1", sqlHash256(root)).Scan(&nextCheck, &consecutiveFailures)
 		if err != nil {
 			t.Fatal(err)
-		} else if expectedNextCheck != nextCheck {
+		} else if !expectedNextCheck.Equal(nextCheck) {
 			t.Fatalf("expected next check %v, got %v", expectedNextCheck, nextCheck)
 		} else if consecutiveFailures != expectedConsecutiveFailures {
 			t.Fatalf("expected %d consecutive failures, got %d", expectedConsecutiveFailures, consecutiveFailures)

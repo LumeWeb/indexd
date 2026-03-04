@@ -6,6 +6,8 @@ import (
 	"go.sia.tech/core/types"
 )
 
+// ContractLocker manages locks for contracts. It allows locking a contract by
+// its ID and ensures that only one lock can be held for a contract at a time.
 type ContractLocker struct {
 	mu              sync.Mutex
 	lockedContracts map[types.FileContractID]*LockedContract

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	proto "go.sia.tech/core/rhp/v4"
@@ -72,10 +71,6 @@ type (
 		store  RevisionStore
 		buffer uint64
 		log    *zap.Logger
-
-		// revision locking
-		mu    sync.Mutex
-		locks map[types.FileContractID]*sync.Mutex
 	}
 )
 
