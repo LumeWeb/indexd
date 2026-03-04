@@ -67,6 +67,7 @@ func (cl *ContractLocker) TryLockContract(contractID types.FileContractID) (*Loc
 	cl.mu.Lock()
 	_, exists := cl.lockedContracts[contractID]
 	if exists {
+		cl.mu.Unlock()
 		return nil, nil
 	}
 	lc := &LockedContract{
