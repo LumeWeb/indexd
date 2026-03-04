@@ -255,7 +255,7 @@ func TestE2E(t *testing.T) {
 			t.Fatalf("failed to save object: %v", err)
 		} else if _, err := client.Object(t.Context(), obj.ID()); err != nil {
 			t.Fatalf("failed to get object: %v", err)
-		} else if err := client.Download(context.Background(), buf, obj); err != nil {
+		} else if err := client.Download(t.Context(), buf, obj); err != nil {
 			t.Fatalf("failed to download: %v", err)
 		} else if !bytes.Equal(buf.Bytes(), data) {
 			t.Fatal("data mismatch")
@@ -293,11 +293,11 @@ func TestE2E(t *testing.T) {
 	defer packed.Close()
 
 	data1 := frand.Bytes(3000)
-	if _, err := packed.Add(context.Background(), bytes.NewReader(data1)); err != nil {
+	if _, err := packed.Add(t.Context(), bytes.NewReader(data1)); err != nil {
 		t.Fatalf("failed to add first object: %v", err)
 	}
 	data2 := frand.Bytes(5000)
-	if _, err := packed.Add(context.Background(), bytes.NewReader(data2)); err != nil {
+	if _, err := packed.Add(t.Context(), bytes.NewReader(data2)); err != nil {
 		t.Fatalf("failed to add second object: %v", err)
 	}
 
@@ -319,11 +319,11 @@ func TestE2E(t *testing.T) {
 	defer packedL.Close()
 
 	data3 := frand.Bytes(5 * 1 << 20) // 5 MiB
-	if _, err := packedL.Add(context.Background(), bytes.NewReader(data3)); err != nil {
+	if _, err := packedL.Add(t.Context(), bytes.NewReader(data3)); err != nil {
 		t.Fatalf("failed to add first large object: %v", err)
 	}
 	data4 := frand.Bytes(5 * 1 << 20) // 5 MiB
-	if _, err := packedL.Add(context.Background(), bytes.NewReader(data4)); err != nil {
+	if _, err := packedL.Add(t.Context(), bytes.NewReader(data4)); err != nil {
 		t.Fatalf("failed to add second large object: %v", err)
 	}
 
