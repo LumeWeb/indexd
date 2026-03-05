@@ -190,6 +190,8 @@ func (c *Cluster) NewHosts(t testing.TB, n int) []*Host {
 	return hosts
 }
 
+// WaitForAccountFunding waits until the given account is funded on every host
+// in the cluster.
 func (c *Cluster) WaitForAccountFunding(t *testing.T, pk proto.Account) {
 	t.Helper()
 	for _, h := range c.Hosts {

@@ -24,7 +24,7 @@ type LockedContract struct {
 	id types.FileContractID
 	mu sync.Mutex // used to acquire contract
 
-	refcount int // locked by ContractManager.lockedContractsMu
+	refcount int // locked by ContractLocker.mu
 }
 
 // NewContractLocker creates a new ContractLocker.
