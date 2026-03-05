@@ -177,7 +177,10 @@ func TestContractPruning(t *testing.T) {
 	if err := indexer.App.UnpinSlab(t.Context(), sk, slabIDs[2]); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second)
+	_, err = indexer.Store().Exec(t.Context(), "UPDATE contracts SET next_prune = NOW()")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// remove the 3rd slab's roots from the expected roots (swap and pop)
 	for hk := range expectedRoots {
