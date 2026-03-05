@@ -89,7 +89,8 @@ func defaultIndexerCfg(log *zap.Logger) *indexerCfg {
 			contracts.WithMaintenanceFrequency(100 * time.Millisecond),
 			contracts.WithMinHostDistance(0), // disable location checks in tests
 			contracts.WithSyncPollInterval(500 * time.Millisecond),
-			contracts.WithSectorRootsBatchSize(5), // small batch size for testing
+			contracts.WithSectorRootsBatchSize(5),     // small batch size for testing
+			contracts.WithMaxAccountFundingBackoff(0), // retry immediately
 		},
 		slabOpts: []slabs.Option{
 			slabs.WithLogger(log.Named("slabs")),

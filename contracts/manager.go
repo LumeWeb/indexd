@@ -217,6 +217,7 @@ type (
 		expiredContractPruneBuffer        uint64
 		expiredContractSectorsPruneBuffer uint64
 		maintenanceFrequency              time.Duration
+		maxAccountFundingBackoff          time.Duration
 		minHostDistanceKm                 float64
 		pruneIntervalSuccess              time.Duration
 		pruneIntervalFailure              time.Duration
@@ -238,6 +239,14 @@ func WithLogger(l *zap.Logger) ContractManagerOpt {
 func WithMaintenanceFrequency(frequency time.Duration) ContractManagerOpt {
 	return func(cm *ContractManager) {
 		cm.maintenanceFrequency = frequency
+	}
+}
+
+// WithMaxAccountFundingBackoff sets the maximum backoff duration for account
+// funding retries. The default is 2 hours.
+func WithMaxAccountFundingBackoff(backoff time.Duration) ContractManagerOpt {
+	return func(cm *ContractManager) {
+		cm.maxAccountFundingBackoff = backoff
 	}
 }
 
@@ -470,6 +479,7 @@ func newContractManager(renterKey types.PublicKey, accounts AccountManager, acco
 		expiredContractPruneBuffer:        144,           // 144 blocks after broadcast
 		expiredContractSectorsPruneBuffer: 36,            // 36 blocks (~6 hours) after expiration
 		maintenanceFrequency:              2 * time.Minute,
+		maxAccountFundingBackoff:          2 * time.Hour,
 		minHostDistanceKm:                 10,                 // 10km
 		pruneIntervalSuccess:              24 * time.Hour,     // 1 day
 		pruneIntervalFailure:              3 * time.Hour,      // 3 hours
