@@ -133,9 +133,9 @@ func TestDownload(t *testing.T) {
 		t.Fatalf("failed to upload: %v", err)
 	}
 
-	err = s.client.SaveObject(t.Context(), appKey, obj.Seal(appKey).SealedObject)
+	err = s.PinObject(t.Context(), obj)
 	if err != nil {
-		t.Fatalf("failed to save object to mock client: %v", err)
+		t.Fatalf("failed to pin object: %v", err)
 	}
 
 	sharedURL, err := s.CreateSharedObjectURL(t.Context(), obj.ID(), time.Now().Add(time.Hour))
@@ -251,8 +251,8 @@ func TestE2E(t *testing.T) {
 
 		// assert we can download the object
 		buf := bytes.NewBuffer(nil)
-		if err := client.SaveObject(t.Context(), obj); err != nil {
-			t.Fatalf("failed to save object: %v", err)
+		if err := client.PinObject(t.Context(), obj); err != nil {
+			t.Fatalf("failed to pin object: %v", err)
 		} else if _, err := client.Object(t.Context(), obj.ID()); err != nil {
 			t.Fatalf("failed to get object: %v", err)
 		} else if err := client.Download(t.Context(), buf, obj); err != nil {
