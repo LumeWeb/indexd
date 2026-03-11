@@ -50,6 +50,8 @@ func TestAccounts(t *testing.T) {
 			t.Fatalf("expected account key %s, got %s", expectedKey, acc.AccountKey)
 		case uint64(acc.MaxPinnedData) != maxData:
 			t.Fatalf("expected max data %d, got %d", maxData, acc.MaxPinnedData)
+		case acc.Ready:
+			t.Fatal("expected account to be not ready")
 		}
 	}
 
@@ -104,6 +106,56 @@ func TestAccounts(t *testing.T) {
 	if !errors.Is(err, accounts.ErrKeyNotFound) {
 		t.Fatalf("expected %q, got %q", accounts.ErrKeyNotFound, err)
 	}
+}
+
+func TestAccountReady(t *testing.T) {
+	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
+
+	ak := types.GeneratePrivateKey().PublicKey()
+	store.addTestAccount(t, ak)
+
+	assertReady := func(t *testing.T, expected bool) {
+		t.Helper()
+
+		acc, err := store.Account(ak)
+		if err != nil {
+			t.Fatal(err)
+		} else if acc.Ready != expected {
+			t.Fatalf("expected account ready=%v, got %v", expected, acc.Ready)
+		}
+
+		accs, err := store.Accounts(0, 10)
+		if err != nil {
+			t.Fatal(err)
+		} else if len(accs) != 1 {
+			t.Fatalf("expected 1 account, got %d", len(accs))
+		} else if accs[0].Ready != expected {
+			t.Fatalf("expected listed account ready=%v, got %v", expected, accs[0].Ready)
+		}
+	}
+
+	assertReady(t, false)
+
+	hostAccs := make([]accounts.HostAccount, 0, accounts.ReadyHostThreshold)
+	for range accounts.ReadyHostThreshold {
+		hostAccs = append(hostAccs, accounts.HostAccount{
+			AccountKey: proto.Account(ak),
+			HostKey:    store.addTestHost(t),
+			NextFund:   time.Now(),
+		})
+	}
+	hostAccs[len(hostAccs)-1].ConsecutiveFailedFunds = 1
+
+	if err := store.UpdateHostAccounts(hostAccs); err != nil {
+		t.Fatal(err)
+	}
+	assertReady(t, false)
+
+	hostAccs[len(hostAccs)-1].ConsecutiveFailedFunds = 0
+	if err := store.UpdateHostAccounts(hostAccs[len(hostAccs)-1:]); err != nil {
+		t.Fatal(err)
+	}
+	assertReady(t, true)
 }
 
 func TestAddAccount(t *testing.T) {

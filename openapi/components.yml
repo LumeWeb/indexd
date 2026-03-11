@@ -415,6 +415,9 @@ components:
           type: number
           format: uint64
           description: Current amount of pinned data in bytes.
+        ready:
+          type: boolean
+          description: Whether the account has completed enough successful host funding rounds to be used.
         app:
           $ref: "#/components/schemas/AppMeta"
         lastUsed:

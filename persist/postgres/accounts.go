@@ -41,14 +41,20 @@ func (s *Store) Accounts(offset, limit int, opts ...accounts.QueryAccountsOpt) (
 		}
 
 		rows, err := tx.Query(ctx, `
-			SELECT a.public_key, ak.app_key, a.max_pinned_data, a.pinned_data, a.app_id, a.description, a.logo_url, a.service_url, a.last_used
+			SELECT a.public_key, ak.app_key, a.max_pinned_data, a.pinned_data, COALESCE(ahr.ready_hosts, 0) >= $4, a.app_id, a.description, a.logo_url, a.service_url, a.last_used
 			FROM accounts a
 			INNER JOIN app_connect_keys ak ON ak.id = a.connect_key_id
+			LEFT JOIN (
+				SELECT account_id, COUNT(*) AS ready_hosts
+				FROM account_hosts
+				WHERE consecutive_failed_funds = 0
+				GROUP BY account_id
+			) ahr ON ahr.account_id = a.id
 			WHERE a.deleted_at IS NULL AND
 			($1::integer IS NULL OR connect_key_id = $1::integer)
 			ORDER BY a.id
 			LIMIT $2 OFFSET $3
-		`, connectKeyID, limit, offset)
+			`, connectKeyID, limit, offset, accounts.ReadyHostThreshold)
 		if err != nil {
 			return fmt.Errorf("failed to query accounts: %w", err)
 		}
@@ -74,10 +80,16 @@ func (s *Store) Account(ak types.PublicKey) (accounts.Account, error) {
 	var account accounts.Account
 	account.AccountKey = proto.Account(ak) // no need to fetch key
 	err := s.transaction(func(ctx context.Context, tx *txn) (err error) {
-		account, err = scanAccount(tx.QueryRow(ctx, `SELECT a.public_key, ak.app_key, a.max_pinned_data, a.pinned_data, a.app_id, a.description, a.logo_url, a.service_url, a.last_used
+		account, err = scanAccount(tx.QueryRow(ctx, `SELECT a.public_key, ak.app_key, a.max_pinned_data, a.pinned_data, COALESCE(ahr.ready_hosts, 0) >= $2, a.app_id, a.description, a.logo_url, a.service_url, a.last_used
 FROM accounts a
 INNER JOIN app_connect_keys ak ON ak.id = a.connect_key_id
-WHERE public_key = $1`, sqlPublicKey(ak)))
+LEFT JOIN (
+	SELECT account_id, COUNT(*) AS ready_hosts
+	FROM account_hosts
+	WHERE consecutive_failed_funds = 0
+	GROUP BY account_id
+) ahr ON ahr.account_id = a.id
+WHERE public_key = $1`, sqlPublicKey(ak), accounts.ReadyHostThreshold))
 		return err
 	})
 	return account, err
@@ -450,6 +462,6 @@ LIMIT $3`, hostID, threshold, limit, quotaName)
 }
 
 func scanAccount(s scanner) (account accounts.Account, err error) {
-	err = s.Scan((*sqlPublicKey)(&account.AccountKey), &account.ConnectKey, &account.MaxPinnedData, &account.PinnedData, (*sqlHash256)(&account.App.ID), &account.App.Description, &account.App.LogoURL, &account.App.ServiceURL, &account.LastUsed)
+	err = s.Scan((*sqlPublicKey)(&account.AccountKey), &account.ConnectKey, &account.MaxPinnedData, &account.PinnedData, &account.Ready, (*sqlHash256)(&account.App.ID), &account.App.Description, &account.App.LogoURL, &account.App.ServiceURL, &account.LastUsed)
 	return
 }
