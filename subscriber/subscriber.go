@@ -140,12 +140,6 @@ func New(cm ChainManager, hm HostManager, contracts ContractManager, wm WalletMa
 // to manually call this since the Subscriber will do that itself but it can be
 // used to guarantee the subscriber is synced at a given point in time.
 func (s *Subscriber) Sync(ctx context.Context) error {
-	ctx, cancel, err := s.tg.AddContext(ctx)
-	if err != nil {
-		return err
-	}
-	defer cancel()
-
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
 
@@ -201,7 +195,6 @@ func (s *Subscriber) Sync(ctx context.Context) error {
 			}
 			return nil
 		})
-		cancel()
 		if err != nil {
 			return fmt.Errorf("failed to apply updates: %w", err)
 		}
