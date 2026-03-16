@@ -121,6 +121,7 @@ type (
 		AccountKey    proto.Account    `json:"accountKey"`
 		MaxPinnedData uint64           `json:"maxPinnedData"`
 		PinnedData    uint64           `json:"pinnedData"`
+		PinnedSize    uint64           `json:"pinnedSize"`
 		App           accounts.AppMeta `json:"app"`
 		LastUsed      time.Time        `json:"lastUsed"`
 	}
@@ -668,6 +669,7 @@ func (a *app) handleGETAccount(jc jape.Context, pk types.PublicKey) {
 		AccountKey:    account.AccountKey,
 		MaxPinnedData: account.MaxPinnedData,
 		PinnedData:    account.PinnedData,
+		PinnedSize:    account.PinnedSize,
 		App:           account.App,
 		LastUsed:      account.LastUsed,
 	})

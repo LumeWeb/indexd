@@ -587,6 +587,7 @@ func TestAppConnect(t *testing.T) {
 		AccountKey:    account.AccountKey,
 		MaxPinnedData: account.MaxPinnedData,
 		PinnedData:    account.PinnedData,
+		PinnedSize:    account.PinnedSize,
 		App:           account.App,
 		LastUsed:      account.LastUsed,
 	}
