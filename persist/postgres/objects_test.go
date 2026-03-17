@@ -76,7 +76,7 @@ func TestObject(t *testing.T) {
 		EncryptedMetadata:    frand.Bytes(50),
 		DataSignature:        types.Signature(frand.Bytes(64)),
 		MetadataSignature:    types.Signature(frand.Bytes(64)),
-		// note: created at an updated at are set by the server
+		// note: created at and updated at are set by the server
 		Slabs: []slabs.SlabSlice{
 			params.Slice(0, 100),
 		},
