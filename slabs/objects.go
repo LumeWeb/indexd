@@ -286,7 +286,7 @@ func (m *SlabManager) DeleteObject(ctx context.Context, account proto.Account, o
 }
 
 // SaveObject saves the given object for the given account. If an object with
-// the given key exists for an account, it is overwritten.
+// the same ID already exists for the account, it is overwritten.
 func (m *SlabManager) SaveObject(ctx context.Context, account proto.Account, obj PinObjectRequest) error {
 	if len(obj.Slabs) == 0 {
 		return ErrObjectMinimumSlabs
