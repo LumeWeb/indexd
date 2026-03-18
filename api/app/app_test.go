@@ -827,7 +827,7 @@ func TestMaxRequestSize(t *testing.T) {
 	indexer := cluster.Indexer
 
 	// create client
-	resp, err := http.Post(fmt.Sprintf("%s/objects", indexer.AppURL), "application/json", io.LimitReader(frand.Reader, (1<<20)+1))
+	resp, err := http.Post(fmt.Sprintf("%s/objects", indexer.AppURL), "application/json", io.LimitReader(frand.Reader, (10<<20)+1))
 	if err != nil {
 		t.Fatal("failed to send request:", err)
 	} else if resp.StatusCode != http.StatusRequestEntityTooLarge {
