@@ -43,7 +43,7 @@ type (
 
 		Object(ctx context.Context, account proto.Account, key types.Hash256) (slabs.SealedObject, error)
 		DeleteObject(ctx context.Context, account proto.Account, objectKey types.Hash256) error
-		SaveObject(ctx context.Context, account proto.Account, obj slabs.SealedObject) error
+		PinObject(ctx context.Context, account proto.Account, obj slabs.PinObjectRequest) error
 		ListObjects(ctx context.Context, account proto.Account, cursor slabs.Cursor, limit int) ([]slabs.ObjectEvent, error)
 		SharedObject(ctx context.Context, key types.Hash256) (slabs.SharedObject, error)
 	}
@@ -317,13 +317,13 @@ func (a *app) handleGETObjects(jc jape.Context, pk types.PublicKey) {
 }
 
 func (a *app) handlePOSTObjects(jc jape.Context, pk types.PublicKey) {
-	obj, ok := decodeRequest[slabs.SealedObject](jc)
+	obj, ok := decodeRequest[slabs.PinObjectRequest](jc)
 	if !ok {
 		return
 	}
 
-	err := a.slabs.SaveObject(jc.Request.Context(), proto.Account(pk), obj)
-	if errors.Is(err, slabs.ErrObjectMetadataLimitExceeded) || errors.Is(err, slabs.ErrObjectMinimumSlabs) || errors.Is(err, slabs.ErrObjectUnpinnedSlab) {
+	err := a.slabs.PinObject(jc.Request.Context(), proto.Account(pk), obj)
+	if errors.Is(err, slabs.ErrObjectMetadataLimitExceeded) || errors.Is(err, slabs.ErrObjectMinimumSlabs) || errors.Is(err, slabs.ErrObjectUnpinnedSlab) || errors.Is(err, slabs.ErrInvalidObjectSignature) {
 		jc.Error(err, http.StatusBadRequest)
 		return
 	} else if err != nil {

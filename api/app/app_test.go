@@ -397,13 +397,13 @@ func TestApplicationAPI(t *testing.T) {
 	}
 
 	// try to save the object with an invalid signature
-	if err := client.SaveObject(context.Background(), sk, obj); err == nil || !strings.Contains(err.Error(), slabs.ErrInvalidObjectSignature.Error()) {
+	if err := client.PinObject(context.Background(), sk, obj); err == nil || !strings.Contains(err.Error(), slabs.ErrInvalidObjectSignature.Error()) {
 		t.Fatalf("expected %v, got %v", slabs.ErrInvalidObjectSignature, err)
 	}
 
 	// sign and save the object
 	obj.Sign(sk)
-	if err := client.SaveObject(context.Background(), sk, obj); err != nil {
+	if err := client.PinObject(context.Background(), sk, obj); err != nil {
 		t.Fatal(err)
 	}
 
@@ -470,7 +470,7 @@ func TestApplicationAPI(t *testing.T) {
 		Slabs:                []slabs.SlabSlice{p2.Slice(0, 256)},
 	}
 	badObj.Sign(sk)
-	if err := client.SaveObject(context.Background(), sk, badObj); err == nil || !strings.Contains(err.Error(), slabs.ErrObjectUnpinnedSlab.Error()) {
+	if err := client.PinObject(context.Background(), sk, badObj); err == nil || !strings.Contains(err.Error(), slabs.ErrObjectUnpinnedSlab.Error()) {
 		t.Fatalf("expected %v, got %v", slabs.ErrObjectUnpinnedSlab, err)
 	}
 }
@@ -776,7 +776,7 @@ func TestSharedObjects(t *testing.T) {
 		},
 	}
 	obj.Sign(sk1)
-	if err := appClient.SaveObject(ctx, sk1, obj); err != nil {
+	if err := appClient.PinObject(ctx, sk1, obj); err != nil {
 		t.Fatal(err)
 	}
 
@@ -827,7 +827,7 @@ func TestMaxRequestSize(t *testing.T) {
 	indexer := cluster.Indexer
 
 	// create client
-	resp, err := http.Post(fmt.Sprintf("%s/objects", indexer.AppURL), "application/json", io.LimitReader(frand.Reader, (1<<20)+1))
+	resp, err := http.Post(fmt.Sprintf("%s/objects", indexer.AppURL), "application/json", io.LimitReader(frand.Reader, (10<<20)+1))
 	if err != nil {
 		t.Fatal("failed to send request:", err)
 	} else if resp.StatusCode != http.StatusRequestEntityTooLarge {
