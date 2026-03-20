@@ -13,58 +13,55 @@ import (
 	"go.sia.tech/indexd/hosts"
 )
 
-func incrementNumAccounts(ctx context.Context, tx *txn, delta int64) error {
-	_, err := tx.Exec(ctx, "UPDATE stats SET num_accounts_registered = num_accounts_registered + $1", delta)
+func incrementStat(ctx context.Context, tx *txn, name string, delta int64) error {
+	_, err := tx.Exec(ctx, "UPDATE stats SET stat_value = stat_value + $1 WHERE stat_name = $2", delta, name)
 	return err
+}
+
+func incrementNumAccounts(ctx context.Context, tx *txn, delta int64) error {
+	return incrementStat(ctx, tx, "num_accounts_registered", delta)
 }
 
 func incrementNumSlabs(ctx context.Context, tx *txn, delta int64) error {
-	_, err := tx.Exec(ctx, "UPDATE stats SET num_slabs = num_slabs + $1", delta)
-	return err
+	return incrementStat(ctx, tx, "num_slabs", delta)
 }
 
 func incrementNumMigratedSectors(ctx context.Context, tx *txn) error {
-	_, err := tx.Exec(ctx, `UPDATE stats SET num_migrated_sectors = num_migrated_sectors + 1`)
-	return err
+	return incrementStat(ctx, tx, "num_migrated_sectors", 1)
 }
 
 func incrementNumPinnedSectors(ctx context.Context, tx *txn, delta int64) error {
-	_, err := tx.Exec(ctx, `UPDATE stats SET num_pinned_sectors = num_pinned_sectors + $1`, delta)
-	return err
+	return incrementStat(ctx, tx, "num_pinned_sectors", delta)
 }
 
 func incrementNumUnpinnableSectors(ctx context.Context, tx *txn, delta int64) error {
-	_, err := tx.Exec(ctx, "UPDATE stats SET num_unpinnable_sectors = num_unpinnable_sectors + $1", delta)
-	return err
+	return incrementStat(ctx, tx, "num_unpinnable_sectors", delta)
 }
 
 func incrementNumUnpinnedSectors(ctx context.Context, tx *txn, delta int64) error {
-	_, err := tx.Exec(ctx, "UPDATE stats SET num_unpinned_sectors = num_unpinned_sectors + $1", delta)
-	return err
+	return incrementStat(ctx, tx, "num_unpinned_sectors", delta)
 }
 
 func incrementNumSectorsLost(ctx context.Context, tx *txn, delta uint64) error {
-	_, err := tx.Exec(ctx, "UPDATE stats SET num_sectors_lost = num_sectors_lost + $1", delta)
-	return err
+	return incrementStat(ctx, tx, "num_sectors_lost", int64(delta))
 }
 
 func incrementNumSectorsChecked(ctx context.Context, tx *txn, delta uint64) error {
-	_, err := tx.Exec(ctx, "UPDATE stats SET num_sectors_checked = num_sectors_checked + $1", delta)
-	return err
+	return incrementStat(ctx, tx, "num_sectors_checked", int64(delta))
 }
 
 func incrementNumSectorsFailed(ctx context.Context, tx *txn, delta uint64) error {
-	_, err := tx.Exec(ctx, "UPDATE stats SET num_sectors_check_failed = num_sectors_check_failed + $1", delta)
-	return err
+	return incrementStat(ctx, tx, "num_sectors_check_failed", int64(delta))
 }
 
 func incrementNumScans(ctx context.Context, tx *txn, success bool) error {
-	var failed int64
-	if !success {
-		failed = 1
+	if err := incrementStat(ctx, tx, "num_scans", 1); err != nil {
+		return err
 	}
-	_, err := tx.Exec(ctx, "UPDATE stats SET num_scans = num_scans + 1, num_scans_failed = num_scans_failed + $1", failed)
-	return err
+	if !success {
+		return incrementStat(ctx, tx, "num_scans_failed", 1)
+	}
+	return nil
 }
 
 func incrementHostUnpinnedSectors(ctx context.Context, tx *txn, hostID int64, delta int64) error {
@@ -93,7 +90,19 @@ func incrementHostsUnpinnedSectors(ctx context.Context, tx *txn, deltas []unpinn
 }
 
 func initStats(ctx context.Context, tx *txn) error {
-	_, err := tx.Exec(ctx, "INSERT INTO stats (id) VALUES (0) ON CONFLICT(id) DO NOTHING")
+	_, err := tx.Exec(ctx, `INSERT INTO stats (stat_name) VALUES
+		('num_slabs'),
+		('num_migrated_sectors'),
+		('num_pinned_sectors'),
+		('num_unpinnable_sectors'),
+		('num_unpinned_sectors'),
+		('num_sectors_checked'),
+		('num_sectors_lost'),
+		('num_sectors_check_failed'),
+		('num_accounts_registered'),
+		('num_scans'),
+		('num_scans_failed')
+	ON CONFLICT (stat_name) DO NOTHING`)
 	return err
 }
 
@@ -102,8 +111,38 @@ func initStats(ctx context.Context, tx *txn) error {
 func (s *Store) SectorStats() (admin.SectorsStatsResponse, error) {
 	var stats admin.SectorsStatsResponse
 	err := s.transaction(func(ctx context.Context, tx *txn) error {
-		row := tx.QueryRow(ctx, "SELECT num_slabs, num_migrated_sectors, num_pinned_sectors, num_unpinnable_sectors, num_unpinned_sectors, num_sectors_lost, num_sectors_checked, num_sectors_check_failed FROM stats")
-		return row.Scan(&stats.Slabs, &stats.Migrated, &stats.Pinned, &stats.Unpinnable, &stats.Unpinned, &stats.Lost, &stats.Checked, &stats.CheckFailed)
+		rows, err := tx.Query(ctx, `SELECT stat_name, stat_value FROM stats WHERE stat_name = ANY($1)`,
+			[]string{"num_slabs", "num_migrated_sectors", "num_pinned_sectors", "num_unpinnable_sectors", "num_unpinned_sectors", "num_sectors_lost", "num_sectors_checked", "num_sectors_check_failed"})
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var name string
+			var value int64
+			if err := rows.Scan(&name, &value); err != nil {
+				return err
+			}
+			switch name {
+			case "num_slabs":
+				stats.Slabs = value
+			case "num_migrated_sectors":
+				stats.Migrated = value
+			case "num_pinned_sectors":
+				stats.Pinned = value
+			case "num_unpinnable_sectors":
+				stats.Unpinnable = value
+			case "num_unpinned_sectors":
+				stats.Unpinned = value
+			case "num_sectors_lost":
+				stats.Lost = value
+			case "num_sectors_checked":
+				stats.Checked = value
+			case "num_sectors_check_failed":
+				stats.CheckFailed = value
+			}
+		}
+		return rows.Err()
 	})
 	return stats, err
 }
@@ -150,7 +189,7 @@ OFFSET $2 LIMIT $3`,
 func (s *Store) AccountStats() (admin.AccountStatsResponse, error) {
 	var stats admin.AccountStatsResponse
 	err := s.transaction(func(ctx context.Context, tx *txn) error {
-		err := tx.QueryRow(ctx, "SELECT num_accounts_registered FROM stats").Scan(&stats.Registered)
+		err := tx.QueryRow(ctx, "SELECT stat_value FROM stats WHERE stat_name = 'num_accounts_registered'").Scan(&stats.Registered)
 		if err != nil {
 			return fmt.Errorf("failed to get number of registered accounts: %w", err)
 		}
@@ -198,7 +237,10 @@ func (s *Store) ConnectKeyStats() (stats admin.ConnectKeyStatsResponse, err erro
 // number of active hosts and scan counts.
 func (s *Store) AggregatedHostStats() (stats admin.AggregatedHostStatsResponse, err error) {
 	err = s.transaction(func(ctx context.Context, tx *txn) error {
-		if err := tx.QueryRow(ctx, "SELECT num_scans, num_scans_failed FROM stats").Scan(&stats.TotalScans, &stats.FailedScans); err != nil {
+		if err := tx.QueryRow(ctx, "SELECT stat_value FROM stats WHERE stat_name = 'num_scans'").Scan(&stats.TotalScans); err != nil {
+			return fmt.Errorf("failed to get scan stats: %w", err)
+		}
+		if err := tx.QueryRow(ctx, "SELECT stat_value FROM stats WHERE stat_name = 'num_scans_failed'").Scan(&stats.FailedScans); err != nil {
 			return fmt.Errorf("failed to get scan stats: %w", err)
 		}
 		if err := tx.QueryRow(ctx, `

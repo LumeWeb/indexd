@@ -841,4 +841,50 @@ WHERE ack.id = sub.connect_key_id;
 		_, err := tx.Exec(ctx, `CREATE INDEX account_hosts_account_id_consecutive_failed_funds_idx ON account_hosts (account_id, consecutive_failed_funds);`)
 		return err
 	},
+	// migrate stats table from single row with columns to one row per stat
+	// to reduce lock contention on concurrent updates
+	func(ctx context.Context, tx *txn, _ *zap.Logger) error {
+		var numSlabs, numMigratedSectors, numPinnedSectors, numUnpinnableSectors, numUnpinnedSectors int64
+		var numSectorsChecked, numSectorsLost, numSectorsCheckFailed int64
+		var numAccountsRegistered int64
+		var numScans, numScansFailed int64
+		err := tx.QueryRow(ctx, `SELECT num_slabs, num_migrated_sectors, num_pinned_sectors, num_unpinnable_sectors, num_unpinned_sectors, num_sectors_checked, num_sectors_lost, num_sectors_check_failed, num_accounts_registered, num_scans, num_scans_failed FROM stats`).Scan(
+			&numSlabs, &numMigratedSectors, &numPinnedSectors, &numUnpinnableSectors, &numUnpinnedSectors,
+			&numSectorsChecked, &numSectorsLost, &numSectorsCheckFailed,
+			&numAccountsRegistered,
+			&numScans, &numScansFailed,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to read existing stats: %w", err)
+		}
+
+		if _, err := tx.Exec(ctx, `DROP TABLE stats`); err != nil {
+			return fmt.Errorf("failed to drop old stats table: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `CREATE TABLE stats (
+			stat_name TEXT PRIMARY KEY NOT NULL,
+			stat_value BIGINT NOT NULL DEFAULT 0 CHECK (stat_value >= 0)
+		)`); err != nil {
+			return fmt.Errorf("failed to create new stats table: %w", err)
+		}
+
+		_, err = tx.Exec(ctx, `INSERT INTO stats (stat_name, stat_value) VALUES
+			('num_slabs', $1),
+			('num_migrated_sectors', $2),
+			('num_pinned_sectors', $3),
+			('num_unpinnable_sectors', $4),
+			('num_unpinned_sectors', $5),
+			('num_sectors_checked', $6),
+			('num_sectors_lost', $7),
+			('num_sectors_check_failed', $8),
+			('num_accounts_registered', $9),
+			('num_scans', $10),
+			('num_scans_failed', $11)`,
+			numSlabs, numMigratedSectors, numPinnedSectors, numUnpinnableSectors, numUnpinnedSectors,
+			numSectorsChecked, numSectorsLost, numSectorsCheckFailed,
+			numAccountsRegistered,
+			numScans, numScansFailed,
+		)
+		return err
+	},
 }

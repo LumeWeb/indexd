@@ -429,7 +429,7 @@ func BenchmarkPruneSlabs(b *testing.B) {
 			}
 		}
 	}
-	batch.Queue(`UPDATE stats SET num_slabs = $1`, slabID)
+	batch.Queue(`UPDATE stats SET stat_value = $1 WHERE stat_name = 'num_slabs'`, slabID)
 	if err := store.pool.SendBatch(b.Context(), batch).Close(); err != nil {
 		b.Fatal(err)
 	}
