@@ -127,7 +127,7 @@ func TestSectorVerifier(t *testing.T) {
 	updateBalance(types.Siacoins(10))
 	client.integrityErrors[roots[0]] = nil                 // good sector
 	client.integrityErrors[roots[1]] = mux.ErrClosedStream // stream closed
-	assertResults(t.Context(), roots[:2], []slabs.CheckSectorsResult{slabs.SectorSuccess}, mux.ErrClosedStream)
+	assertResults(t.Context(), roots[:2], []slabs.CheckSectorsResult{slabs.SectorSuccess, slabs.SectorFailed}, nil)
 
 	// case 6: interruption via deadline exceeded on second sector
 	updateBalance(types.Siacoins(10))

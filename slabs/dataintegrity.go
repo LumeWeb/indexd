@@ -8,7 +8,6 @@ import (
 
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/client/v2"
-	"go.sia.tech/mux/v3"
 	"go.uber.org/zap"
 )
 
@@ -43,7 +42,7 @@ func (m *SlabManager) performIntegrityChecksForHost(ctx context.Context, hostKey
 			batch, err := m.verifier.VerifySectors(verifyCtx, hostKey, toCheck[len(results):])
 			cancel()
 			results = append(results, batch...)
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, mux.ErrClosedStream) || errors.Is(err, errInsufficientServiceAccountBalance) || errors.Is(err, errHostUnreachable) {
+			if (err != nil && verifyCtx.Err() != nil) || errors.Is(err, errInsufficientServiceAccountBalance) || errors.Is(err, errHostUnreachable) {
 				logger.Debug("integrity checks got interrupted", zap.Error(err))
 				if errors.Is(err, errInsufficientServiceAccountBalance) {
 					if err := m.cm.TriggerAccountRefill(ctx, hostKey, m.verifier.account()); err != nil {

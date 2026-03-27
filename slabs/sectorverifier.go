@@ -9,7 +9,6 @@ import (
 
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
-	"go.sia.tech/mux/v3"
 	"go.uber.org/zap"
 	"lukechampine.com/frand"
 )
@@ -119,7 +118,7 @@ func (v *SectorVerifier) VerifySectors(ctx context.Context, hostKey types.Public
 		// check a random segment of the sector
 		segment := frand.Uint64n(proto.LeavesPerSector)
 		_, err = v.hosts.ReadSector(ctx, v.serviceAccount, hostKey, root, io.Discard, segment*proto.LeafSize, proto.LeafSize)
-		if errors.Is(err, mux.ErrClosedStream) || (err != nil && ctx.Err() != nil) {
+		if err != nil && ctx.Err() != nil {
 			return results, err // interrupted
 		}
 
