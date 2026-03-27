@@ -1372,12 +1372,18 @@ func TestPinSectors(t *testing.T) {
 	}
 
 	// set the sectors' host IDs to NULL to make sure PinSectors also sets
-	// those
+	// those, and update the stats to reflect the state change
 	res, err := store.pool.Exec(t.Context(), "UPDATE sectors SET host_id = NULL")
 	if err != nil {
 		t.Fatal(err)
 	} else if res.RowsAffected() != 4 {
 		t.Fatalf("expected 4 rows affected, got %d", res.RowsAffected())
+	}
+	if _, err := store.pool.Exec(t.Context(), `UPDATE stats SET stat_value = 0 WHERE stat_name = $1`, statUnpinnedSectors); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.pool.Exec(t.Context(), `UPDATE stats SET stat_value = 4 WHERE stat_name = $1`, statUnpinnableSectors); err != nil {
+		t.Fatal(err)
 	}
 
 	// helper to assert sector is pinned
