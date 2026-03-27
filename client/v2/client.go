@@ -191,6 +191,12 @@ func (c *Client) rpcFn(ctx context.Context, hostKey types.PublicKey, fn func(ctx
 		if err != nil {
 			c.hosts.AddFailedRPC(hostKey, err)
 		}
+
+		// decorate the error with the context error to indicate whether the failed
+		// rpc is a consequence of context cancellation or timeout
+		if err != nil && context.Cause(ctx) != nil {
+			err = fmt.Errorf("%w: %w", err, context.Cause(ctx))
+		}
 	}()
 
 	transport, err := c.hostTransport(ctx, hostKey)
