@@ -32,36 +32,19 @@ type mockHostDialer struct {
 	hostSectors map[types.PublicKey]map[types.Hash256][]byte
 }
 
-// Close implements the [hostDialer] interface.
+// Close implements the [hostClient] interface.
 func (m *mockHostDialer) Close() error {
 	return nil
 }
 
-// Candidates implements the [hostDialer] interface.
-func (m *mockHostDialer) Candidates() (*client.Candidates, error) {
-	return client.NewCandidates(slices.Collect(maps.Keys(m.hosts))), nil
+// UploadQueue implements the [hostClient] interface.
+func (m *mockHostDialer) UploadQueue() (*client.HostQueue, error) {
+	return client.NewHostQueue(slices.Collect(maps.Keys(m.hosts))), nil
 }
 
-// UploadCandidates implements the [hostDialer] interface.
-func (m *mockHostDialer) UploadCandidates() (*client.Candidates, error) {
-	return client.NewCandidates(slices.Collect(maps.Keys(m.hosts))), nil
-}
-
-// Prioritize implements the [hostDialer] interface.
+// Prioritize implements the [hostClient] interface.
 func (m *mockHostDialer) Prioritize(hosts []types.PublicKey) []types.PublicKey {
 	return hosts
-}
-
-// Hosts implements the [hostDialer] interface.
-func (m *mockHostDialer) Hosts() []types.PublicKey {
-	return slices.Collect(maps.Keys(m.hosts))
-}
-
-// ActiveHosts implements the [hostDialer] interface.
-func (m *mockHostDialer) ActiveHosts() []types.PublicKey {
-	m.sectorsMu.Lock()
-	defer m.sectorsMu.Unlock()
-	return slices.Collect(maps.Keys(m.hostSectors))
 }
 
 func (m *mockHostDialer) delay(ctx context.Context, hostKey types.PublicKey) error {
@@ -79,7 +62,7 @@ func (m *mockHostDialer) delay(ctx context.Context, hostKey types.PublicKey) err
 	return ctx.Err()
 }
 
-// WriteSector implements the [hostDialer] interface.
+// WriteSector implements the [hostClient] interface.
 func (m *mockHostDialer) WriteSector(ctx context.Context, accountKey types.PrivateKey, hostKey types.PublicKey, data []byte) (rhp.RPCWriteSectorResult, error) {
 	if _, ok := m.hosts[hostKey]; !ok {
 		panic("host not found: " + hostKey.String()) // developer error
@@ -104,7 +87,7 @@ func (m *mockHostDialer) WriteSector(ctx context.Context, accountKey types.Priva
 	return rhp.RPCWriteSectorResult{Root: root}, nil
 }
 
-// ReadSector implements the [hostDialer] interface.
+// ReadSector implements the [hostClient] interface.
 func (m *mockHostDialer) ReadSector(ctx context.Context, accountKey types.PrivateKey, hostKey types.PublicKey, sectorRoot types.Hash256, w io.Writer, offset, length uint64) (rhp.RPCReadSectorResult, error) {
 	// simulate timeout
 	if err := m.delay(ctx, hostKey); err != nil {
@@ -198,14 +181,6 @@ func (mc *mockAppClient) PinSlabs(_ context.Context, _ types.PrivateKey, toPin .
 	return
 }
 
-// UnpinSlab implements the [appClient] interface.
-func (mc *mockAppClient) UnpinSlab(_ context.Context, _ types.PrivateKey, id slabs.SlabID) error {
-	mc.mu.Lock()
-	defer mc.mu.Unlock()
-	delete(mc.pinned, id)
-	return nil
-}
-
 // Slab implements the [appClient] interface.
 func (mc *mockAppClient) Slab(_ context.Context, _ types.PrivateKey, id slabs.SlabID) (slabs.PinnedSlab, error) {
 	mc.mu.Lock()
@@ -215,6 +190,14 @@ func (mc *mockAppClient) Slab(_ context.Context, _ types.PrivateKey, id slabs.Sl
 		return slabs.PinnedSlab{}, errors.New("slab not found")
 	}
 	return slab, nil
+}
+
+// UnpinSlab implements the [appClient] interface.
+func (mc *mockAppClient) UnpinSlab(_ context.Context, _ types.PrivateKey, id slabs.SlabID) error {
+	mc.mu.Lock()
+	defer mc.mu.Unlock()
+	delete(mc.pinned, id)
+	return nil
 }
 
 // Hosts implements the [appClient] interface.
