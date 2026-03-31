@@ -191,12 +191,6 @@ func (c *Client) rpcFn(ctx context.Context, hostKey types.PublicKey, fn func(ctx
 		if err != nil {
 			c.hosts.AddFailedRPC(hostKey, err)
 		}
-
-		// decorate the error with the context error to indicate whether the failed
-		// rpc is a consequence of context cancellation or timeout
-		if err != nil && context.Cause(ctx) != nil {
-			err = fmt.Errorf("%w: %w", err, context.Cause(ctx))
-		}
 	}()
 
 	transport, err := c.hostTransport(ctx, hostKey)
@@ -212,12 +206,11 @@ func (c *Client) rpcFn(ctx context.Context, hostKey types.PublicKey, fn func(ctx
 		c.resetTransport(hostKey)
 	}
 
-	// decorate ErrClosedStream with the context error if it exists since
-	// ErrClosedStream is usually a consequence of context cancellation or timeout
-	if errors.Is(err, mux.ErrClosedStream) && context.Cause(ctx) != nil {
+	// decorate the error with the context error to indicate whether the failed
+	// rpc is a consequence of context cancellation or timeout
+	if err != nil && context.Cause(ctx) != nil {
 		err = fmt.Errorf("%w: %w", err, context.Cause(ctx))
 	}
-
 	return err
 }
 
