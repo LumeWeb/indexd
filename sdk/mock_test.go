@@ -28,9 +28,8 @@ type mockHostDialer struct {
 	delayMu   sync.Mutex
 	slowHosts map[types.PublicKey]time.Duration
 
-	flakyMu     sync.Mutex
-	flakyHosts  map[types.PublicKey]int // fail first N writes
-	writeCounts map[types.PublicKey]int
+	flakyMu    sync.Mutex
+	flakyHosts map[types.PublicKey]int // fail first N writes
 
 	sectorsMu   sync.Mutex
 	hostSectors map[types.PublicKey]map[types.Hash256][]byte
@@ -74,13 +73,12 @@ func (m *mockHostDialer) WriteSector(ctx context.Context, accountKey types.Priva
 
 	// simulate flaky hosts that fail their first N writes
 	m.flakyMu.Lock()
-	failCount := m.flakyHosts[hostKey]
-	m.writeCounts[hostKey]++
-	writes := m.writeCounts[hostKey]
-	m.flakyMu.Unlock()
-	if failCount > 0 && writes <= failCount {
+	if m.flakyHosts[hostKey] > 0 {
+		m.flakyHosts[hostKey]--
+		m.flakyMu.Unlock()
 		return rhp.RPCWriteSectorResult{}, context.DeadlineExceeded
 	}
+	m.flakyMu.Unlock()
 
 	// simulate i/o
 	if err := m.delay(ctx, hostKey); err != nil {
@@ -147,7 +145,11 @@ func (m *mockHostDialer) SetSlowHosts(n int, d time.Duration) {
 
 // SetFlakyHosts marks the first n hosts as flaky: each will fail its
 // first failCount write attempts before succeeding.
-func (m *mockHostDialer) SetFlakyHosts(n, failCount int) {
+func (m *mockHostDialer) SetFlakyHosts(t *testing.T, n, failCount int) {
+	if n > len(m.hosts) {
+		t.Fatalf("cannot set %d flaky hosts: only %d hosts available", n, len(m.hosts))
+	}
+
 	m.flakyMu.Lock()
 	defer m.flakyMu.Unlock()
 
@@ -166,7 +168,6 @@ func newMockDialer(hosts int) *mockHostDialer {
 		hosts:       make(map[types.PublicKey]struct{}),
 		slowHosts:   make(map[types.PublicKey]time.Duration),
 		flakyHosts:  make(map[types.PublicKey]int),
-		writeCounts: make(map[types.PublicKey]int),
 		hostSectors: make(map[types.PublicKey]map[types.Hash256][]byte),
 	}
 	for range hosts {
