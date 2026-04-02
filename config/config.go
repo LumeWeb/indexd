@@ -41,6 +41,10 @@ type (
 	Consensus struct {
 		Network        string `yaml:"network"`
 		IndexBatchSize int    `yaml:"indexBatchSize"`
+		// PruneTarget is the target number of blocks to keep when pruning
+		// old blocks from the consensus database. A value of 0 disables
+		// pruning. On mainnet, this should be set to at least 36 blocks.
+		PruneTarget uint64 `yaml:"pruneTarget,omitempty"`
 	}
 
 	// Explorer contains the configuration for an external explorer.

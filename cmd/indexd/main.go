@@ -202,10 +202,13 @@ func main() {
 	// determine the data directory
 	cfg.Directory = dataDirectory(cfg.Directory)
 
+	var instantSync bool
+
 	rootCmd := flagg.Root
 	rootCmd.Usage = flagg.SimpleUsage(rootCmd, ``)
 	rootCmd.StringVar(&cfg.AdminAPI.Address, "api.admin", cfg.AdminAPI.Address, "address to serve admin API on")
 	rootCmd.StringVar(&cfg.ApplicationAPI.Address, "api.app", cfg.ApplicationAPI.Address, "address to serve application API on")
+	rootCmd.BoolVar(&instantSync, "instant", false, "enable instant sync mode for faster initial sync")
 
 	versionCmd := flagg.New("version", ``)
 	seedCmd := flagg.New("seed", ``)
@@ -346,6 +349,6 @@ func main() {
 		defer log.Sync()
 		zap.RedirectStdLog(log.Named("stdlib"))
 
-		checkFatalError("daemon startup failed", runRootCmd(ctx, cfg, walletKey, network, genesis, log))
+		checkFatalError("daemon startup failed", runRootCmd(ctx, cfg, walletKey, instantSync, network, genesis, log))
 	}
 }
