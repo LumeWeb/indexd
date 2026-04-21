@@ -161,7 +161,7 @@ func TestMigrateSector(t *testing.T) {
 		t.Helper()
 
 		var got int64
-		err = store.pool.QueryRow(t.Context(), `SELECT stat_value FROM stats WHERE stat_name = $1`, statMigratedSectors).Scan(&got)
+		err = store.pool.QueryRow(t.Context(), sqlStatSelect(statMigratedSectors)).Scan(&got)
 		if err != nil {
 			t.Fatal(err)
 		} else if got != expected {
@@ -304,13 +304,8 @@ func TestRecordIntegrityCheck(t *testing.T) {
 	assertSectorStats := func(expectedPinned, expectedUnpinned, expectedUnpinnable int64) {
 		t.Helper()
 		var pinned, unpinned, unpinnable int64
-		err := store.pool.QueryRow(t.Context(), `
-			SELECT
-				(SELECT stat_value FROM stats WHERE stat_name = $1),
-				(SELECT stat_value FROM stats WHERE stat_name = $2),
-				(SELECT stat_value FROM stats WHERE stat_name = $3)`,
-			statPinnedSectors, statUnpinnedSectors, statUnpinnableSectors,
-		).Scan(&pinned, &unpinned, &unpinnable)
+		err := store.pool.QueryRow(t.Context(), sqlStatSelect(statPinnedSectors, statUnpinnedSectors, statUnpinnableSectors)).
+			Scan(&pinned, &unpinned, &unpinnable)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -586,7 +581,7 @@ func TestPinSlabs(t *testing.T) {
 	assertUnpinnedSectors := func(expected uint64) {
 		t.Helper()
 		var got uint64
-		err := store.pool.QueryRow(t.Context(), "SELECT stat_value FROM stats WHERE stat_name = $1", statUnpinnedSectors).Scan(&got)
+		err := store.pool.QueryRow(t.Context(), sqlStatSelect(statUnpinnedSectors)).Scan(&got)
 		if err != nil {
 			t.Fatal(err)
 		} else if got != expected {
@@ -1603,7 +1598,7 @@ func TestMarkSectorsUnpinnable(t *testing.T) {
 	assertUnpinnableSectors := func(expected uint64) {
 		t.Helper()
 		var got uint64
-		err := store.pool.QueryRow(t.Context(), "SELECT stat_value FROM stats WHERE stat_name = $1", statUnpinnableSectors).Scan(&got)
+		err := store.pool.QueryRow(t.Context(), sqlStatSelect(statUnpinnableSectors)).Scan(&got)
 		if err != nil {
 			t.Fatal(err)
 		} else if got != expected {
@@ -2638,13 +2633,8 @@ func TestMarkSectorsLost(t *testing.T) {
 	assertSectorStats := func(expectedPinned, expectedUnpinned, expectedUnpinnable int64) {
 		t.Helper()
 		var pinned, unpinned, unpinnable int64
-		err := store.pool.QueryRow(t.Context(), `
-			SELECT
-				(SELECT stat_value FROM stats WHERE stat_name = $1),
-				(SELECT stat_value FROM stats WHERE stat_name = $2),
-				(SELECT stat_value FROM stats WHERE stat_name = $3)`,
-			statPinnedSectors, statUnpinnedSectors, statUnpinnableSectors,
-		).Scan(&pinned, &unpinned, &unpinnable)
+		err := store.pool.QueryRow(t.Context(), sqlStatSelect(statPinnedSectors, statUnpinnedSectors, statUnpinnableSectors)).
+			Scan(&pinned, &unpinned, &unpinnable)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -54,6 +54,7 @@ CREATE TABLE hosts (
     last_failed_scan TIMESTAMP WITH TIME ZONE,
     last_successful_scan TIMESTAMP WITH TIME ZONE,
     last_announcement TIMESTAMP WITH TIME ZONE NOT NULL,
+    has_bad_quic_port BOOLEAN NOT NULL DEFAULT FALSE,
     next_scan TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     country_code TEXT NOT NULL DEFAULT '',
     location POINT NOT NULL DEFAULT POINT(0.0, 0.0),
@@ -386,6 +387,15 @@ CREATE TABLE stats (
     stat_name TEXT PRIMARY KEY NOT NULL,
     stat_value BIGINT NOT NULL DEFAULT 0 CHECK (stat_value >= 0)
 );
+
+CREATE TABLE stats_deltas (
+    id BIGSERIAL PRIMARY KEY,
+    stat_name TEXT NOT NULL REFERENCES stats(stat_name),
+    stat_delta BIGINT NOT NULL
+);
+
+-- speed up summing pending stats deltas for a particular stat
+CREATE INDEX stats_deltas_stat_name_idx ON stats_deltas(stat_name);
 
 -- quick lookup of sectors that failed the integrity checks too many times
 CREATE INDEX sectors_consecutive_failed_checks_idx ON sectors(host_id, consecutive_failed_checks) WHERE consecutive_failed_checks > 0;

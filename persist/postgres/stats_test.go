@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -80,6 +81,62 @@ func TestSectorStatsNumSlabs(t *testing.T) {
 		}
 		pinned = pinned[1:]
 		assertStats(int64(len(pinned)))
+	}
+}
+
+func TestFlushStatsDelta(t *testing.T) {
+	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
+
+	account := proto.Account{1}
+	store.addTestAccount(t, types.PublicKey(account))
+	hk := store.addTestHost(t)
+	store.addTestContract(t, hk)
+
+	// insert deltas by pinning slabs
+	for i := range 5 {
+		if _, err := store.PinSlabs(account, time.Now(), slabs.SlabPinParams{
+			EncryptionKey: [32]byte{byte(i)},
+			MinShards:     1,
+			Sectors: []slabs.PinnedSector{
+				{Root: frand.Entropy256(), HostKey: hk},
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// flush with a batch size of 3 — should report more remaining
+	more, err := store.FlushStatsDelta(3)
+	if err != nil {
+		t.Fatal(err)
+	} else if !more {
+		t.Fatal("expected more deltas to flush")
+	}
+
+	// flush the rest
+	more, err = store.FlushStatsDelta(math.MaxInt)
+	if err != nil {
+		t.Fatal(err)
+	} else if more {
+		t.Fatal("expected no more deltas to flush")
+	}
+
+	// verify the stats are correct after all flushes
+	stats, err := store.SectorStats()
+	if err != nil {
+		t.Fatal(err)
+	} else if stats.Slabs != 5 {
+		t.Fatalf("expected 5 slabs, got %d", stats.Slabs)
+	} else if stats.Unpinned != 5 {
+		t.Fatalf("expected 5 unpinned, got %d", stats.Unpinned)
+	}
+
+	// flushing with nothing pending should return false
+	more, err = store.FlushStatsDelta(math.MaxInt)
+	if err != nil {
+		t.Fatal(err)
+	} else if more {
+		t.Fatal("expected no more deltas to flush")
 	}
 }
 
@@ -345,13 +402,8 @@ func TestIntegrityCheckStats(t *testing.T) {
 	assertSectorStats := func(expectedLost, expectedChecked, expectedCheckFailed int64) {
 		t.Helper()
 		var lost, checked, checkFailed int64
-		err := store.pool.QueryRow(context.Background(), `
-			SELECT
-				(SELECT stat_value FROM stats WHERE stat_name = $1),
-				(SELECT stat_value FROM stats WHERE stat_name = $2),
-				(SELECT stat_value FROM stats WHERE stat_name = $3)`,
-			statSectorsLost, statSectorsChecked, statSectorsCheckFailed,
-		).Scan(&lost, &checked, &checkFailed)
+		err := store.pool.QueryRow(context.Background(), sqlStatSelect(statSectorsLost, statSectorsChecked, statSectorsCheckFailed)).
+			Scan(&lost, &checked, &checkFailed)
 		if err != nil {
 			t.Fatal(err)
 		}
