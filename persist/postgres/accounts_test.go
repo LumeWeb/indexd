@@ -1369,3 +1369,128 @@ func BenchmarkAccountReady(b *testing.B) {
 		}
 	})
 }
+
+func TestRecordFundingEvents(t *testing.T) {
+	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
+
+	hk := types.GeneratePrivateKey().PublicKey()
+	ak := proto.Account(types.GeneratePrivateKey().PublicKey())
+	store.addTestHost(t, hk)
+	store.addTestAccount(t, types.GeneratePrivateKey().PublicKey(), accounts.WithMaxPinnedData(1<<30))
+
+	contractID := types.FileContractID{1, 2, 3}
+	amount := types.Siacoins(100)
+	events := []accounts.FundingEvent{
+		{
+			AccountKey:             ak,
+			HostKey:                hk,
+			ContractID:             contractID,
+			AmountSC:               amount,
+			EstimatedUploadBytes:   1 << 20,
+			EstimatedDownloadBytes: 1 << 20,
+		},
+		{
+			AccountKey:             ak,
+			HostKey:                hk,
+			ContractID:             types.FileContractID{4, 5, 6},
+			AmountSC:               amount.Mul64(2),
+			EstimatedUploadBytes:   2 << 20,
+			EstimatedDownloadBytes: 2 << 20,
+		},
+	}
+
+	if err := store.RecordFundingEvents(events); err != nil {
+		t.Fatalf("failed to record funding events: %v", err)
+	}
+
+	got, err := store.FundingEvents(accounts.FundingCursor{}, 10)
+	if err != nil {
+		t.Fatalf("failed to get funding events: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(got))
+	}
+
+	if got[0].AccountKey != ak {
+		t.Fatalf("expected account key %x, got %x", ak, got[0].AccountKey)
+	}
+	if got[0].HostKey != hk {
+		t.Fatalf("expected host key %x, got %x", hk, got[0].HostKey)
+	}
+	if got[0].ContractID != contractID {
+		t.Fatalf("expected contract ID %x, got %x", contractID, got[0].ContractID)
+	}
+	if got[0].AmountSC.Cmp(amount) != 0 {
+		t.Fatalf("expected amount %v, got %v", amount, got[0].AmountSC)
+	}
+	if got[0].EstimatedUploadBytes != 1<<20 {
+		t.Fatalf("expected upload bytes %d, got %d", 1<<20, got[0].EstimatedUploadBytes)
+	}
+	if got[0].EstimatedDownloadBytes != 1<<20 {
+		t.Fatalf("expected download bytes %d, got %d", 1<<20, got[0].EstimatedDownloadBytes)
+	}
+	if got[0].CreatedAt.IsZero() {
+		t.Fatal("expected non-zero CreatedAt")
+	}
+	if got[0].ID == 0 {
+		t.Fatal("expected non-zero ID")
+	}
+}
+
+func TestFundingEventsCursorPagination(t *testing.T) {
+	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
+
+	hk := types.GeneratePrivateKey().PublicKey()
+	ak := proto.Account(types.GeneratePrivateKey().PublicKey())
+	store.addTestHost(t, hk)
+	store.addTestAccount(t, types.GeneratePrivateKey().PublicKey(), accounts.WithMaxPinnedData(1<<30))
+
+	events := make([]accounts.FundingEvent, 5)
+	for i := range events {
+		events[i] = accounts.FundingEvent{
+			AccountKey:             ak,
+			HostKey:                hk,
+			ContractID:             types.FileContractID{byte(i + 1)},
+			AmountSC:               types.Siacoins(uint32(i+1) * 100),
+			EstimatedUploadBytes:   uint64(i+1) * 1 << 20,
+			EstimatedDownloadBytes: uint64(i+1) * 1 << 20,
+		}
+	}
+	if err := store.RecordFundingEvents(events); err != nil {
+		t.Fatalf("failed to record funding events: %v", err)
+	}
+
+	var allEvents []accounts.FundingEvent
+	cursor := accounts.FundingCursor{}
+
+	for {
+		page, err := store.FundingEvents(cursor, 2)
+		if err != nil {
+			t.Fatalf("failed to get funding events: %v", err)
+		}
+		if len(page) == 0 {
+			break
+		}
+		allEvents = append(allEvents, page...)
+		last := page[len(page)-1]
+		cursor = accounts.FundingCursor{After: last.CreatedAt, ID: last.ID}
+	}
+
+	if len(allEvents) != 5 {
+		t.Fatalf("expected 5 events across pages, got %d", len(allEvents))
+	}
+
+	for i := 1; i < len(allEvents); i++ {
+		if allEvents[i].CreatedAt.Before(allEvents[i-1].CreatedAt) {
+			t.Fatalf("events not in ascending order at index %d", i)
+		}
+	}
+
+	seen := make(map[int64]bool)
+	for _, ev := range allEvents {
+		if seen[ev.ID] {
+			t.Fatalf("duplicate event ID %d", ev.ID)
+		}
+		seen[ev.ID] = true
+	}
+}

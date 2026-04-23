@@ -81,12 +81,16 @@ func (am *accountsManagerMock) UpdateServiceAccounts(accs []accounts.HostAccount
 	return nil
 }
 
+func (am *accountsManagerMock) RecordFundingEvents(events []accounts.FundingEvent) error {
+	return nil
+}
+
 type accountFunderMock struct {
 	mu    sync.Mutex
 	calls []fundAccountsCall
 }
 
-func (f *accountFunderMock) FundAccounts(ctx context.Context, host hosts.Host, contractIDs []types.FileContractID, accs []accounts.HostAccount, target types.Currency, log *zap.Logger) (funded int, drained int, err error) {
+func (f *accountFunderMock) FundAccounts(ctx context.Context, host hosts.Host, contractIDs []types.FileContractID, accs []accounts.HostAccount, target types.Currency, log *zap.Logger) (funded int, drained int, deposits []contracts.FundedDeposit, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	accsCopy := make([]accounts.HostAccount, len(accs))
@@ -97,7 +101,7 @@ func (f *accountFunderMock) FundAccounts(ctx context.Context, host hosts.Host, c
 		accounts:    accsCopy,
 		target:      target,
 	})
-	return len(accs), 0, nil
+	return len(accs), 0, nil, nil
 }
 
 func TestPerformAccountFunding(t *testing.T) {

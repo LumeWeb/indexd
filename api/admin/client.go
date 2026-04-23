@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"sync"
+	"time"
 
 	"go.sia.tech/core/consensus"
 	proto "go.sia.tech/core/rhp/v4"
@@ -160,6 +161,16 @@ func (c *Client) Accounts(ctx context.Context, opts ...api.URLQueryParameterOpti
 		opt(values)
 	}
 	err = c.c.GET(ctx, "/accounts?"+values.Encode(), &accounts)
+	return
+}
+
+// FundingEvents returns funding events using cursor-based pagination.
+func (c *Client) FundingEvents(ctx context.Context, cursor accounts.FundingCursor, limit int) (events []accounts.FundingEvent, err error) {
+	values := url.Values{}
+	values.Set("limit", fmt.Sprintf("%d", limit))
+	values.Set("after", cursor.After.Format(time.RFC3339Nano))
+	values.Set("id", fmt.Sprintf("%d", cursor.ID))
+	err = c.c.GET(ctx, "/funding/events?"+values.Encode(), &events)
 	return
 }
 

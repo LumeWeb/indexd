@@ -28,11 +28,12 @@ type fundingAccountCall struct {
 }
 
 type mockFunder struct {
-	calls []fundingAccountCall
-	fail  bool
+	calls    []fundingAccountCall
+	fail     bool
+	deposits []contracts.FundedDeposit
 }
 
-func (f *mockFunder) FundAccounts(ctx context.Context, host hosts.Host, contractIDs []types.FileContractID, accs []accounts.HostAccount, target types.Currency, log *zap.Logger) (funded int, drained int, _ error) {
+func (f *mockFunder) FundAccounts(ctx context.Context, host hosts.Host, contractIDs []types.FileContractID, accs []accounts.HostAccount, target types.Currency, log *zap.Logger) (funded int, drained int, _ []contracts.FundedDeposit, _ error) {
 	f.calls = append(f.calls, fundingAccountCall{
 		host:        host,
 		accounts:    accs,
@@ -40,9 +41,9 @@ func (f *mockFunder) FundAccounts(ctx context.Context, host hosts.Host, contract
 		target:      target,
 	})
 	if f.fail {
-		return 0, 0, nil
+		return 0, 0, nil, nil
 	}
-	return len(accs), 1, nil
+	return len(accs), 1, f.deposits, nil
 }
 
 // TestFunding is a unit test that covers the functionality of the
@@ -222,4 +223,91 @@ func approxEqual(t1, t2 time.Time) bool {
 		diff = -diff
 	}
 	return diff <= tol
+}
+
+func TestFundAccountsRecordsFundingEvents(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	s := newTestStore(t)
+
+	hk := types.GeneratePrivateKey().PublicKey()
+	host := hosts.Host{
+		PublicKey: hk,
+		Settings: proto.HostSettings{
+			Prices: proto.HostPrices{
+				EgressPrice:  types.NewCurrency64(100),
+				IngressPrice: types.NewCurrency64(100),
+				StoragePrice: types.NewCurrency64(100),
+			},
+		},
+		Addresses: []chain.NetAddress{{Protocol: siamux.Protocol, Address: "foo"}},
+		Usability: hosts.GoodUsability,
+	}
+
+	s.addTestHost(t, host)
+
+	pk := types.GeneratePrivateKey()
+	s.AddTestAccount(t, pk.PublicKey())
+
+	fcid := types.FileContractID{1}
+	s.addTestContract(t, hk, true, fcid)
+	s.setContractRemainingAllowance(t, fcid, types.Siacoins(10000))
+
+	ak := proto.Account(pk.PublicKey())
+	depositAmount := types.Siacoins(50)
+	f := &mockFunder{
+		deposits: []contracts.FundedDeposit{
+			{
+				ContractID: fcid,
+				Deposit: proto.AccountDeposit{
+					Account: ak,
+					Amount:  depositAmount,
+				},
+			},
+		},
+	}
+
+	am, _ := accounts.NewManager(s, accounts.WithLogger(log))
+	defer am.Close()
+	network, genesis := testutil.V2Network()
+	dbstore, tipState, _ := chain.NewDBStore(chain.NewMemDB(), network, genesis, nil)
+	hm, _ := hosts.NewManager(nil, nil, nil, s, alerts.NewManager(), hosts.WithLogger(log.Named("hosts")))
+	defer hm.Close()
+	cm, _ := contracts.NewManager(types.GeneratePrivateKey(), am, f, chain.NewManager(dbstore, tipState), s, nil, nil, nil, contracts.NewContractLocker(), hm, nil, nil, contracts.WithLogger(log.Named("contracts")))
+	defer cm.Close()
+
+	s.resetNextFund(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := cm.FundAccounts(ctx, host, []types.FileContractID{fcid}, true, log); err != nil {
+		t.Fatalf("failed to fund accounts: %v", err)
+	}
+
+	events, err := s.FundingEvents(accounts.FundingCursor{}, 100)
+	if err != nil {
+		t.Fatalf("failed to get funding events: %v", err)
+	}
+	if len(events) == 0 {
+		t.Fatal("expected funding events to be recorded")
+	}
+
+	found := false
+	for _, ev := range events {
+		if ev.AccountKey == ak && ev.AmountSC.Cmp(depositAmount) == 0 {
+			found = true
+			if ev.ContractID != fcid {
+				t.Fatalf("expected contract ID %x, got %x", fcid, ev.ContractID)
+			}
+			if ev.EstimatedUploadBytes == 0 {
+				t.Fatal("expected non-zero EstimatedUploadBytes")
+			}
+			if ev.EstimatedDownloadBytes == 0 {
+				t.Fatal("expected non-zero EstimatedDownloadBytes")
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected to find funding event matching deposit")
+	}
 }

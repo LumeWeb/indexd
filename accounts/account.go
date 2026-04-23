@@ -102,4 +102,22 @@ type (
 		ActiveAccounts      uint64
 		FullStorageAccounts uint64
 	}
+
+	// FundingEvent represents a single funding event for an account on a host.
+	FundingEvent struct {
+		ID                     int64
+		AccountKey             proto.Account
+		HostKey                types.PublicKey
+		ContractID             types.FileContractID
+		AmountSC               types.Currency
+		EstimatedUploadBytes   uint64
+		EstimatedDownloadBytes uint64
+		CreatedAt              time.Time
+	}
+
+	// FundingCursor is used to paginate through funding events.
+	FundingCursor struct {
+		After time.Time `json:"after"`
+		ID    int64     `json:"id"`
+	}
 )

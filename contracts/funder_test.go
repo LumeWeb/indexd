@@ -116,7 +116,7 @@ func TestFunder(t *testing.T) {
 	f := NewFunder(hc, cl, rev, nil, &mockChainManager{}, zap.NewNop())
 
 	// assert contract is marked as drained if it is out of funds
-	funded, drained, err := f.FundAccounts(context.Background(), host, []types.FileContractID{{1}}, accs, target, zap.NewNop())
+	funded, drained, _, err := f.FundAccounts(context.Background(), host, []types.FileContractID{{1}}, accs, target, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	} else if funded != 0 {
@@ -126,7 +126,7 @@ func TestFunder(t *testing.T) {
 	}
 
 	// assert contract is marked as drained if it is not revisable
-	funded, drained, err = f.FundAccounts(context.Background(), host, []types.FileContractID{{2}}, accs, target, zap.NewNop())
+	funded, drained, _, err = f.FundAccounts(context.Background(), host, []types.FileContractID{{2}}, accs, target, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	} else if funded != 0 {
@@ -136,7 +136,7 @@ func TestFunder(t *testing.T) {
 	}
 
 	// assert contract is not marked as drained if replenish RPC fails
-	funded, drained, err = f.FundAccounts(context.Background(), host, []types.FileContractID{{3}}, accs, target, zap.NewNop())
+	funded, drained, _, err = f.FundAccounts(context.Background(), host, []types.FileContractID{{3}}, accs, target, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	} else if funded != 0 {
@@ -146,7 +146,7 @@ func TestFunder(t *testing.T) {
 	}
 
 	// assert contract is marked as drained if replenish RPC succeeds but leaves the contract with insufficient funds afterwards
-	funded, drained, err = f.FundAccounts(context.Background(), host, []types.FileContractID{{4}}, accs, target, zap.NewNop())
+	funded, drained, _, err = f.FundAccounts(context.Background(), host, []types.FileContractID{{4}}, accs, target, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	} else if funded != 1 {
@@ -156,7 +156,7 @@ func TestFunder(t *testing.T) {
 	}
 
 	// assert contracts are iterated and funded is updated until we run out of contracts
-	funded, drained, err = f.FundAccounts(context.Background(), host, []types.FileContractID{{5}, {6}}, accs, target, zap.NewNop())
+	funded, drained, _, err = f.FundAccounts(context.Background(), host, []types.FileContractID{{5}, {6}}, accs, target, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	} else if funded != 2 {
@@ -166,7 +166,7 @@ func TestFunder(t *testing.T) {
 	}
 
 	// assert contracts are iterated and funded is updated until we run out of accounts
-	funded, drained, err = f.FundAccounts(context.Background(), host, []types.FileContractID{{7}, {1}, {5}, {4}}, accs, target, zap.NewNop())
+	funded, drained, _, err = f.FundAccounts(context.Background(), host, []types.FileContractID{{7}, {1}, {5}, {4}}, accs, target, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	} else if funded != 3 {

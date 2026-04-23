@@ -126,6 +126,7 @@ type (
 		AccountStats() (accounts.AccountStats, error)
 		AppStats(offset, limit int) ([]accounts.AppStats, error)
 		ConnectKeyStats() (accounts.ConnectKeyStats, error)
+		FundingEvents(cursor accounts.FundingCursor, limit int) ([]accounts.FundingEvent, error)
 	}
 
 	// SlabManager defines the slab-related interface used by the admin API.
@@ -276,6 +277,9 @@ func NewAPI(chain ChainManager, accounts Accounts, contracts ContractManager, ho
 		"PUT    /quotas/:key": a.handlePUTQuota,
 		"GET    /quotas/:key": a.handleGETQuota,
 		"DELETE /quotas/:key": a.handleDELETEQuota,
+
+		// funding endpoints
+		"GET /funding/events": a.handleGETFundingEvents,
 
 		// wallet endpoints
 		"GET /wallet":            a.handleGETWallet,
@@ -592,6 +596,27 @@ func (a *admin) handleDELETEQuota(jc jape.Context) {
 	} else if jc.Check("failed to delete quota", err) != nil {
 		return
 	}
+}
+
+func (a *admin) handleGETFundingEvents(jc jape.Context) {
+	_, limit, ok := api.ParseOffsetLimit(jc)
+	if !ok {
+		return
+	}
+
+	var cursor accounts.FundingCursor
+	if jc.DecodeForm("after", &cursor.After) != nil {
+		return
+	}
+	if jc.DecodeForm("id", &cursor.ID) != nil {
+		return
+	}
+
+	events, err := a.accounts.FundingEvents(cursor, limit)
+	if !a.checkServerError(jc, "failed to get funding events", err) {
+		return
+	}
+	jc.Encode(events)
 }
 
 func (a *admin) handleGETAccount(jc jape.Context) {

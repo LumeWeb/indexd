@@ -6,6 +6,7 @@ import (
 	"math"
 	"time"
 
+	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/hosts"
@@ -54,13 +55,13 @@ func (cm *ContractManager) FundAccounts(ctx context.Context, host hosts.Host, co
 	serviceAccounts := cm.accounts.ServiceAccounts(host.PublicKey)
 	if len(serviceAccounts) > 0 {
 		fundTarget := accounts.HostFundTarget(host, serviceAccountFundTargetBytes)
-		// fund them
-		funded, _, err := cm.accountFunder.FundAccounts(ctx, host, contractIDs, serviceAccounts, fundTarget, log)
+		funded, _, deposits, err := cm.accountFunder.FundAccounts(ctx, host, contractIDs, serviceAccounts, fundTarget, log)
 		if err != nil {
 			return fmt.Errorf("failed to fund service accounts: %w", err)
 		}
 
-		// update service account balances
+		recordFundingEvents(cm.accounts, host, deposits, log)
+
 		if err := cm.accounts.UpdateServiceAccounts(serviceAccounts[:funded], fundTarget); err != nil {
 			cm.log.Warn("failed to update service account balances", zap.Error(err))
 		}
@@ -110,10 +111,12 @@ OUTER:
 				}
 
 				// fund accounts
-				funded, drained, err := cm.accountFunder.FundAccounts(ctx, host, contractIDs, batch.accs, batch.target, log)
+				funded, drained, deposits, err := cm.accountFunder.FundAccounts(ctx, host, contractIDs, batch.accs, batch.target, log)
 				if err != nil {
 					return fmt.Errorf("failed to fund accounts: %w", err)
 				}
+
+				recordFundingEvents(cm.accounts, host, deposits, log)
 
 				// update funded accounts
 				accounts.UpdateFundedAccounts(batch.accs, funded, cm.maxAccountFundingBackoff)
@@ -162,4 +165,44 @@ func (cm *ContractManager) ContractFundTarget(ctx context.Context, host hosts.Ho
 	}
 
 	return target, nil
+}
+
+// estimatedBytes estimates the bytes covered by a single operation type (upload or download)
+// from the actual SC deposited. The deposit covers both read and write usage in a 50/50 split,
+// so we divide by 2 to approximate each operation's share, then convert SC to sectors and bytes.
+func estimatedBytes(amount types.Currency, costPerSector types.Currency) uint64 {
+	if costPerSector.IsZero() {
+		return 0
+	}
+	divisor := costPerSector.Mul64(2)
+	if divisor.IsZero() {
+		return 0
+	}
+	result := amount.Mul64(proto.SectorSize).Div(divisor)
+	if !result.Big().IsUint64() {
+		return math.MaxInt64
+	}
+	return result.Big().Uint64()
+}
+
+func recordFundingEvents(am AccountManager, host hosts.Host, deposits []FundedDeposit, log *zap.Logger) {
+	if len(deposits) == 0 {
+		return
+	}
+	writeCostPerSector := host.Settings.Prices.RPCWriteSectorCost(proto.SectorSize).RenterCost()
+	readCostPerSector := host.Settings.Prices.RPCReadSectorCost(proto.SectorSize).RenterCost()
+	events := make([]accounts.FundingEvent, 0, len(deposits))
+	for _, d := range deposits {
+		events = append(events, accounts.FundingEvent{
+			AccountKey:             d.Deposit.Account,
+			HostKey:                host.PublicKey,
+			ContractID:             d.ContractID,
+			AmountSC:               d.Deposit.Amount,
+			EstimatedUploadBytes:   estimatedBytes(d.Deposit.Amount, writeCostPerSector),
+			EstimatedDownloadBytes: estimatedBytes(d.Deposit.Amount, readCostPerSector),
+		})
+	}
+	if err := am.RecordFundingEvents(events); err != nil {
+		log.Warn("failed to record funding events", zap.Error(err))
+	}
 }

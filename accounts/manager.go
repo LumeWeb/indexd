@@ -39,6 +39,8 @@ type (
 		HostAccountsForFunding(hk types.PublicKey, quotaName string, threshold time.Time, limit int) ([]HostAccount, error)
 		ScheduleAccountsForFunding(hostKey types.PublicKey) error
 		UpdateHostAccounts(accounts []HostAccount) error
+		RecordFundingEvents(events []FundingEvent) error
+		FundingEvents(cursor FundingCursor, limit int) ([]FundingEvent, error)
 
 		ValidAppConnectKey(string) error
 		AppConnectKeyUserSecret(string) (secret types.Hash256, err error)
@@ -151,6 +153,17 @@ func (m *AccountManager) ScheduleAccountsForFunding(hostKey types.PublicKey) err
 // UpdateHostAccounts updates the given host accounts.
 func (m *AccountManager) UpdateHostAccounts(accounts []HostAccount) error {
 	return m.store.UpdateHostAccounts(accounts)
+}
+
+// RecordFundingEvents records the given funding events.
+func (m *AccountManager) RecordFundingEvents(events []FundingEvent) error {
+	return m.store.RecordFundingEvents(events)
+}
+
+// FundingEvents returns a list of funding events starting after the given
+// cursor.
+func (m *AccountManager) FundingEvents(cursor FundingCursor, limit int) ([]FundingEvent, error) {
+	return m.store.FundingEvents(cursor, limit)
 }
 
 // ServiceAccounts returns all registered service accounts for a given host.

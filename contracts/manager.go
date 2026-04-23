@@ -47,7 +47,7 @@ var (
 type (
 	// AccountFunder defines an interface to fund accounts.
 	AccountFunder interface {
-		FundAccounts(ctx context.Context, host hosts.Host, contractIDs []types.FileContractID, accounts []accounts.HostAccount, target types.Currency, log *zap.Logger) (int, int, error)
+		FundAccounts(ctx context.Context, host hosts.Host, contractIDs []types.FileContractID, accounts []accounts.HostAccount, target types.Currency, log *zap.Logger) (int, int, []FundedDeposit, error)
 	}
 
 	// AccountManager defines an interface that allows fetching and updating
@@ -60,6 +60,7 @@ type (
 		ServiceAccounts(hk types.PublicKey) []accounts.HostAccount
 		UpdateHostAccounts(accounts []accounts.HostAccount) error
 		UpdateServiceAccounts(accounts []accounts.HostAccount, balance types.Currency) error
+		RecordFundingEvents(events []accounts.FundingEvent) error
 	}
 
 	// ChainManager is the minimal interface of ChainManager functionality the
