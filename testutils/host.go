@@ -2,6 +2,7 @@ package testutils
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"testing"
@@ -18,6 +19,31 @@ import (
 	"go.sia.tech/coreutils/wallet"
 	"go.uber.org/zap"
 )
+
+// insecureScanner skips TLS verification when dialing QUIC.
+type insecureScanner struct{}
+
+func (insecureScanner) ScanSiamux(ctx context.Context, hk types.PublicKey, addr string) (proto4.HostSettings, error) {
+	t, err := siamux.Dial(ctx, addr, hk)
+	if err != nil {
+		return proto4.HostSettings{}, fmt.Errorf("failed to dial siamux: %w", err)
+	}
+	defer t.Close()
+
+	return rhp4.RPCSettings(ctx, t)
+}
+
+func (insecureScanner) ScanQuic(ctx context.Context, hk types.PublicKey, addr string) (proto4.HostSettings, error) {
+	t, err := quic.Dial(ctx, addr, hk, quic.WithTLSConfig(func(c *tls.Config) {
+		c.InsecureSkipVerify = true
+	}))
+	if err != nil {
+		return proto4.HostSettings{}, fmt.Errorf("failed to dial quic: %w", err)
+	}
+	defer t.Close()
+
+	return rhp4.RPCSettings(ctx, t)
+}
 
 const (
 	blocksPerMonth = 144 * 30

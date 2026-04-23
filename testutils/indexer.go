@@ -173,7 +173,7 @@ func NewIndexer(t testing.TB, c *ConsensusNode, log *zap.Logger, opts ...Indexer
 
 	alerter := alerts.NewManager()
 
-	hm, err := hosts.NewManager(syncer, locator, client, store, alerter, hosts.WithLogger(log.Named("hosts")), hosts.WithScanFrequency(200*time.Millisecond), hosts.WithScanInterval(time.Second))
+	hm, err := hosts.NewManager(syncer, locator, client, store, alerter, hosts.WithLogger(log.Named("hosts")), hosts.WithScanFrequency(200*time.Millisecond), hosts.WithScanInterval(time.Second), hosts.WithScanner(insecureScanner{}))
 	if err != nil {
 		t.Fatalf("failed to create host manager: %v", err)
 	}
