@@ -49,8 +49,8 @@ const (
 
 	// sqlUsabilityCheckColumns are the boolean expressions for each
 	// usability check, returned as individual SELECT columns. Assumes
-	// has_settings, settings_version, good_quic_port, and globals.* are
-	// in scope.
+	// has_settings, settings_version, has_valid_addresses, and globals.*
+	// are in scope.
 	sqlUsabilityCheckColumns = `
 	recent_uptime >= 0.9,
 	has_settings AND settings_max_contract_duration >= globals.contracts_period,
@@ -58,7 +58,7 @@ const (
 	has_settings AND settings_version >= globals.host_min_version,
 	has_settings AND settings_valid_until >= last_successful_scan + INTERVAL '15 minutes',
 	has_settings AND settings_accepting_contracts,
-	good_quic_port,
+	has_valid_addresses,
 	has_settings AND settings_contract_price <= globals.one_sc,
 	has_settings AND settings_collateral >= globals.hosts_min_collateral AND settings_collateral >= 2 * settings_storage_price,
 	has_settings AND settings_storage_price <= globals.hosts_max_storage_price,
@@ -68,7 +68,7 @@ const (
 
 	// sqlUsabilityFilter is the usability conditions AND'd together for
 	// use in WHERE clauses. Assumes has_settings, settings_version,
-	// good_quic_port, and globals.* are in scope.
+	// has_valid_addresses, and globals.* are in scope.
 	sqlUsabilityFilter = `
 	recent_uptime >= 0.9 AND
 	has_settings AND
@@ -77,7 +77,7 @@ const (
 	settings_version >= globals.host_min_version AND
 	settings_valid_until >= last_successful_scan + INTERVAL '15 minutes' AND
 	settings_accepting_contracts AND
-	good_quic_port AND
+	has_valid_addresses AND
 	settings_contract_price <= globals.one_sc AND
 	settings_collateral >= globals.hosts_min_collateral AND
 	settings_collateral >= 2 * settings_storage_price AND
@@ -94,20 +94,14 @@ type dbHost struct {
 }
 
 func (u *updateTx) AddHostAnnouncement(hk types.PublicKey, ha chain.V2HostAnnouncement, ts time.Time) error {
-	var badQUIC bool
-	for _, na := range ha {
-		if hosts.IsBadQUICAddress(na) {
-			badQUIC = true
-			break
-		}
-	}
+	validAddresses := hosts.HasValidAddresses(ha)
 
 	var hostID int64
 	err := u.tx.QueryRow(u.ctx, `
-INSERT INTO hosts (public_key, last_announcement, has_bad_quic_port)
+INSERT INTO hosts (public_key, last_announcement, has_valid_addresses)
 VALUES ($1, $2, $3)
-ON CONFLICT (public_key) DO UPDATE SET last_announcement = $2, has_bad_quic_port = $3
-RETURNING id;`, sqlPublicKey(hk), ts, badQUIC).Scan(&hostID)
+ON CONFLICT (public_key) DO UPDATE SET last_announcement = $2, has_valid_addresses = $3
+RETURNING id;`, sqlPublicKey(hk), ts, validAddresses).Scan(&hostID)
 	if err != nil {
 		return err
 	}
@@ -145,7 +139,7 @@ WITH `+sqlGlobalsCTE+`, hosts AS (
 		settings_egress_price, settings_free_sector_price, settings_tip_height, settings_valid_until, settings_signature,
 		last_successful_scan IS NOT NULL as has_settings,
 		(get_byte(settings_protocol_version, 0) << 16) + (get_byte(settings_protocol_version, 1) << 8) + (get_byte(settings_protocol_version, 2)) as settings_version,
-		NOT has_bad_quic_port AS good_quic_port,
+		has_valid_addresses,
 		stuck_since
 	FROM hosts
 	LEFT JOIN hosts_blocklist hb ON hosts.public_key = hb.public_key
@@ -209,7 +203,7 @@ WITH `+sqlGlobalsCTE+`, hosts AS (
 		settings_egress_price, settings_free_sector_price, settings_tip_height, settings_valid_until, settings_signature,
 		last_successful_scan IS NOT NULL as has_settings,
 		(get_byte(settings_protocol_version, 0) << 16) + (get_byte(settings_protocol_version, 1) << 8) + (get_byte(settings_protocol_version, 2)) as settings_version,
-		NOT has_bad_quic_port AS good_quic_port,
+		has_valid_addresses,
 		stuck_since
 	FROM hosts
 	LEFT JOIN hosts_blocklist hb ON hosts.public_key = hb.public_key
@@ -663,7 +657,7 @@ WITH ` + sqlGlobalsCTE + `, hosts AS (
 		settings_signature,
 		last_successful_scan IS NOT NULL AS has_settings,
 		(get_byte(settings_protocol_version, 0) << 16) + (get_byte(settings_protocol_version, 1) << 8) + (get_byte(settings_protocol_version, 2)) as settings_version,
-		NOT has_bad_quic_port AS good_quic_port,
+		has_valid_addresses,
 		(stuck_since IS NULL AND settings_remaining_storage > 0) AS good_for_upload
 	FROM hosts
 	WHERE last_successful_scan IS NOT NULL
@@ -814,7 +808,7 @@ func scanHost(s scanner) (dbHost, error) {
 		&host.Usability.ProtocolVersion,
 		&host.Usability.PriceValidity,
 		&host.Usability.AcceptingContracts,
-		&host.Usability.QUICPort,
+		&host.Usability.ValidAddresses,
 		&host.Usability.ContractPrice,
 		&host.Usability.Collateral,
 		&host.Usability.StoragePrice,

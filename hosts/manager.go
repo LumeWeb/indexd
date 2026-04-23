@@ -74,22 +74,29 @@ var (
 	}
 )
 
-// IsBadQUICAddress reports whether the given address is a QUIC address
-// announced on a port blocked by browsers for QUIC/WebTransport.
-func IsBadQUICAddress(na chain.NetAddress) bool {
-	if na.Protocol != quic.Protocol {
-		return false
+// HasValidAddresses reports whether the given addresses contain a QUIC
+// address on a port that isn't blocked by browsers and a siamux address.
+func HasValidAddresses(addrs []chain.NetAddress) bool {
+	var hasQUIC, hasSiamux bool
+	for _, na := range addrs {
+		_, portStr, err := net.SplitHostPort(na.Address)
+		if err != nil {
+			continue
+		}
+		port, err := strconv.Atoi(portStr)
+		if err != nil || port < 1 || port > 65535 {
+			continue
+		}
+		switch na.Protocol {
+		case quic.Protocol:
+			if _, bad := badQUICPorts[port]; !bad {
+				hasQUIC = true
+			}
+		case siamux.Protocol:
+			hasSiamux = true
+		}
 	}
-	_, portStr, err := net.SplitHostPort(na.Address)
-	if err != nil {
-		return false
-	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
-		return false
-	}
-	_, ok := badQUICPorts[port]
-	return ok
+	return hasQUIC && hasSiamux
 }
 
 type (
