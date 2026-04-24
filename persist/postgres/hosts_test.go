@@ -285,11 +285,9 @@ func TestHostChecks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// add a host, announcing QUIC on a port blocked by browsers and no
-	// siamux address so the ValidAddresses check starts out failing
-	badQUICAddr := chain.NetAddress{Protocol: quic.Protocol, Address: "[::]:22"}
+	// add a host with no addresses so both QUIC and Siamux checks fail
 	if err := db.UpdateChainState(func(tx subscriber.UpdateTx) error {
-		return tx.AddHostAnnouncement(hk, chain.V2HostAnnouncement{badQUICAddr}, time.Now())
+		return tx.AddHostAnnouncement(hk, chain.V2HostAnnouncement{}, time.Now())
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -377,43 +375,16 @@ func TestHostChecks(t *testing.T) {
 	_ = db.UpdateHostScan(hk, hs, geoip.Location{}, true, time.Now())
 	assertCheckOK("AcceptingContracts")
 
-	// re-announce the host with only a good QUIC address (no siamux): the
-	// check should still fail
+	// re-announce the host with both QUIC and siamux so we pass both checks
 	goodQUICAddr := chain.NetAddress{Protocol: quic.Protocol, Address: "[::]:4848"}
 	siamuxAddr := chain.NetAddress{Protocol: siamux.Protocol, Address: "[::]:4848"}
-	if err := db.UpdateChainState(func(tx subscriber.UpdateTx) error {
-		return tx.AddHostAnnouncement(hk, chain.V2HostAnnouncement{goodQUICAddr}, time.Now())
-	}); err != nil {
-		t.Fatal(err)
-	}
-	assertCheck("ValidAddresses", false)
-
-	// re-announce the host with only a siamux address (no QUIC): the check
-	// should still fail
-	if err := db.UpdateChainState(func(tx subscriber.UpdateTx) error {
-		return tx.AddHostAnnouncement(hk, chain.V2HostAnnouncement{siamuxAddr}, time.Now())
-	}); err != nil {
-		t.Fatal(err)
-	}
-	assertCheck("ValidAddresses", false)
-
-	// re-announce the host with a blocked QUIC port alongside siamux: the
-	// check should still fail
-	if err := db.UpdateChainState(func(tx subscriber.UpdateTx) error {
-		return tx.AddHostAnnouncement(hk, chain.V2HostAnnouncement{badQUICAddr, siamuxAddr}, time.Now())
-	}); err != nil {
-		t.Fatal(err)
-	}
-	assertCheck("ValidAddresses", false)
-
-	// re-announce the host on a non-blocked QUIC port together with a
-	// siamux address so we pass the check
 	if err := db.UpdateChainState(func(tx subscriber.UpdateTx) error {
 		return tx.AddHostAnnouncement(hk, chain.V2HostAnnouncement{goodQUICAddr, siamuxAddr}, time.Now())
 	}); err != nil {
 		t.Fatal(err)
 	}
-	assertCheckOK("ValidAddresses")
+	assertCheckOK("QUIC")
+	assertCheckOK("Siamux")
 
 	// adjust contract price so we pass the check
 	hs.Prices.ContractPrice = oneSC.Sub(oneH)
@@ -496,7 +467,8 @@ func TestHosts(t *testing.T) {
 		PriceValidity:       true,
 		AcceptingContracts:  true,
 
-		ValidAddresses: true,
+		QUIC:   true,
+		Siamux: true,
 
 		ContractPrice:   true,
 		Collateral:      true,

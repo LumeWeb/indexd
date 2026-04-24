@@ -778,9 +778,12 @@ components:
         acceptingContracts:
           type: boolean
           description: Whether the host is currently accepting new contracts
-        validAddresses:
+        quic:
           type: boolean
-          description: Whether the host has announced a QUIC address on a port that isn't blocked by browsers for QUIC/WebTransport and announced a siamux address
+          description: Whether the host supports QUIC on a valid port
+        siamux:
+          type: boolean
+          description: Whether the host supports the SiaMux protocol
         contractPrice:
           type: boolean
           description: Whether the host's contract price is below the maximum contract price
