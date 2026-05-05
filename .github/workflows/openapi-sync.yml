@@ -11,6 +11,7 @@ on:
 
 jobs:
   sync:
+    if: false # disabled: requires SiaFoundation/workflows reusable workflow
     uses: SiaFoundation/workflows/.github/workflows/sync-openapi-version.yml@master
     with:
       spec_paths: |

@@ -27,7 +27,7 @@ services:
   indexd:
     depends_on:
       - postgres
-    image: ghcr.io/siafoundation/indexd:master
+    image: ghcr.io/lumeweb/indexd:master
     restart: unless-stopped
     ports:
       - 127.0.0.1:9980:9980/tcp # expose UI on localhost
