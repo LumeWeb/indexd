@@ -10,5 +10,6 @@ on:
 
 jobs:
   add-to-project:
+    if: false # disabled: requires SiaFoundation/workflows reusable workflow
     uses: SiaFoundation/workflows/.github/workflows/project-add.yml@master
     secrets: inherit
