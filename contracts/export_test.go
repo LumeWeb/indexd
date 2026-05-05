@@ -32,6 +32,9 @@ var (
 
 type CandidateContract = candidateContract
 
+// NewCandidateContract creates a CandidateContract for testing purposes.
+//
+//revive:disable:unexported-return Intentionally returns unexported type alias for test access
 func NewCandidateContract(goodForAppend, goodForFunding, goodForRefresh error) CandidateContract {
 	return CandidateContract{
 		goodForAppend:  goodForAppend,

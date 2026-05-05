@@ -14,6 +14,12 @@ import (
 )
 
 type (
+	// FundedDeposit pairs a deposit with the contract that funded it.
+	FundedDeposit struct {
+		ContractID types.FileContractID
+		Deposit    proto.AccountDeposit
+	}
+
 	// FunderHostClient defines the interface for the funder to interact with the
 	// host.
 	FunderHostClient interface {
@@ -51,14 +57,14 @@ func NewFunder(client FunderHostClient, cl *ContractLocker, rev *RevisionManager
 // the number of contracts that were drained. Consecutive calls for the same
 // host should take this into account and adjust the contract IDs that are being
 // passed in.
-func (f *Funder) FundAccounts(ctx context.Context, host hosts.Host, contractIDs []types.FileContractID, accs []accounts.HostAccount, target types.Currency, log *zap.Logger) (funded int, drained int, _ error) {
+func (f *Funder) FundAccounts(ctx context.Context, host hosts.Host, contractIDs []types.FileContractID, accs []accounts.HostAccount, target types.Currency, log *zap.Logger) (funded int, drained int, deposits []FundedDeposit, _ error) {
 	// sanity check the input
 	if len(accs) > proto.MaxAccountBatchSize {
-		return 0, 0, errors.New("too many accounts")
+		return 0, 0, nil, errors.New("too many accounts")
 	} else if len(contractIDs) == 0 {
-		return 0, 0, errors.New("no contract provided")
+		return 0, 0, nil, errors.New("no contract provided")
 	} else if len(accs) == 0 {
-		return 0, 0, nil
+		return 0, 0, nil, nil
 	}
 
 	// prepare account keys
@@ -98,6 +104,12 @@ func (f *Funder) FundAccounts(ctx context.Context, host hosts.Host, contractIDs 
 					return rhp.ContractRevision{}, proto.Usage{}, err
 				}
 				funded = maxEnd
+				for _, d := range res.Deposits {
+					deposits = append(deposits, FundedDeposit{
+						ContractID: contractID,
+						Deposit:    d,
+					})
+				}
 				return rhp.ContractRevision{
 					ID:       contractID,
 					Revision: res.Revision,
@@ -124,11 +136,11 @@ func (f *Funder) FundAccounts(ctx context.Context, host hosts.Host, contractIDs 
 			return funded == len(accountKeys), nil
 		}()
 		if err != nil {
-			return 0, 0, err
+			return 0, 0, nil, err
 		} else if done {
 			break
 		}
 	}
 
-	return funded, drained, nil
+	return funded, drained, deposits, nil
 }

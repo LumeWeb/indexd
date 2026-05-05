@@ -1720,6 +1720,100 @@ func TestPruneAccounts(t *testing.T) {
 	}
 }
 
+func TestFundingEventsAPI(t *testing.T) {
+	cluster := testutils.NewCluster(t, testutils.WithHosts(1))
+	indexer := cluster.Indexer
+	adminClient := indexer.Admin
+
+	cluster.WaitForContracts(t)
+	sk := cluster.AddAccount(t)
+	cluster.WaitForAccountFunding(t, proto.Account(sk.PublicKey()))
+
+	events, err := adminClient.FundingEvents(context.Background(), accounts.FundingCursor{}, 100)
+	if err != nil {
+		t.Fatalf("failed to get funding events: %v", err)
+	}
+	if len(events) == 0 {
+		t.Fatal("expected funding events after account funding")
+	}
+
+	ev := events[0]
+	if ev.AmountSC.IsZero() {
+		t.Fatal("expected non-zero AmountSC")
+	}
+	if ev.EstimatedUploadBytes == 0 {
+		t.Fatal("expected non-zero EstimatedUploadBytes")
+	}
+	if ev.EstimatedDownloadBytes == 0 {
+		t.Fatal("expected non-zero EstimatedDownloadBytes")
+	}
+	if ev.CreatedAt.IsZero() {
+		t.Fatal("expected non-zero CreatedAt")
+	}
+}
+
+func TestFundingEventsAPICursorPagination(t *testing.T) {
+	cluster := testutils.NewCluster(t, testutils.WithHosts(1))
+	indexer := cluster.Indexer
+	adminClient := indexer.Admin
+
+	cluster.WaitForContracts(t)
+
+	// Add multiple accounts to generate multiple funding events
+	numAccounts := 3
+	for range numAccounts {
+		sk := cluster.AddAccount(t)
+		cluster.WaitForAccountFunding(t, proto.Account(sk.PublicKey()))
+	}
+
+	// Page through funding events with limit=1
+	var allEvents []accounts.FundingEvent
+	cursor := accounts.FundingCursor{}
+
+	for {
+		page, err := adminClient.FundingEvents(context.Background(), cursor, 1)
+		if err != nil {
+			t.Fatalf("failed to get funding events page: %v", err)
+		}
+		if len(page) == 0 {
+			break
+		}
+		allEvents = append(allEvents, page...)
+		last := page[len(page)-1]
+		cursor = accounts.FundingCursor{After: last.CreatedAt, ID: last.ID}
+	}
+
+	if len(allEvents) == 0 {
+		t.Fatal("expected funding events after account funding")
+	}
+
+	// Verify ascending order by CreatedAt
+	for i := range allEvents {
+		if i == 0 {
+			continue
+		}
+		if allEvents[i].CreatedAt.Before(allEvents[i-1].CreatedAt) {
+			t.Fatalf("events not in ascending order at index %d", i)
+		}
+	}
+
+	// Verify no duplicate IDs
+	seen := make(map[int64]bool)
+	for _, ev := range allEvents {
+		if seen[ev.ID] {
+			t.Fatalf("duplicate event ID %d", ev.ID)
+		}
+		seen[ev.ID] = true
+	}
+
+	// Verify events have valid fields
+	for _, ev := range allEvents {
+		if ev.CreatedAt.IsZero() {
+			t.Fatal("expected non-zero CreatedAt")
+		}
+	}
+}
+
 // newTestLogger creates a console logger used for testing.
 func newTestLogger(enable bool) *zap.Logger {
 	if !enable {

@@ -505,3 +505,61 @@ func scanAccount(s scanner) (account accounts.Account, err error) {
 	)
 	return
 }
+
+// RecordFundingEvents records the given funding events.
+func (s *Store) RecordFundingEvents(events []accounts.FundingEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+	return s.transaction(func(ctx context.Context, tx *txn) error {
+		vals := make([]string, 0, len(events))
+		args := make([]any, 0, len(events)*6)
+		for i, ev := range events {
+			ii := i * 6
+			vals = append(vals, fmt.Sprintf(`($%d::bytea, $%d::bytea, $%d::bytea, $%d::numeric, $%d::bigint, $%d::bigint)`, ii+1, ii+2, ii+3, ii+4, ii+5, ii+6))
+			args = append(args,
+				[]byte(ev.AccountKey[:]),
+				sqlPublicKey(ev.HostKey),
+				[]byte(ev.ContractID[:]),
+				sqlCurrency(ev.AmountSC),
+				ev.EstimatedUploadBytes,
+				ev.EstimatedDownloadBytes,
+			)
+		}
+		query := fmt.Sprintf(`INSERT INTO funding_events (account_key, host_key, contract_id, amount_sc, estimated_upload_bytes, estimated_download_bytes) VALUES %s`, strings.Join(vals, ", "))
+		_, err := tx.Exec(ctx, query, args...)
+		return err
+	})
+}
+
+// FundingEvents returns a list of funding events starting after the given cursor.
+func (s *Store) FundingEvents(cursor accounts.FundingCursor, limit int) (events []accounts.FundingEvent, err error) {
+	if err := validateOffsetLimit(0, limit); err != nil {
+		return nil, err
+	}
+	err = s.transaction(func(ctx context.Context, tx *txn) error {
+		rows, err := tx.Query(ctx, `
+			SELECT id, account_key, host_key, contract_id, amount_sc, estimated_upload_bytes, estimated_download_bytes, created_at
+			FROM funding_events
+			WHERE (created_at > $1 OR (created_at = $1 AND id > $2))
+			ORDER BY created_at ASC, id ASC
+			LIMIT $3`, cursor.After, cursor.ID, limit)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var ev accounts.FundingEvent
+			var accountKey, hostKey, contractID []byte
+			if err := rows.Scan(&ev.ID, &accountKey, &hostKey, &contractID, (*sqlCurrency)(&ev.AmountSC), &ev.EstimatedUploadBytes, &ev.EstimatedDownloadBytes, &ev.CreatedAt); err != nil {
+				return err
+			}
+			copy(ev.AccountKey[:], accountKey)
+			copy(ev.HostKey[:], hostKey)
+			copy(ev.ContractID[:], contractID)
+			events = append(events, ev)
+		}
+		return rows.Err()
+	})
+	return
+}

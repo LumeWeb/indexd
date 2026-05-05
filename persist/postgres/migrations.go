@@ -86,4 +86,22 @@ UPDATE hosts SET has_quic = EXISTS (
 		_, err := tx.Exec(ctx, `ALTER TABLE hosts DROP COLUMN has_bad_quic_port`)
 		return err
 	},
+	func(ctx context.Context, tx *txn, log *zap.Logger) error {
+		_, err := tx.Exec(ctx, `
+CREATE TABLE IF NOT EXISTS funding_events (
+    id BIGSERIAL PRIMARY KEY,
+    account_key BYTEA NOT NULL CHECK (LENGTH(account_key) = 32),
+    host_key BYTEA NOT NULL CHECK (LENGTH(host_key) = 32),
+    contract_id BYTEA NOT NULL CHECK (LENGTH(contract_id) = 32),
+    amount_sc NUMERIC(50,0) NOT NULL CHECK (amount_sc >= 0),
+    estimated_upload_bytes BIGINT NOT NULL DEFAULT 0 CHECK (estimated_upload_bytes >= 0),
+    estimated_download_bytes BIGINT NOT NULL DEFAULT 0 CHECK (estimated_download_bytes >= 0),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS funding_events_account_key_host_key_idx ON funding_events(account_key, host_key);
+CREATE INDEX IF NOT EXISTS funding_events_host_key_created_at_idx ON funding_events(host_key, created_at DESC);
+CREATE INDEX IF NOT EXISTS funding_events_created_at_id_idx ON funding_events(created_at ASC, id ASC);
+`)
+		return err
+	},
 }
