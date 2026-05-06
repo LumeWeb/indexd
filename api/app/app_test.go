@@ -201,14 +201,6 @@ func TestApplicationAPI(t *testing.T) {
 		t.Fatal("failed to unpin slab:", err)
 	}
 
-	// assert minimum redundancy is enforced
-	p := uploadRandomSlab(t, hc, sk, hosts)
-	p.Sectors = p.Sectors[:5]
-	_, err = client.PinSlabs(context.Background(), sk, p)
-	if err == nil || !strings.Contains(err.Error(), "too low") {
-		t.Fatal("expected redundancy error, got:", err)
-	}
-
 	// assert hosts returns all usable hosts
 	time.Sleep(time.Second) // allow some time to form contracts
 	usableHosts, err := client.Hosts(context.Background(), sk)

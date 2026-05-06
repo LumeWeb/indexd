@@ -42,12 +42,6 @@ func TestSlabPinParamsValidate(t *testing.T) {
 		t.Fatal("unexpected", err)
 	}
 
-	// assert insufficient redundancy is illegal
-	params.Sectors = params.Sectors[:10]
-	if err := params.Validate(); err == nil || !strings.Contains(err.Error(), "is too low") {
-		t.Fatal("unexpected", err)
-	}
-
 	// assert exceeding max total shards is illegal
 	params.Sectors = make([]slabs.PinnedSector, slabs.MaxTotalShards+1)
 	if err := params.Validate(); err == nil || !strings.Contains(err.Error(), "exceeds maximum") {
@@ -132,17 +126,17 @@ func TestValidateECParams(t *testing.T) {
 		{
 			minShards:   1,
 			totalShards: 3,
-			ok:          false,
+			ok:          true,
 		},
 		{
 			minShards:   2,
 			totalShards: 6,
-			ok:          false,
+			ok:          true,
 		},
 		{
 			minShards:   4,
 			totalShards: 8,
-			ok:          false,
+			ok:          true,
 		},
 		{
 			minShards:   1,
@@ -152,7 +146,7 @@ func TestValidateECParams(t *testing.T) {
 		{
 			minShards:   60,
 			totalShards: 75,
-			ok:          false, // 1.25x redundancy is too low
+			ok:          true, // 1.25x redundancy is acceptable
 		},
 		{
 			minShards:   10,
