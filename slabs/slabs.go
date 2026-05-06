@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"time"
 
 	proto "go.sia.tech/core/rhp/v4"
@@ -12,11 +11,6 @@ import (
 )
 
 const (
-	// minRecoveryProbability is the minimum acceptable probability of being able to
-	// recover the original data. If the calculated probability is below this
-	// threshold, the slab will be rejected.
-	minRecoveryProbability = 99.99
-
 	// maxTotalShards is the maximum number of total shards (data + parity) allowed in a slab.
 	maxTotalShards = 256
 )
@@ -209,21 +203,8 @@ func (m *SlabManager) PruneSlabs(ctx context.Context, account proto.Account) err
 }
 
 // ValidateECParams checks the erasure coding parameters are
-// acceptable and ensure sufficient durability of the data. If they
-// are not, an error is returned.
-//
-// It does this by calculating the probability of being able to recover
-// the original data. The calculation assumes that each shard has a
-// fixed probability of being available, and uses the binomial
-// distribution to calculate the probability of having at least
-// `n` data shards available out of `m` total shards.
+// acceptable. If they are not, an error is returned.
 func ValidateECParams(dataShards, totalShards int) error {
-	// range of acceptable redundancy is based on the fact that too low redundancy doesn't
-	// provide enough durability, while too high redundancy is not cost effective.
-	const (
-		minRedundancy = 1.5 // minimum acceptable redundancy
-		maxRedundancy = 4   // maximum acceptable redundancy
-	)
 	switch {
 	case totalShards > maxTotalShards:
 		return fmt.Errorf("total number of shards %d exceeds maximum of %d", totalShards, maxTotalShards)
@@ -239,30 +220,10 @@ func ValidateECParams(dataShards, totalShards int) error {
 		return fmt.Errorf("parity shards %d exceeds maximum of 255", totalShards-dataShards)
 	}
 
-	// short-circuit if the redundancy is extremely low or high
 	redundancy := float64(totalShards) / float64(dataShards)
-	if redundancy < minRedundancy {
-		return fmt.Errorf("redundancy of %0.2f is too low", redundancy)
-	} else if redundancy > maxRedundancy {
+	const maxRedundancy = 4
+	if redundancy > maxRedundancy {
 		return fmt.Errorf("redundancy of %0.2f is too high", redundancy)
-	}
-
-	const recoveryProbability = 0.75 // probability of being able to recover a single shard.
-	q := 1 - recoveryProbability
-	term := math.Pow(q, float64(totalShards))
-	for i := range dataShards {
-		term *= float64(totalShards-i) / float64(i+1) * (recoveryProbability / q)
-	}
-	sum := term
-	for i := dataShards; i < totalShards; i++ {
-		term *= float64(totalShards-i) / float64(i+1) * (recoveryProbability / q)
-		sum += term
-	}
-	prob := sum * 100
-	if prob < minRecoveryProbability {
-		// the error message is rounded down to two decimal places since more precision
-		// is not useful and `%0.2f` can round up creating confusing error messages.
-		return fmt.Errorf("not enough redundancy %d-of-%d: recovery probability %0.2f%% is below minimum threshold of %0.2f%%", dataShards, totalShards, math.Floor(prob*100)/100, minRecoveryProbability)
 	}
 	return nil
 }
