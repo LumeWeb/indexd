@@ -149,20 +149,20 @@ func TestAccountFunding(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// assert account 1 was refilled to its original balance
+	// assert account 1 was refilled to its fund target
 	time.Sleep(time.Second)
 	updated1, err := c.AccountBalance(t.Context(), hk, acc1.AccountKey)
 	if err != nil {
 		t.Fatal(err)
-	} else if !updated1.Equals(balance1) {
-		t.Fatalf("expected account 1 to be refilled to %v, got %v", balance1, updated1)
+	} else if !updated1.Equals(expectedTarget1) {
+		t.Fatalf("expected account 1 to be refilled to %v, got %v", expectedTarget1, updated1)
 	}
 
-	// assert account 2 is still at its original balance
+	// assert account 2 is still at its fund target
 	updated2, err := c.AccountBalance(t.Context(), hk, acc2.AccountKey)
 	if err != nil {
 		t.Fatal(err)
-	} else if !updated2.Equals(balance2) {
-		t.Fatalf("expected account 2 balance to remain %v, got %v", balance2, updated2)
+	} else if !updated2.Equals(expectedTarget2) {
+		t.Fatalf("expected account 2 balance to remain %v, got %v", expectedTarget2, updated2)
 	}
 }
