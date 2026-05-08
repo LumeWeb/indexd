@@ -21,7 +21,7 @@ const (
 	AccountFundBatch = proto.MaxAccountBatchSize
 	// ReadyHostThreshold is the number of successfully funded host accounts
 	// required before an account is considered ready for use.
-	ReadyHostThreshold = 30
+	ReadyHostThreshold = 10
 	// AccountFundInterval is how often we will fund host accounts.
 	AccountFundInterval = 5 * time.Minute
 	// AccountActivityThreshold is the threshold for determining whether an
