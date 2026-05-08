@@ -27,6 +27,9 @@ type (
 		// the hostname that is valid for signed
 		// requests.
 		AdvertiseURL string `yaml:"advertiseURL"`
+		// RateLimit enables or disables the per-IP rate limiter
+		// on the /auth/connect endpoint.
+		RateLimit bool `yaml:"rateLimit"`
 	}
 
 	// Syncer contains the configuration for the p2p syncer.

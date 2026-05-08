@@ -37,7 +37,8 @@ var cfg = config.Config{
 		Address: "127.0.0.1:9980",
 	},
 	ApplicationAPI: config.ApplicationAPI{
-		Address: ":9982",
+		Address:   ":9982",
+		RateLimit: true,
 	},
 	Syncer: config.Syncer{
 		Address:   ":9981",
