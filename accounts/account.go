@@ -88,10 +88,33 @@ type (
 		FullStorage            bool
 	}
 
+	// HostPool represents a balance pool on a host.
+	HostPool struct {
+		ConnectKey             string
+		HostKey                types.PublicKey
+		PoolKey                types.PrivateKey
+		ConsecutiveFailedFunds int
+		NextFund               time.Time
+		FullStorage            bool
+	}
+
+	// PendingAttachment represents an account that needs to be attached to a
+	// pool on a specific host.
+	PendingAttachment struct {
+		AccountKey proto.Account
+		PoolKey    types.PrivateKey
+	}
+
 	// UpdateAccountRequest is the request body for the
 	// [PUT] /account/:accountkey/limit endpoint.
 	UpdateAccountRequest struct {
 		MaxPinnedData *uint64 `json:"maxPinnedData"`
+	}
+
+	// PoolFundInfo contains funding info for a single pool.
+	PoolFundInfo struct {
+		FundTargetBytes uint64
+		FullStorage     bool
 	}
 
 	// QuotaFundInfo contains funding info for a quota including the number

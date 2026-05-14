@@ -55,7 +55,14 @@ func (s *Store) AddAppConnectKey(meta accounts.AppConnectKeyRequest) (key accoun
 			case pgerrcode.UniqueViolation:
 				return accounts.ErrKeyAlreadyExists
 			}
+		} else if err != nil {
+			return err
 		}
+
+		// create a pool for the new connect key, all accounts under a connect
+		// key share a single pool for host funding on pool capable hosts
+		poolKey := types.GeneratePrivateKey()
+		_, err = tx.Exec(ctx, `INSERT INTO pools (connect_key_id, pool_key) VALUES ((SELECT id FROM app_connect_keys WHERE app_key = $1), $2)`, meta.Key, []byte(poolKey))
 		return err
 	})
 	return

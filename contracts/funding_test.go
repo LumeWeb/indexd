@@ -10,6 +10,7 @@ import (
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/chain"
+	rhp "go.sia.tech/coreutils/rhp/v4"
 	"go.sia.tech/coreutils/rhp/v4/siamux"
 	"go.sia.tech/coreutils/testutil"
 	"go.sia.tech/indexd/accounts"
@@ -45,9 +46,17 @@ func (f *mockFunder) FundAccounts(ctx context.Context, host hosts.Host, contract
 	return len(accs), 1, nil
 }
 
-// TestFunding is a unit test that covers the functionality of the
-// FundAccounts method on the contracts manager.
-func TestFunding(t *testing.T) {
+func (f *mockFunder) AttachPools(_ context.Context, _ types.PublicKey, _ []rhp.PoolAttachInput, _ time.Duration) error {
+	return nil
+}
+
+func (f *mockFunder) FundPools(_ context.Context, _ hosts.Host, _ []types.FileContractID, pools []accounts.HostPool, _ types.Currency, _ *zap.Logger) (funded int, drained int, _ error) {
+	return len(pools), 0, nil
+}
+
+// TestFundingLegacy verifies that FundAccounts funds user accounts directly
+// on hosts that do not support pools (< 5.1.0).
+func TestFundingLegacy(t *testing.T) {
 	log := zaptest.NewLogger(t)
 	s := newTestStore(t)
 	f := &mockFunder{}
@@ -92,7 +101,7 @@ func TestFunding(t *testing.T) {
 	}
 
 	contractIDs := []types.FileContractID{{1}}
-	err = cm.FundAccounts(context.Background(), host, contractIDs, false, zap.NewNop())
+	err = cm.FundAccounts(context.Background(), host, contractIDs, zap.NewNop())
 	if !errors.Is(err, hosts.ErrNotFound) {
 		t.Fatal("expected host not found error")
 	}
@@ -107,7 +116,7 @@ func TestFunding(t *testing.T) {
 	s.AddTestAccount(t, pk2)
 
 	// fund accounts
-	err = cm.FundAccounts(context.Background(), host, contractIDs, false, zap.NewNop())
+	err = cm.FundAccounts(context.Background(), host, contractIDs, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +146,7 @@ func TestFunding(t *testing.T) {
 	f.fail = true
 	for range 3 {
 		s.resetNextFund(t)
-		err = cm.FundAccounts(context.Background(), host, contractIDs, false, zap.NewNop())
+		err = cm.FundAccounts(context.Background(), host, contractIDs, zap.NewNop())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -164,7 +173,7 @@ func TestFunding(t *testing.T) {
 
 	// fund accounts
 	contractIDs = append(contractIDs, types.FileContractID{2})
-	err = cm.FundAccounts(context.Background(), host, contractIDs, false, zap.NewNop())
+	err = cm.FundAccounts(context.Background(), host, contractIDs, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +182,7 @@ func TestFunding(t *testing.T) {
 	target := accounts.HostFundTarget(host, testFundTargetBytes)
 	if len(f.calls) != 2 {
 		t.Fatal("expected two calls to fund accounts")
-	} else if len(f.calls[0].accounts) != accounts.AccountFundBatch {
+	} else if len(f.calls[0].accounts) != proto.MaxAccountBatchSize {
 		t.Fatal("expected first call to fund 1000 accounts")
 	} else if len(f.calls[1].accounts) != 2 {
 		t.Fatal("expected second call to fund 2 accounts")
@@ -196,19 +205,86 @@ func TestFunding(t *testing.T) {
 	}
 
 	// assert there's no accounts to fund
-	err = cm.FundAccounts(context.Background(), host, contractIDs, false, zap.NewNop())
+	err = cm.FundAccounts(context.Background(), host, contractIDs, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	} else if len(f.calls) != 2 {
 		t.Fatal("expected two calls to fund accounts")
 	}
+}
 
-	// assert we can force a refill on all accounts
-	err = cm.FundAccounts(context.Background(), host, contractIDs, true, zap.NewNop())
+// TestFundingPools verifies that FundAccounts does not fund user accounts on
+// hosts that support pools (>= 5.1.0). Only service accounts are funded.
+func TestFundingPools(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	s := newTestStore(t)
+	f := &mockFunder{}
+
+	am, err := accounts.NewManager(s, accounts.WithLogger(log))
 	if err != nil {
 		t.Fatal(err)
-	} else if len(f.calls) != 4 {
-		t.Fatal("expected four calls to fund accounts")
+	}
+	defer am.Close()
+
+	network, genesis := testutil.V2Network()
+	dbstore, tipState, err := chain.NewDBStore(chain.NewMemDB(), network, genesis, chain.NewZapMigrationLogger(log.Named("chaindb")))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hm, err := hosts.NewManager(nil, nil, nil, s, alerts.NewManager(), hosts.WithLogger(log.Named("hosts")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hm.Close()
+
+	cm, err := contracts.NewManager(types.GeneratePrivateKey(), am, f, chain.NewManager(dbstore, tipState), s, nil, nil, nil, contracts.NewContractLocker(), hm, nil, nil, contracts.WithLogger(log.Named("contracts")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cm.Close()
+
+	// host with pool support
+	host := hosts.Host{
+		Settings: proto.HostSettings{
+			ProtocolVersion: rhp.ProtocolVersion510,
+			Prices: proto.HostPrices{
+				EgressPrice:  types.Siacoins(1),
+				IngressPrice: types.Siacoins(1),
+				StoragePrice: types.Siacoins(1),
+			},
+		},
+		PublicKey: types.GeneratePrivateKey().PublicKey(),
+		Addresses: []chain.NetAddress{{Protocol: siamux.Protocol, Address: "foo"}},
+		Usability: hosts.GoodUsability,
+	}
+
+	// add host and user accounts
+	s.AddTestHost(t, host)
+
+	pk1 := types.GeneratePrivateKey().PublicKey()
+	s.AddTestAccount(t, pk1)
+
+	pk2 := types.GeneratePrivateKey().PublicKey()
+	s.AddTestAccount(t, pk2)
+
+	// fund accounts on a pool host
+	contractIDs := []types.FileContractID{{1}}
+	err = cm.FundAccounts(context.Background(), host, contractIDs, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// no FundAccounts calls should have been made for user accounts since
+	// the host supports pools and there are no service accounts
+	if len(f.calls) != 0 {
+		t.Fatalf("expected no fund calls on pool host, got %d", len(f.calls))
+	}
+
+	// no account_hosts entries should exist
+	eas := s.hostAccounts(t)
+	if len(eas) != 0 {
+		t.Fatalf("expected no host accounts, got %d", len(eas))
 	}
 }
 
