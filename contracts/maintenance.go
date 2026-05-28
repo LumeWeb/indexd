@@ -81,7 +81,7 @@ func (cm *ContractManager) performAccountFunding(ctx context.Context, log *zap.L
 
 			// fund accounts
 			if len(contractIDs) > 0 {
-				cm.hosts.WithScannedHost(ctx, hostKey, func(host hosts.Host) error {
+				err := cm.hosts.WithScannedHost(ctx, hostKey, func(host hosts.Host) error {
 					// fund service accounts
 					err := cm.FundServiceAccounts(ctx, host, contractIDs, log)
 					if err != nil {
@@ -102,6 +102,9 @@ func (cm *ContractManager) performAccountFunding(ctx context.Context, log *zap.L
 
 					return nil
 				})
+				if err != nil {
+					log.Debug("failed to scan host for funding", zap.Error(err))
+				}
 			} else {
 				log.Debug("no contracts for funding")
 			}

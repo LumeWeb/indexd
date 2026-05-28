@@ -690,7 +690,7 @@ func (a *app) handleAuthRegister(jc jape.Context) {
 	default:
 		if err := a.contracts.TriggerAccountFunding(); err != nil {
 			// error is ignored since the account is already connected
-			a.log.Debug("failed to trigger funding", zap.Error(err))
+			a.log.Debug("failed to trigger account funding", zap.Error(err))
 		}
 		jc.Encode(nil)
 	}

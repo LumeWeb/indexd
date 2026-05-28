@@ -90,7 +90,6 @@ type (
 
 	// HostPool represents a balance pool on a host.
 	HostPool struct {
-		ConnectKey             string
 		HostKey                types.PublicKey
 		PoolKey                types.PrivateKey
 		ConsecutiveFailedFunds int
@@ -111,18 +110,13 @@ type (
 		MaxPinnedData *uint64 `json:"maxPinnedData"`
 	}
 
-	// PoolFundInfo contains funding info for a single pool.
-	PoolFundInfo struct {
-		FundTargetBytes uint64
-		FullStorage     bool
-	}
-
-	// QuotaFundInfo contains funding info for a quota including the number
-	// of active accounts.
+	// QuotaFundInfo contains funding info for a quota. Active is the number
+	// of active funding units and FullStorage is the subset of those that
+	// have reached their storage limit.
 	QuotaFundInfo struct {
-		QuotaName           string
-		FundTargetBytes     uint64
-		ActiveAccounts      uint64
-		FullStorageAccounts uint64
+		QuotaName       string
+		FundTargetBytes uint64
+		Active          uint64
+		FullStorage     uint64
 	}
 )

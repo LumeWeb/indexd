@@ -122,18 +122,26 @@ CREATE INDEX pool_attachments_account_id_host_id_idx ON pool_attachments (accoun
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
-
+		var ids []int64
 		for rows.Next() {
 			var id int64
 			if err := rows.Scan(&id); err != nil {
+				rows.Close()
 				return err
 			}
+			ids = append(ids, id)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+
+		for _, id := range ids {
 			poolKey := types.GeneratePrivateKey()
 			if _, err := tx.Exec(ctx, `INSERT INTO pools (connect_key_id, pool_key) VALUES ($1, $2)`, id, []byte(poolKey)); err != nil {
 				return fmt.Errorf("failed to create pool for connect key %d: %w", id, err)
 			}
 		}
-		return rows.Err()
+		return nil
 	},
 }

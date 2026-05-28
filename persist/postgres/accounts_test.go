@@ -1028,7 +1028,7 @@ func TestAccountFundingInfo(t *testing.T) {
 	totalActive := func(infos []accounts.QuotaFundInfo) uint64 {
 		var total uint64
 		for _, info := range infos {
-			total += info.ActiveAccounts
+			total += info.Active
 		}
 		return total
 	}
@@ -1132,14 +1132,14 @@ func TestAccountFundingInfo(t *testing.T) {
 	}
 
 	const defaultFundTarget = uint64(4e9) // 4 GB, matches init.sql default
-	if defaultInfo.ActiveAccounts != 2 {
-		t.Fatalf("expected 2 default active accounts, got %d", defaultInfo.ActiveAccounts)
+	if defaultInfo.Active != 2 {
+		t.Fatalf("expected 2 default active accounts, got %d", defaultInfo.Active)
 	} else if defaultInfo.FundTargetBytes != defaultFundTarget {
 		t.Fatalf("expected default fund target %d, got %d", defaultFundTarget, defaultInfo.FundTargetBytes)
 	}
 
-	if premiumInfo.ActiveAccounts != 2 {
-		t.Fatalf("expected 2 premium active accounts, got %d", premiumInfo.ActiveAccounts)
+	if premiumInfo.Active != 2 {
+		t.Fatalf("expected 2 premium active accounts, got %d", premiumInfo.Active)
 	} else if premiumInfo.FundTargetBytes != premiumFundTarget {
 		t.Fatalf("expected premium fund target %d, got %d", premiumFundTarget, premiumInfo.FundTargetBytes)
 	}
@@ -1154,8 +1154,8 @@ func TestAccountFundingInfo(t *testing.T) {
 	for _, info := range infos {
 		if info.QuotaName == "premium" {
 			found = true
-			if info.ActiveAccounts != 1 {
-				t.Fatalf("expected 1 premium active account, got %d", info.ActiveAccounts)
+			if info.Active != 1 {
+				t.Fatalf("expected 1 premium active account, got %d", info.Active)
 			}
 		}
 	}

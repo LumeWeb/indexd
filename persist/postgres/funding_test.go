@@ -103,8 +103,6 @@ func TestHostPoolsForFunding(t *testing.T) {
 		t.Fatal(err)
 	} else if len(pools) != 1 {
 		t.Fatal("expected one pool", len(pools))
-	} else if pools[0].ConnectKey != apk1 {
-		t.Fatal("unexpected connect key")
 	} else if pools[0].HostKey != hk1 {
 		t.Fatal("unexpected host key")
 	} else if pools[0].ConsecutiveFailedFunds != 0 {
@@ -172,8 +170,6 @@ func TestHostPoolsForFunding(t *testing.T) {
 		t.Fatal(err)
 	} else if len(pools) != 1 {
 		t.Fatal("expected one pool", len(pools))
-	} else if pools[0].ConnectKey != apk2 {
-		t.Fatal("unexpected connect key")
 	} else if pools[0].PoolKey.PublicKey() != poolKey2.PublicKey() {
 		t.Fatal("unexpected pool key")
 	}
@@ -677,10 +673,12 @@ func TestPoolFundingInfo(t *testing.T) {
 		t.Fatal("expected premium pool info")
 	}
 
-	// neither pool should be marked full storage yet
+	// neither quota should have any full storage pools yet
 	for _, info := range infos {
-		if info.FullStorage {
-			t.Fatal("expected FullStorage to be false")
+		if info.Active != 1 {
+			t.Fatal("expected Active to be 1", info.Active)
+		} else if info.FullStorage != 0 {
+			t.Fatal("expected FullStorage to be 0", info.FullStorage)
 		}
 	}
 
@@ -701,10 +699,10 @@ func TestPoolFundingInfo(t *testing.T) {
 
 	// verify the default pool is full storage and premium is not
 	for _, info := range infos {
-		if info.FundTargetBytes == defaultFundTarget && !info.FullStorage {
-			t.Fatal("expected default pool to be full storage")
-		} else if info.FundTargetBytes == premiumFundTarget && info.FullStorage {
-			t.Fatal("expected premium pool to not be full storage")
+		if info.FundTargetBytes == defaultFundTarget && info.FullStorage != 1 {
+			t.Fatal("expected default FullStorage to be 1", info.FullStorage)
+		} else if info.FundTargetBytes == premiumFundTarget && info.FullStorage != 0 {
+			t.Fatal("expected premium FullStorage to be 0", info.FullStorage)
 		}
 	}
 

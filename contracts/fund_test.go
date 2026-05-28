@@ -24,9 +24,17 @@ type fundAccountsCall struct {
 	target      types.Currency
 }
 
+type fundPoolsCall struct {
+	host        hosts.Host
+	contractIDs []types.FileContractID
+	pools       []accounts.HostPool
+	target      types.Currency
+}
+
 type accountsManagerMock struct {
 	mu             sync.Mutex
 	accountsToFund []accounts.HostAccount
+	poolsToFund    []accounts.HostPool
 	quotaInfos     []accounts.QuotaFundInfo
 }
 
@@ -85,12 +93,16 @@ func (am *accountsManagerMock) PendingPoolAttachments(_ types.PublicKey, _ int) 
 	return nil, nil
 }
 
-func (am *accountsManagerMock) PoolFundingInfo(_ time.Time) ([]accounts.PoolFundInfo, error) {
+func (am *accountsManagerMock) PoolFundingInfo(_ time.Time) ([]accounts.QuotaFundInfo, error) {
 	return nil, nil
 }
 
 func (am *accountsManagerMock) PoolsForFunding(_ types.PublicKey, _ string, _ time.Time, _ int) ([]accounts.HostPool, error) {
-	return nil, nil
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	cpy := make([]accounts.HostPool, len(am.poolsToFund))
+	copy(cpy, am.poolsToFund)
+	return cpy, nil
 }
 
 func (am *accountsManagerMock) UpdateHostPools(_ []accounts.HostPool) error {
@@ -98,8 +110,9 @@ func (am *accountsManagerMock) UpdateHostPools(_ []accounts.HostPool) error {
 }
 
 type accountFunderMock struct {
-	mu    sync.Mutex
-	calls []fundAccountsCall
+	mu        sync.Mutex
+	calls     []fundAccountsCall
+	poolCalls []fundPoolsCall
 }
 
 func (f *accountFunderMock) AttachPools(_ context.Context, _ types.PublicKey, _ []rhp.PoolAttachInput, _ time.Duration) error {
@@ -120,7 +133,17 @@ func (f *accountFunderMock) FundAccounts(ctx context.Context, host hosts.Host, c
 	return len(accs), 0, nil
 }
 
-func (f *accountFunderMock) FundPools(_ context.Context, _ hosts.Host, _ []types.FileContractID, pools []accounts.HostPool, _ types.Currency, _ *zap.Logger) (funded int, drained int, err error) {
+func (f *accountFunderMock) FundPools(_ context.Context, host hosts.Host, contractIDs []types.FileContractID, pools []accounts.HostPool, target types.Currency, _ *zap.Logger) (funded int, drained int, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	poolsCopy := make([]accounts.HostPool, len(pools))
+	copy(poolsCopy, pools)
+	f.poolCalls = append(f.poolCalls, fundPoolsCall{
+		host:        host,
+		contractIDs: contractIDs,
+		pools:       poolsCopy,
+		target:      target,
+	})
 	return len(pools), 0, nil
 }
 
@@ -323,6 +346,81 @@ func TestPerformAccountFundingFullStorage(t *testing.T) {
 
 	if fullStorageCall == nil {
 		t.Fatal("expected full storage account call")
+	} else if !fullStorageCall.target.Equals(readTarget) {
+		t.Fatalf("full storage target mismatch: got %v, want %v", fullStorageCall.target, readTarget)
+	}
+}
+
+func TestPerformPoolFundingFullStorage(t *testing.T) {
+	amMock := newAccountsManagerMock()
+	funderMock := &accountFunderMock{}
+	store := newTestStore(t)
+	hmMock := newHostManagerMock(store)
+	cm := contracts.NewTestContractManager(types.PublicKey{}, amMock, funderMock, nil, store, nil, nil, nil, contracts.NewContractLocker(), hmMock, nil, nil)
+
+	// use settings with non-zero egress/ingress so read and write targets
+	// differ, and pool support enabled
+	settings := goodSettings
+	settings.Prices.EgressPrice = types.Siacoins(1).Div64(1e12)
+	settings.Prices.IngressPrice = types.Siacoins(1).Div64(1e12)
+	settings.ProtocolVersion = rhp.ProtocolVersion510
+
+	// add a pool host with one contract
+	hk := types.PublicKey{1}
+	h := hosts.Host{
+		PublicKey: hk,
+		Usability: hosts.GoodUsability,
+		Settings:  settings,
+	}
+	store.addTestHost(t, h)
+	hmMock.settings[hk] = settings
+
+	c1 := store.addTestContract(t, hk, true, types.FileContractID{1})
+	store.setContractRemainingAllowance(t, c1, types.Siacoins(100))
+
+	// set up one upload pool and one full storage pool
+	amMock.poolsToFund = []accounts.HostPool{
+		{PoolKey: types.GeneratePrivateKey(), FullStorage: false},
+		{PoolKey: types.GeneratePrivateKey(), FullStorage: true},
+	}
+
+	// fund accounts
+	err := cm.PerformAccountFunding(context.Background(), zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// expect two calls, one for upload pools and one for full storage
+	fullTarget := accounts.HostFundTarget(h, testFundTargetBytes)
+	readTarget := accounts.HostReadFundTarget(h, testFundTargetBytes)
+	if readTarget.IsZero() {
+		t.Fatal("read fund target should not be zero")
+	} else if fullTarget.Equals(readTarget) {
+		t.Fatal("full and read targets should differ")
+	}
+
+	if len(funderMock.poolCalls) != 2 {
+		t.Fatalf("expected 2 calls, got %d", len(funderMock.poolCalls))
+	}
+
+	// find which call is which
+	var uploadCall, fullStorageCall *fundPoolsCall
+	for i := range funderMock.poolCalls {
+		if len(funderMock.poolCalls[i].pools) == 1 && !funderMock.poolCalls[i].pools[0].FullStorage {
+			uploadCall = &funderMock.poolCalls[i]
+		} else if len(funderMock.poolCalls[i].pools) == 1 && funderMock.poolCalls[i].pools[0].FullStorage {
+			fullStorageCall = &funderMock.poolCalls[i]
+		}
+	}
+
+	if uploadCall == nil {
+		t.Fatal("expected upload pool call")
+	} else if !uploadCall.target.Equals(fullTarget) {
+		t.Fatalf("upload target mismatch: got %v, want %v", uploadCall.target, fullTarget)
+	}
+
+	if fullStorageCall == nil {
+		t.Fatal("expected full storage pool call")
 	} else if !fullStorageCall.target.Equals(readTarget) {
 		t.Fatalf("full storage target mismatch: got %v, want %v", fullStorageCall.target, readTarget)
 	}

@@ -41,7 +41,7 @@ func (s *Store) AccountFundingInfo(threshold time.Time) ([]accounts.QuotaFundInf
 
 		for rows.Next() {
 			var info accounts.QuotaFundInfo
-			if err := rows.Scan(&info.QuotaName, &info.FundTargetBytes, &info.ActiveAccounts, &info.FullStorageAccounts); err != nil {
+			if err := rows.Scan(&info.QuotaName, &info.FundTargetBytes, &info.Active, &info.FullStorage); err != nil {
 				return fmt.Errorf("failed to scan quota fund info: %w", err)
 			}
 			infos = append(infos, info)
@@ -53,19 +53,20 @@ func (s *Store) AccountFundingInfo(threshold time.Time) ([]accounts.QuotaFundInf
 	return infos, nil
 }
 
-// PoolFundingInfo returns the fund target bytes for each pool. Each pool
-// receives its quota's fund target once, regardless of the number of attached
-// accounts. Pools with no active accounts after the threshold are excluded.
-// Pools whose connect key has reached its global storage limit are marked as
-// full storage.
-func (s *Store) PoolFundingInfo(threshold time.Time) ([]accounts.PoolFundInfo, error) {
-	var infos []accounts.PoolFundInfo
+// PoolFundingInfo returns funding info grouped by quota for pools. Active is
+// the number of pools with at least one active account after the threshold;
+// FullStorage is the subset of those whose connect key has reached its
+// storage limit. One active pool counts the same as one active legacy
+// account for funding purposes.
+func (s *Store) PoolFundingInfo(threshold time.Time) ([]accounts.QuotaFundInfo, error) {
+	var infos []accounts.QuotaFundInfo
 	if err := s.transaction(func(ctx context.Context, tx *txn) error {
 		infos = infos[:0] // reuse same slice if transaction retries
 
 		rows, err := tx.Query(ctx, `
-			SELECT q.fund_target_bytes,
-				ack.pinned_data >= q.max_pinned_data AS full_storage
+			SELECT q.name, q.fund_target_bytes,
+				COUNT(*) AS active_count,
+				COUNT(*) FILTER (WHERE ack.pinned_data >= q.max_pinned_data) AS full_storage_count
 			FROM pools p
 			INNER JOIN app_connect_keys ack ON ack.id = p.connect_key_id
 			INNER JOIN quotas q ON q.name = ack.quota_name
@@ -75,6 +76,7 @@ func (s *Store) PoolFundingInfo(threshold time.Time) ([]accounts.PoolFundInfo, e
 				AND a.deleted_at IS NULL
 				AND a.last_used >= $1
 			)
+			GROUP BY q.name, q.fund_target_bytes
 		`, threshold)
 		if err != nil {
 			return err
@@ -82,8 +84,8 @@ func (s *Store) PoolFundingInfo(threshold time.Time) ([]accounts.PoolFundInfo, e
 		defer rows.Close()
 
 		for rows.Next() {
-			var info accounts.PoolFundInfo
-			if err := rows.Scan(&info.FundTargetBytes, &info.FullStorage); err != nil {
+			var info accounts.QuotaFundInfo
+			if err := rows.Scan(&info.QuotaName, &info.FundTargetBytes, &info.Active, &info.FullStorage); err != nil {
 				return fmt.Errorf("failed to scan pool fund info: %w", err)
 			}
 			infos = append(infos, info)
@@ -328,9 +330,9 @@ func (s *Store) UpdateHostPools(pools []accounts.HostPool) error {
 		args := make([]any, 0, len(pools)*4)
 		for i, pool := range pools {
 			ii := i * 4
-			vals = append(vals, fmt.Sprintf(`($%d::text, $%d::bytea, $%d::int, $%d::timestamptz)`, ii+1, ii+2, ii+3, ii+4))
+			vals = append(vals, fmt.Sprintf(`($%d::bytea, $%d::bytea, $%d::int, $%d::timestamptz)`, ii+1, ii+2, ii+3, ii+4))
 			args = append(args,
-				pool.ConnectKey,
+				[]byte(pool.PoolKey),
 				sqlPublicKey(pool.HostKey),
 				pool.ConsecutiveFailedFunds,
 				pool.NextFund,
@@ -344,9 +346,8 @@ SELECT
 	h.id AS host_id,
 	vals.consecutive_failed_funds,
 	vals.next_fund
-FROM (VALUES %s) AS vals(connect_key, host_pubkey, consecutive_failed_funds, next_fund)
-INNER JOIN app_connect_keys ack ON ack.app_key = vals.connect_key
-INNER JOIN pools p ON p.connect_key_id = ack.id
+FROM (VALUES %s) AS vals(pool_pubkey, host_pubkey, consecutive_failed_funds, next_fund)
+INNER JOIN pools p ON p.pool_key = vals.pool_pubkey
 INNER JOIN hosts h ON h.public_key = vals.host_pubkey
 ON CONFLICT (pool_id, host_id)
 DO UPDATE SET
@@ -394,7 +395,7 @@ func newHostPoolsForFunding(ctx context.Context, tx *txn, hk types.PublicKey, ho
 	pools := make([]accounts.HostPool, 0, limit)
 
 	rows, err := tx.Query(ctx, `
-SELECT p.pool_key, ack.app_key,
+SELECT p.pool_key,
 	ack.pinned_data >= q.max_pinned_data AS full_storage
 FROM pools p
 INNER JOIN app_connect_keys ack ON ack.id = p.connect_key_id
@@ -410,7 +411,7 @@ LIMIT $2;`, hostID, limit, quotaName, threshold)
 
 	for rows.Next() {
 		pool := accounts.HostPool{HostKey: hk, NextFund: time.Now()}
-		if err := rows.Scan((*[]byte)(&pool.PoolKey), &pool.ConnectKey, &pool.FullStorage); err != nil {
+		if err := rows.Scan((*[]byte)(&pool.PoolKey), &pool.FullStorage); err != nil {
 			return nil, fmt.Errorf("failed to scan pool: %w", err)
 		}
 		pools = append(pools, pool)
@@ -456,7 +457,7 @@ func existingHostPoolsForFunding(ctx context.Context, tx *txn, hk types.PublicKe
 	pools := make([]accounts.HostPool, 0, limit)
 
 	rows, err := tx.Query(ctx, `
-SELECT p.pool_key, ack.app_key, ph.consecutive_failed_funds, ph.next_fund,
+SELECT p.pool_key, ph.consecutive_failed_funds, ph.next_fund,
 	ack.pinned_data >= q.max_pinned_data AS full_storage
 FROM pool_hosts ph
 INNER JOIN pools p ON p.id = ph.pool_id
@@ -473,7 +474,7 @@ LIMIT $2`, hostID, limit, quotaName, threshold)
 
 	for rows.Next() {
 		pool := accounts.HostPool{HostKey: hk}
-		if err := rows.Scan((*[]byte)(&pool.PoolKey), &pool.ConnectKey, &pool.ConsecutiveFailedFunds, &pool.NextFund, &pool.FullStorage); err != nil {
+		if err := rows.Scan((*[]byte)(&pool.PoolKey), &pool.ConsecutiveFailedFunds, &pool.NextFund, &pool.FullStorage); err != nil {
 			return nil, fmt.Errorf("failed to scan pool: %w", err)
 		}
 		pools = append(pools, pool)

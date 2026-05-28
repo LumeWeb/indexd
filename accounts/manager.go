@@ -42,7 +42,7 @@ type (
 		HostPoolsForFunding(hk types.PublicKey, quotaName string, threshold time.Time, limit int) ([]HostPool, error)
 		InsertPoolAttachments(hk types.PublicKey, attachments []PendingAttachment) error
 		PendingPoolAttachments(hk types.PublicKey, limit int) ([]PendingAttachment, error)
-		PoolFundingInfo(threshold time.Time) ([]PoolFundInfo, error)
+		PoolFundingInfo(threshold time.Time) ([]QuotaFundInfo, error)
 		UpdateHostAccounts(accounts []HostAccount) error
 		UpdateHostPools(pools []HostPool) error
 
@@ -159,8 +159,8 @@ func (m *AccountManager) PendingPoolAttachments(hk types.PublicKey, limit int) (
 	return m.store.PendingPoolAttachments(hk, limit)
 }
 
-// PoolFundingInfo returns funding info for each pool.
-func (m *AccountManager) PoolFundingInfo(threshold time.Time) ([]PoolFundInfo, error) {
+// PoolFundingInfo returns funding info grouped by quota for pools.
+func (m *AccountManager) PoolFundingInfo(threshold time.Time) ([]QuotaFundInfo, error) {
 	return m.store.PoolFundingInfo(threshold)
 }
 

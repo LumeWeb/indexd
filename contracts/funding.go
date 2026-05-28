@@ -63,38 +63,31 @@ func (cm *ContractManager) AttachPools(ctx context.Context, hostKey types.Public
 }
 
 // ContractFundTarget calculates the fund target for a contract on the given
-// host. For hosts that support pools it sums the pool fund targets. For legacy
-// hosts it uses per-account targets. Service accounts are always included.
+// host. For hosts that support pools it sums per-quota pool targets, for
+// legacy hosts it sums per-quota per-account targets. One active pool counts
+// the same as one active legacy account. Service accounts are always
+// included.
 func (cm *ContractManager) ContractFundTarget(ctx context.Context, host hosts.Host, minAllowance types.Currency) (types.Currency, error) {
-	var target types.Currency
+	threshold := time.Now().Add(-accounts.AccountActivityThreshold)
 
+	var infos []accounts.QuotaFundInfo
+	var err error
 	if host.HasPoolSupport() {
-		// pool-funded host
-		threshold := time.Now().Add(-accounts.AccountActivityThreshold)
-		poolInfos, err := cm.accounts.PoolFundingInfo(threshold)
-		if err != nil {
-			return types.ZeroCurrency, err
-		}
-		for _, pi := range poolInfos {
-			if pi.FullStorage {
-				target = target.Add(accounts.HostReadFundTarget(host, pi.FundTargetBytes))
-			} else {
-				target = target.Add(accounts.HostFundTarget(host, pi.FundTargetBytes))
-			}
-		}
+		infos, err = cm.accounts.PoolFundingInfo(threshold)
 	} else {
-		// legacy host: per-account funding
-		quotaInfos, err := cm.accounts.AccountFundingInfo(time.Now().Add(-accounts.AccountActivityThreshold))
-		if err != nil {
-			return types.ZeroCurrency, err
-		}
-		for _, qi := range quotaInfos {
-			fullStorageAccounts := min(qi.FullStorageAccounts, qi.ActiveAccounts)
-			uploadAccounts := qi.ActiveAccounts - fullStorageAccounts
-			t := accounts.HostFundTarget(host, qi.FundTargetBytes).Mul64(uploadAccounts)
-			t = t.Add(accounts.HostReadFundTarget(host, qi.FundTargetBytes).Mul64(fullStorageAccounts))
-			target = target.Add(t)
-		}
+		infos, err = cm.accounts.AccountFundingInfo(threshold)
+	}
+	if err != nil {
+		return types.ZeroCurrency, err
+	}
+
+	var target types.Currency
+	for _, info := range infos {
+		fullStorage := min(info.FullStorage, info.Active)
+		upload := info.Active - fullStorage
+		t := accounts.HostFundTarget(host, info.FundTargetBytes).Mul64(upload)
+		t = t.Add(accounts.HostReadFundTarget(host, info.FundTargetBytes).Mul64(fullStorage))
+		target = target.Add(t)
 	}
 
 	// service accounts
