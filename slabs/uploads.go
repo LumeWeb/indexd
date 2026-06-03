@@ -124,7 +124,7 @@ top:
 
 	// record the slab got migrated so object events gets updated
 	if err := m.store.RecordSlabMigrated(slab.ID); err != nil {
-		log.Error("failed to record slab migration", zap.Error(err))
+		log.Debug("failed to record slab migration", zap.Error(err))
 	}
 	return int(migrated), nil
 }
