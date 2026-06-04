@@ -4,12 +4,12 @@ go 1.26.0
 
 require (
 	github.com/jackc/pgerrcode v0.0.0-20240316143900-6e2875d9b438
-	github.com/jackc/pgx/v5 v5.9.2
+	github.com/jackc/pgx/v5 v5.10.0
 	github.com/klauspost/reedsolomon v1.14.0
 	github.com/oschwald/geoip2-golang v1.13.0
 	github.com/shopspring/decimal v1.4.0
 	go.sia.tech/core v0.21.0
-	go.sia.tech/coreutils v0.22.1-0.20260513143633-9856f6e895bd
+	go.sia.tech/coreutils v0.22.1-0.20260602072818-74eb647d67d8
 	go.sia.tech/jape v0.14.1
 	go.sia.tech/mux v1.5.1
 	go.sia.tech/web/indexd v0.17.0
