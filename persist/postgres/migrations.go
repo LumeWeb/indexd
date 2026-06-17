@@ -157,6 +157,13 @@ CREATE INDEX pool_attachments_account_id_host_id_idx ON pool_attachments (accoun
 		return err
 	},
 	func(ctx context.Context, tx *txn, log *zap.Logger) error {
+		if _, err := tx.Exec(ctx, `ALTER TABLE pool_hosts ADD COLUMN sharing_attached BOOLEAN NOT NULL DEFAULT FALSE`); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `CREATE INDEX pool_hosts_sharing_unattached_idx ON pool_hosts (host_id) WHERE sharing_attached = FALSE`)
+		return err
+	},
+	func(ctx context.Context, tx *txn, log *zap.Logger) error {
 		if _, err := tx.Exec(ctx, `CREATE INDEX IF NOT EXISTS sectors_lost_idx ON sectors(id) WHERE host_id IS NULL`); err != nil {
 			return err
 		} else if _, err := tx.Exec(ctx, `CREATE INDEX IF NOT EXISTS contracts_bad_idx ON contracts(contract_id) WHERE good = FALSE OR state NOT IN (0, 1)`); err != nil {
