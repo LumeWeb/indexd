@@ -1455,6 +1455,103 @@ func TestRecordFundingEvents(t *testing.T) {
 	}
 }
 
+func TestFundingEventsPoolQuotaName(t *testing.T) {
+	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
+
+	hk := types.GeneratePrivateKey().PublicKey()
+	store.addTestHost(t, hk)
+
+	// Create the quota before adding a connect key that references it.
+	const testQuota = "user-42"
+	fundTarget := uint64(1 << 30)
+	if err := store.PutQuota(testQuota, accounts.PutQuotaRequest{
+		Description:     "test quota",
+		MaxPinnedData:   1 << 30,
+		TotalUses:       100,
+		FundTargetBytes: &fundTarget,
+	}); err != nil {
+		t.Fatalf("failed to create quota: %v", err)
+	}
+
+	// Create a connect key with the known quota name — this also creates a pool.
+	apk, poolKey := store.addTestAppConnectKey(t, testQuota)
+
+	// Look up the pool's internal ID so we can record a pool funding event.
+	var poolID int
+	if err := store.transaction(func(ctx context.Context, tx *txn) error {
+		return tx.QueryRow(ctx, `
+			SELECT p.id FROM pools p
+			INNER JOIN app_connect_keys ack ON ack.id = p.connect_key_id
+			WHERE ack.app_key = $1`, apk).Scan(&poolID)
+	}); err != nil {
+		t.Fatalf("failed to get pool ID: %v", err)
+	}
+
+	poolKeyPub := poolKey.PublicKey()
+	events := []accounts.FundingEvent{
+		{
+			AccountKey:             proto.Account(poolKeyPub),
+			HostKey:                hk,
+			ContractID:             types.FileContractID{1, 2, 3},
+			AmountSC:               types.Siacoins(100),
+			EstimatedUploadBytes:   1 << 20,
+			EstimatedDownloadBytes: 1 << 20,
+			FundType:               accounts.FundingTypePool,
+			PoolID:                 &poolID,
+		},
+		{
+			AccountKey:             proto.Account(types.GeneratePrivateKey().PublicKey()),
+			HostKey:                hk,
+			ContractID:             types.FileContractID{4, 5, 6},
+			AmountSC:               types.Siacoins(50),
+			EstimatedUploadBytes:   1 << 20,
+			EstimatedDownloadBytes: 1 << 20,
+			FundType:               accounts.FundingTypeAccount,
+		},
+	}
+
+	if err := store.RecordFundingEvents(events); err != nil {
+		t.Fatalf("failed to record funding events: %v", err)
+	}
+
+	got, err := store.FundingEvents(accounts.FundingCursor{}, 10)
+	if err != nil {
+		t.Fatalf("failed to get funding events: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(got))
+	}
+
+	// Find the pool event and verify QuotaName was resolved.
+	var poolEvent *accounts.FundingEvent
+	var accountEvent *accounts.FundingEvent
+	for i := range got {
+		if got[i].FundType == accounts.FundingTypePool {
+			poolEvent = &got[i]
+		} else {
+			accountEvent = &got[i]
+		}
+	}
+	if poolEvent == nil {
+		t.Fatal("expected a pool funding event")
+	}
+	if accountEvent == nil {
+		t.Fatal("expected an account funding event")
+	}
+
+	if poolEvent.QuotaName == nil {
+		t.Fatal("expected non-nil QuotaName for pool event")
+	}
+	if *poolEvent.QuotaName != testQuota {
+		t.Fatalf("expected QuotaName %q, got %q", testQuota, *poolEvent.QuotaName)
+	}
+
+	// Account events should have nil QuotaName (no pool join).
+	if accountEvent.QuotaName != nil {
+		t.Fatalf("expected nil QuotaName for account event, got %q", *accountEvent.QuotaName)
+	}
+}
+
 func TestFundingEventsCursorPagination(t *testing.T) {
 	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
 

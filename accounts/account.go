@@ -138,8 +138,9 @@ type (
 		AmountSC               types.Currency       `json:"amountSc"`
 		EstimatedUploadBytes   uint64               `json:"estimatedUploadBytes"`
 		EstimatedDownloadBytes uint64               `json:"estimatedDownloadBytes"`
-		FundType               string               `json:"fundType"`         // accounts.FundingTypeAccount or accounts.FundingTypePool
-		PoolID                 *int                 `json:"poolID,omitempty"` // non-nil when FundType is "pool"
+		FundType               string               `json:"fundType"`            // accounts.FundingTypeAccount or accounts.FundingTypePool
+		PoolID                 *int                 `json:"poolID,omitempty"`    // non-nil when FundType is "pool"
+		QuotaName              *string              `json:"quotaName,omitempty"` // resolved from pool_id → pools → app_connect_keys; non-nil for pool events
 		CreatedAt              time.Time            `json:"createdAt"`
 	}
 
