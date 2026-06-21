@@ -177,7 +177,7 @@ func (f *accountFunderMock) FundAccounts(ctx context.Context, host hosts.Host, c
 	return len(accs), 0, nil, nil
 }
 
-func (f *accountFunderMock) FundPools(_ context.Context, host hosts.Host, contractIDs []types.FileContractID, pools []accounts.HostPool, target types.Currency, _ *zap.Logger) (funded int, drained int, err error) {
+func (f *accountFunderMock) FundPools(_ context.Context, host hosts.Host, contractIDs []types.FileContractID, pools []accounts.HostPool, target types.Currency, _ *zap.Logger) (funded int, drained int, _ []contracts.FundedDeposit, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	poolsCopy := make([]accounts.HostPool, len(pools))
@@ -188,7 +188,7 @@ func (f *accountFunderMock) FundPools(_ context.Context, host hosts.Host, contra
 		pools:       poolsCopy,
 		target:      target,
 	})
-	return len(pools), 0, nil
+	return len(pools), 0, nil, nil
 }
 
 func TestPerformAccountFunding(t *testing.T) {

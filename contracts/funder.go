@@ -155,13 +155,13 @@ func (f *Funder) AttachPools(ctx context.Context, hostKey types.PublicKey, input
 
 // FundPools tops up the provided pools to the target balance using the
 // specified contracts in order.
-func (f *Funder) FundPools(ctx context.Context, host hosts.Host, contractIDs []types.FileContractID, pools []accounts.HostPool, target types.Currency, log *zap.Logger) (funded int, drained int, _ error) {
+func (f *Funder) FundPools(ctx context.Context, host hosts.Host, contractIDs []types.FileContractID, pools []accounts.HostPool, target types.Currency, log *zap.Logger) (funded int, drained int, deposits []FundedDeposit, _ error) {
 	if len(pools) > proto.MaxAccountBatchSize {
-		return 0, 0, errors.New("too many pools")
+		return 0, 0, nil, errors.New("too many pools")
 	} else if len(contractIDs) == 0 {
-		return 0, 0, errors.New("no contract provided")
+		return 0, 0, nil, errors.New("no contract provided")
 	} else if len(pools) == 0 {
-		return 0, 0, nil
+		return 0, 0, nil, nil
 	}
 
 	poolKeys := make([]proto.Account, len(pools))
@@ -198,6 +198,12 @@ func (f *Funder) FundPools(ctx context.Context, host hosts.Host, contractIDs []t
 					return rhp.ContractRevision{}, proto.Usage{}, err
 				}
 				funded = maxEnd
+				for _, d := range res.Deposits {
+					deposits = append(deposits, FundedDeposit{
+						ContractID: contractID,
+						Deposit:    d,
+					})
+				}
 				return rhp.ContractRevision{
 					ID:       contractID,
 					Revision: res.Revision,
@@ -224,11 +230,11 @@ func (f *Funder) FundPools(ctx context.Context, host hosts.Host, contractIDs []t
 			return funded == len(poolKeys), nil
 		}()
 		if err != nil {
-			return 0, 0, err
+			return 0, 0, nil, err
 		} else if done {
 			break
 		}
 	}
 
-	return funded, drained, nil
+	return funded, drained, deposits, nil
 }

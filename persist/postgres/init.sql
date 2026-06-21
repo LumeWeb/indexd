@@ -479,8 +479,12 @@ CREATE TABLE funding_events (
     amount_sc NUMERIC(50,0) NOT NULL CHECK (amount_sc >= 0),
     estimated_upload_bytes BIGINT NOT NULL DEFAULT 0 CHECK (estimated_upload_bytes >= 0),
     estimated_download_bytes BIGINT NOT NULL DEFAULT 0 CHECK (estimated_download_bytes >= 0),
+    fund_type TEXT NOT NULL DEFAULT 'account' CHECK (fund_type IN ('account', 'pool')),
+    pool_id INTEGER REFERENCES pools(id) ON DELETE SET NULL,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 CREATE INDEX funding_events_account_key_host_key_idx ON funding_events(account_key, host_key);
 CREATE INDEX funding_events_host_key_created_at_idx ON funding_events(host_key, created_at DESC);
 CREATE INDEX funding_events_created_at_id_idx ON funding_events(created_at ASC, id ASC);
+CREATE INDEX funding_events_fund_type_idx ON funding_events(fund_type);
+CREATE INDEX funding_events_pool_id_idx ON funding_events(pool_id) WHERE pool_id IS NOT NULL;
