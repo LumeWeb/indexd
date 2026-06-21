@@ -334,10 +334,12 @@ func (s *Store) FundingEvents(cursor accounts.FundingCursor, limit int) (events 
 	}
 	err = s.transaction(func(ctx context.Context, tx *txn) error {
 		rows, err := tx.Query(ctx, `
-			SELECT id, account_key, host_key, contract_id, amount_sc, estimated_upload_bytes, estimated_download_bytes, fund_type, pool_id, created_at
-			FROM funding_events
-			WHERE (created_at > $1 OR (created_at = $1 AND id > $2))
-			ORDER BY created_at ASC, id ASC
+			SELECT fe.id, fe.account_key, fe.host_key, fe.contract_id, fe.amount_sc, fe.estimated_upload_bytes, fe.estimated_download_bytes, fe.fund_type, fe.pool_id, ack.quota_name, fe.created_at
+			FROM funding_events fe
+			LEFT JOIN pools p ON fe.pool_id = p.id
+			LEFT JOIN app_connect_keys ack ON p.connect_key_id = ack.id
+			WHERE (fe.created_at > $1 OR (fe.created_at = $1 AND fe.id > $2))
+			ORDER BY fe.created_at ASC, fe.id ASC
 			LIMIT $3`, cursor.After, cursor.ID, limit)
 		if err != nil {
 			return err
@@ -346,7 +348,7 @@ func (s *Store) FundingEvents(cursor accounts.FundingCursor, limit int) (events 
 		for rows.Next() {
 			var ev accounts.FundingEvent
 			var accountKey, hostKey, contractID []byte
-			if err := rows.Scan(&ev.ID, &accountKey, &hostKey, &contractID, (*sqlCurrency)(&ev.AmountSC), &ev.EstimatedUploadBytes, &ev.EstimatedDownloadBytes, &ev.FundType, &ev.PoolID, &ev.CreatedAt); err != nil {
+			if err := rows.Scan(&ev.ID, &accountKey, &hostKey, &contractID, (*sqlCurrency)(&ev.AmountSC), &ev.EstimatedUploadBytes, &ev.EstimatedDownloadBytes, &ev.FundType, &ev.PoolID, &ev.QuotaName, &ev.CreatedAt); err != nil {
 				return err
 			}
 			copy(ev.AccountKey[:], accountKey)
