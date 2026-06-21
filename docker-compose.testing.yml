@@ -1,0 +1,32 @@
+# Docker Compose file for manual testing with PostgreSQL.
+#
+# Usage:
+#   docker compose -f docker-compose.testing.yml up -d
+#   POSTGRES_USER=indexd POSTGRES_PASSWORD=test POSTGRES_DB=indexd go test ./...
+#   docker compose -f docker-compose.testing.yml down -v
+#
+# This starts a PostgreSQL instance on 127.0.0.1:5432 that the test suite
+# connects to. Each test creates and drops its own database automatically.
+
+services:
+  postgres:
+    image: postgres:latest
+    restart: unless-stopped
+    shm_size: 128mb
+    environment:
+      POSTGRES_USER: indexd
+      POSTGRES_PASSWORD: test
+      POSTGRES_DB: indexd
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_test:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  postgres_test:

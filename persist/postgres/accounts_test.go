@@ -1404,6 +1404,7 @@ func TestRecordFundingEvents(t *testing.T) {
 			AmountSC:               amount,
 			EstimatedUploadBytes:   1 << 20,
 			EstimatedDownloadBytes: 1 << 20,
+			FundType:               accounts.FundingTypeAccount,
 		},
 		{
 			AccountKey:             ak,
@@ -1412,6 +1413,7 @@ func TestRecordFundingEvents(t *testing.T) {
 			AmountSC:               amount.Mul64(2),
 			EstimatedUploadBytes:   2 << 20,
 			EstimatedDownloadBytes: 2 << 20,
+			FundType:               accounts.FundingTypeAccount,
 		},
 	}
 
@@ -1470,6 +1472,7 @@ func TestFundingEventsCursorPagination(t *testing.T) {
 			AmountSC:               types.Siacoins(uint32(i+1) * 100),
 			EstimatedUploadBytes:   uint64(i+1) * 1 << 20,
 			EstimatedDownloadBytes: uint64(i+1) * 1 << 20,
+			FundType:               accounts.FundingTypeAccount,
 		}
 	}
 	if err := store.RecordFundingEvents(events); err != nil {

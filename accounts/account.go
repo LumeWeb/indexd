@@ -28,6 +28,14 @@ var (
 	ErrAccountStorageLimitExceeded = errors.New("app storage limit exceeded")
 )
 
+// Funding type constants for funding_events.fund_type column.
+const (
+	// FundingTypeAccount is the fund type for individual account funding.
+	FundingTypeAccount = "account"
+	// FundingTypePool is the fund type for pool funding.
+	FundingTypePool = "pool"
+)
+
 type (
 	// AddAccountOptions holds optional parameters for account creation.
 	AddAccountOptions struct {
@@ -90,6 +98,7 @@ type (
 
 	// HostPool represents a balance pool on a host.
 	HostPool struct {
+		ID                     int
 		HostKey                types.PublicKey
 		PoolKey                types.PrivateKey
 		ConsecutiveFailedFunds int
@@ -122,14 +131,16 @@ type (
 
 	// FundingEvent represents a single funding event for an account on a host.
 	FundingEvent struct {
-		ID                     int64
-		AccountKey             proto.Account
-		HostKey                types.PublicKey
-		ContractID             types.FileContractID
-		AmountSC               types.Currency
-		EstimatedUploadBytes   uint64
-		EstimatedDownloadBytes uint64
-		CreatedAt              time.Time
+		ID                     int64                `json:"id"`
+		AccountKey             proto.Account        `json:"accountKey"`
+		HostKey                types.PublicKey      `json:"hostKey"`
+		ContractID             types.FileContractID `json:"contractID"`
+		AmountSC               types.Currency       `json:"amountSc"`
+		EstimatedUploadBytes   uint64               `json:"estimatedUploadBytes"`
+		EstimatedDownloadBytes uint64               `json:"estimatedDownloadBytes"`
+		FundType               string               `json:"fundType"`         // accounts.FundingTypeAccount or accounts.FundingTypePool
+		PoolID                 *int                 `json:"poolID,omitempty"` // non-nil when FundType is "pool"
+		CreatedAt              time.Time            `json:"createdAt"`
 	}
 
 	// FundingCursor is used to paginate through funding events.

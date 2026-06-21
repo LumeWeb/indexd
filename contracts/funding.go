@@ -328,10 +328,12 @@ OUTER:
 					continue
 				}
 
-				funded, drained, err := cm.accountFunder.FundPools(ctx, host, contractIDs, batch.pools, batch.target, log)
+				funded, drained, deposits, err := cm.accountFunder.FundPools(ctx, host, contractIDs, batch.pools, batch.target, log)
 				if err != nil {
 					return fmt.Errorf("failed to fund pools: %w", err)
 				}
+
+				recordPoolFundingEvents(cm.accounts, host, deposits, batch.pools, log)
 
 				accounts.UpdateFundedPools(batch.pools, funded, cm.maxAccountFundingBackoff)
 				if err := cm.accounts.UpdateHostPools(batch.pools); err != nil {
@@ -369,6 +371,43 @@ func estimatedBytes(amount types.Currency, costPerSector types.Currency) uint64 
 }
 
 func recordFundingEvents(am AccountManager, host hosts.Host, deposits []FundedDeposit, log *zap.Logger) {
+	recordFundingEventsTyped(am, host, deposits, accounts.FundingTypeAccount, nil, log)
+}
+
+// recordPoolFundingEvents records funding events for pool deposits. It maps
+// each deposit's account key back to the pool DB ID to set the pool_id column.
+func recordPoolFundingEvents(am AccountManager, host hosts.Host, deposits []FundedDeposit, pools []accounts.HostPool, log *zap.Logger) {
+	if len(deposits) == 0 {
+		return
+	}
+	// build a map from pool public key to pool DB ID
+	poolIDs := make(map[proto.Account]int, len(pools))
+	for _, p := range pools {
+		poolIDs[proto.Account(p.PoolKey.PublicKey())] = p.ID
+	}
+
+	writeCostPerSector := host.Settings.Prices.RPCWriteSectorCost(proto.SectorSize).RenterCost()
+	readCostPerSector := host.Settings.Prices.RPCReadSectorCost(proto.SectorSize).RenterCost()
+	events := make([]accounts.FundingEvent, 0, len(deposits))
+	for _, d := range deposits {
+		poolID := poolIDs[d.Deposit.Account]
+		events = append(events, accounts.FundingEvent{
+			AccountKey:             d.Deposit.Account,
+			HostKey:                host.PublicKey,
+			ContractID:             d.ContractID,
+			AmountSC:               d.Deposit.Amount,
+			EstimatedUploadBytes:   estimatedBytes(d.Deposit.Amount, writeCostPerSector),
+			EstimatedDownloadBytes: estimatedBytes(d.Deposit.Amount, readCostPerSector),
+			FundType:               accounts.FundingTypePool,
+			PoolID:                 &poolID,
+		})
+	}
+	if err := am.RecordFundingEvents(events); err != nil {
+		log.Warn("failed to record funding events", zap.Error(err))
+	}
+}
+
+func recordFundingEventsTyped(am AccountManager, host hosts.Host, deposits []FundedDeposit, fundType string, poolID *int, log *zap.Logger) {
 	if len(deposits) == 0 {
 		return
 	}
@@ -383,6 +422,8 @@ func recordFundingEvents(am AccountManager, host hosts.Host, deposits []FundedDe
 			AmountSC:               d.Deposit.Amount,
 			EstimatedUploadBytes:   estimatedBytes(d.Deposit.Amount, writeCostPerSector),
 			EstimatedDownloadBytes: estimatedBytes(d.Deposit.Amount, readCostPerSector),
+			FundType:               fundType,
+			PoolID:                 poolID,
 		})
 	}
 	if err := am.RecordFundingEvents(events); err != nil {

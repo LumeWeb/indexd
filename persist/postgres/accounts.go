@@ -306,10 +306,10 @@ func (s *Store) RecordFundingEvents(events []accounts.FundingEvent) error {
 	}
 	return s.transaction(func(ctx context.Context, tx *txn) error {
 		vals := make([]string, 0, len(events))
-		args := make([]any, 0, len(events)*6)
+		args := make([]any, 0, len(events)*8)
 		for i, ev := range events {
-			ii := i * 6
-			vals = append(vals, fmt.Sprintf(`($%d::bytea, $%d::bytea, $%d::bytea, $%d::numeric, $%d::bigint, $%d::bigint)`, ii+1, ii+2, ii+3, ii+4, ii+5, ii+6))
+			ii := i * 8
+			vals = append(vals, fmt.Sprintf(`($%d::bytea, $%d::bytea, $%d::bytea, $%d::numeric, $%d::bigint, $%d::bigint, $%d::text, $%d::integer)`, ii+1, ii+2, ii+3, ii+4, ii+5, ii+6, ii+7, ii+8))
 			args = append(args,
 				[]byte(ev.AccountKey[:]),
 				sqlPublicKey(ev.HostKey),
@@ -317,9 +317,11 @@ func (s *Store) RecordFundingEvents(events []accounts.FundingEvent) error {
 				sqlCurrency(ev.AmountSC),
 				ev.EstimatedUploadBytes,
 				ev.EstimatedDownloadBytes,
+				ev.FundType,
+				ev.PoolID,
 			)
 		}
-		query := fmt.Sprintf(`INSERT INTO funding_events (account_key, host_key, contract_id, amount_sc, estimated_upload_bytes, estimated_download_bytes) VALUES %s`, strings.Join(vals, ", "))
+		query := fmt.Sprintf(`INSERT INTO funding_events (account_key, host_key, contract_id, amount_sc, estimated_upload_bytes, estimated_download_bytes, fund_type, pool_id) VALUES %s`, strings.Join(vals, ", "))
 		_, err := tx.Exec(ctx, query, args...)
 		return err
 	})
@@ -332,7 +334,7 @@ func (s *Store) FundingEvents(cursor accounts.FundingCursor, limit int) (events 
 	}
 	err = s.transaction(func(ctx context.Context, tx *txn) error {
 		rows, err := tx.Query(ctx, `
-			SELECT id, account_key, host_key, contract_id, amount_sc, estimated_upload_bytes, estimated_download_bytes, created_at
+			SELECT id, account_key, host_key, contract_id, amount_sc, estimated_upload_bytes, estimated_download_bytes, fund_type, pool_id, created_at
 			FROM funding_events
 			WHERE (created_at > $1 OR (created_at = $1 AND id > $2))
 			ORDER BY created_at ASC, id ASC
@@ -344,7 +346,7 @@ func (s *Store) FundingEvents(cursor accounts.FundingCursor, limit int) (events 
 		for rows.Next() {
 			var ev accounts.FundingEvent
 			var accountKey, hostKey, contractID []byte
-			if err := rows.Scan(&ev.ID, &accountKey, &hostKey, &contractID, (*sqlCurrency)(&ev.AmountSC), &ev.EstimatedUploadBytes, &ev.EstimatedDownloadBytes, &ev.CreatedAt); err != nil {
+			if err := rows.Scan(&ev.ID, &accountKey, &hostKey, &contractID, (*sqlCurrency)(&ev.AmountSC), &ev.EstimatedUploadBytes, &ev.EstimatedDownloadBytes, &ev.FundType, &ev.PoolID, &ev.CreatedAt); err != nil {
 				return err
 			}
 			copy(ev.AccountKey[:], accountKey)

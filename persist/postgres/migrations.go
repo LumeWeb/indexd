@@ -191,4 +191,13 @@ CREATE INDEX pool_attachments_account_id_host_id_idx ON pool_attachments (accoun
 		}
 		return nil
 	},
+	func(ctx context.Context, tx *txn, log *zap.Logger) error {
+		_, err := tx.Exec(ctx, `
+ALTER TABLE funding_events ADD COLUMN IF NOT EXISTS fund_type TEXT NOT NULL DEFAULT 'account' CHECK (fund_type IN ('account', 'pool'));
+ALTER TABLE funding_events ADD COLUMN IF NOT EXISTS pool_id INTEGER NULL REFERENCES pools(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS funding_events_fund_type_idx ON funding_events(fund_type);
+CREATE INDEX IF NOT EXISTS funding_events_pool_id_idx ON funding_events(pool_id) WHERE pool_id IS NOT NULL;
+`)
+		return err
+	},
 }

@@ -53,8 +53,8 @@ func (f *mockFunder) AttachPools(_ context.Context, _ types.PublicKey, _ []rhp.P
 	return nil
 }
 
-func (f *mockFunder) FundPools(_ context.Context, _ hosts.Host, _ []types.FileContractID, pools []accounts.HostPool, _ types.Currency, _ *zap.Logger) (funded int, drained int, _ error) {
-	return len(pools), 0, nil
+func (f *mockFunder) FundPools(_ context.Context, _ hosts.Host, _ []types.FileContractID, pools []accounts.HostPool, _ types.Currency, _ *zap.Logger) (funded int, drained int, _ []contracts.FundedDeposit, _ error) {
+	return len(pools), 0, nil, nil
 }
 
 // TestFundingLegacy verifies that FundAccounts funds user accounts directly

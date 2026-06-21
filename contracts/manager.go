@@ -49,7 +49,7 @@ type (
 	AccountFunder interface {
 		AttachPools(ctx context.Context, hostKey types.PublicKey, inputs []rhp.PoolAttachInput, validity time.Duration) error
 		FundAccounts(ctx context.Context, host hosts.Host, contractIDs []types.FileContractID, accounts []accounts.HostAccount, target types.Currency, log *zap.Logger) (int, int, []FundedDeposit, error)
-		FundPools(ctx context.Context, host hosts.Host, contractIDs []types.FileContractID, pools []accounts.HostPool, target types.Currency, log *zap.Logger) (int, int, error)
+		FundPools(ctx context.Context, host hosts.Host, contractIDs []types.FileContractID, pools []accounts.HostPool, target types.Currency, log *zap.Logger) (int, int, []FundedDeposit, error)
 	}
 
 	// AccountManager defines an interface that allows fetching and updating
