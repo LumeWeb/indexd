@@ -71,17 +71,36 @@ type (
 	// manager.
 	ContractManager interface {
 		TriggerAccountRefill(ctx context.Context, hostKey types.PublicKey, account proto.Account) error
-		ContractsForAppend() ([]contracts.Contract, error)
+		HealthyContracts() ([]contracts.Contract, error)
 	}
 
 	// A HostClient defines the minimal interface for interacting with hosts that
 	// the SlabManager requires.
 	HostClient interface {
+		AddFailedRPC(hostKey types.PublicKey)
 		Prices(context.Context, types.PublicKey) (proto.HostPrices, error)
 		WriteSector(ctx context.Context, accountKey types.PrivateKey, hostKey types.PublicKey, data []byte) (rhp.RPCWriteSectorResult, error)
 		ReadSector(ctx context.Context, accountKey types.PrivateKey, hostKey types.PublicKey, root types.Hash256, w io.Writer, offset, length uint64) (rhp.RPCReadSectorResult, error)
 
 		Prioritize([]types.PublicKey) []types.PublicKey
+		// PickWrite atomically selects the best write candidate and
+		// reserves an inflight slot. The release function MUST be called
+		// when the RPC completes; the picked host is removed from
+		// candidates and the shortened slice is returned as remaining.
+		PickWrite(candidates []types.PublicKey) (host types.PublicKey, release func(), remaining []types.PublicKey, ok bool)
+		// PickReads atomically sorts candidates and reserves inflight
+		// read slots on the top n hosts under a single lock hold;
+		// callers MUST call all returned releases. The sorted-by-score
+		// tail is returned as remaining so callers can re-pick from
+		// it (e.g. with n=1) and see fresh inflight state. When fewer
+		// than n usable hosts are available, picked is nil and the
+		// partial sorted list is returned as remaining.
+		PickReads(candidates []types.PublicKey, n int) (picked []types.PublicKey, releases []func(), remaining []types.PublicKey)
+		// TrackInflightRead increments the host's inflight read counter
+		// and returns a function that decrements it. Callers should hold
+		// it for the duration of the RPC so concurrent prioritize calls
+		// reflect current load.
+		TrackInflightRead(hostKey types.PublicKey) func()
 	}
 
 	// HostManager defines the minimal interface of HostManager functionality
@@ -101,6 +120,7 @@ type (
 		MarkSectorsLost(hostKey types.PublicKey, roots []types.Hash256) error
 		MarkSlabRepaired(slabID SlabID, success bool) error
 		MigrateSector(root types.Hash256, hostKey types.PublicKey) (bool, error)
+		RecordSlabMigrated(slabID SlabID) error
 		PinSlabs(account proto.Account, nextIntegrityCheck time.Time, toPin ...SlabPinParams) ([]SlabID, error)
 		UnpinSlab(proto.Account, SlabID) error
 		RecordIntegrityCheck(success bool, nextCheck time.Time, hostKey types.PublicKey, roots []types.Hash256) error
@@ -109,8 +129,8 @@ type (
 		Slab(slabID SlabID) (slab Slab, err error)
 		Slabs(account proto.Account, slabIDs []SlabID) ([]Slab, error)
 		SlabIDs(account proto.Account, offset, limit int) ([]SlabID, error)
-		UnhealthySlabs(limit int) ([]SlabID, error)
-		PruneSlabs(account proto.Account) error
+		UnhealthySlabs(cursor int64, limit int) ([]SlabID, int64, error)
+		PruneSlabs(account proto.Account, cutoff time.Time) error
 
 		// Object methods
 		Object(account proto.Account, key types.Hash256) (SealedObject, error)
@@ -382,57 +402,76 @@ func (m *SlabManager) performSlabMigrations(ctx context.Context) error {
 	log := m.log.Named("migrations")
 	log.Debug("starting slab migrations")
 
-	// start a worker pool that pulls slabs from a channel
-	type slab struct {
-		id            SlabID
-		allHosts      []hosts.Host
-		goodContracts []contracts.Contract
+	// to make sure the workers don't finish their work before we have another
+	// batch ready, we fetch a multiple of the number of workers each time.
+	slabBatchSize := 10 * m.numMigrationGoroutines
+
+	type migrationJob struct {
+		id    SlabID
+		state migrationState
 	}
-	slabCh := make(chan slab, m.numMigrationGoroutines)
+	slabCh := make(chan migrationJob, slabBatchSize)
 	var wg sync.WaitGroup
 	for range m.numMigrationGoroutines {
 		wg.Go(func() {
-			for slab := range slabCh {
-				m.migrateSlab(ctx, slab.id, slab.allHosts, slab.goodContracts, log.With(zap.Stringer("slab", slab.id)))
+			for job := range slabCh {
+				m.migrateSlab(ctx, job.id, job.state, log.With(zap.Stringer("slab", job.id)))
 			}
 		})
 	}
 
-	// fetch unhealthy slabs and feed them to the workers
-	for {
-		batch, err := m.store.UnhealthySlabs(m.numMigrationGoroutines)
-		if err != nil {
-			close(slabCh)
-			wg.Wait()
-			return err
-		}
-
-		// update the candidates for every batch
-		allHosts, goodContracts, err := m.migrationCandidates()
-		if err != nil {
-			close(slabCh)
-			wg.Wait()
-			return err
-		}
-
-		for _, id := range batch {
-			select {
-			case slabCh <- slab{id: id, allHosts: allHosts, goodContracts: goodContracts}:
-			case <-ctx.Done():
-				close(slabCh)
-				wg.Wait()
-				return nil
+	// fetch unhealthy slabs and feed them to the workers in a separate
+	// goroutine so the slow UnhealthySlabs / fetchMigrationState calls
+	// happen in parallel with worker processing rather than blocking it.
+	producerErrCh := make(chan error, 1)
+	go func() {
+		defer close(slabCh)
+		var cursor int64
+		for {
+			log.Debug("processing batch")
+			fetchStart := time.Now()
+			batch, nextCursor, err := m.store.UnhealthySlabs(cursor, slabBatchSize)
+			if err != nil {
+				producerErrCh <- err
+				return
 			}
-		}
-		if len(batch) < m.numMigrationGoroutines {
-			break
-		}
-	}
+			log.Debug("fetched batch of unhealthy slabs", zap.Int("batchSize", len(batch)), zap.Int64("cursor", cursor), zap.Int64("nextCursor", nextCursor), zap.Duration("elapsed", time.Since(fetchStart)))
 
-	close(slabCh)
+			// update the state for every batch
+			stateStart := time.Now()
+			state, err := m.fetchMigrationState()
+			if err != nil {
+				producerErrCh <- err
+				return
+			}
+			log.Debug("fetched migration state", zap.Duration("elapsed", time.Since(stateStart)))
+
+			for _, id := range batch {
+				select {
+				case slabCh <- migrationJob{id: id, state: state}:
+				case <-ctx.Done():
+					log.Debug("migration interrupted by context cancellation")
+					return
+				}
+			}
+
+			// if the next cursor is 0 it means we're through all unhealthy slabs
+			if nextCursor == 0 {
+				log.Debug("no more unhealthy slabs to migrate")
+				return
+			}
+			cursor = nextCursor
+		}
+	}()
+
 	wg.Wait()
 	log.Debug("finished slab migrations", zap.Duration("elapsed", time.Since(start)))
-	return nil
+	select {
+	case err := <-producerErrCh:
+		return err
+	default:
+		return nil
+	}
 }
 
 func (m *SlabManager) registerLostSectorsAlert() {

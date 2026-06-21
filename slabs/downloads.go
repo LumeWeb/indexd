@@ -12,7 +12,6 @@ import (
 
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
-	"go.sia.tech/indexd/client/v2"
 	"go.sia.tech/mux/v3"
 	"go.uber.org/zap"
 )
@@ -27,12 +26,7 @@ type slabDownload struct {
 // downloadShards downloads at least the minimum number of shards required to
 // recover the slab.
 func (m *SlabManager) downloadShards(ctx context.Context, slab Slab, log *zap.Logger) ([][]byte, error) {
-	initialCtx, initialCancel := context.WithCancel(ctx)
-	overdriveCtx, overdriveCancel := context.WithCancelCause(ctx)
-	cancel := func() {
-		initialCancel()
-		overdriveCancel(client.ErrAbortedRPC)
-	}
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	shards := make([][]byte, len(slab.Sectors))
@@ -52,19 +46,12 @@ func (m *SlabManager) downloadShards(ctx context.Context, slab Slab, log *zap.Lo
 			index: i,
 		}
 	}
-	candidates = m.hosts.Prioritize(candidates)
-
-	var wg sync.WaitGroup
-	sema := make(chan struct{}, slab.MinShards)
-
 	// helper to download a shard from a host
+	sema := make(chan struct{}, slab.MinShards)
 	downloadShard := func(ctx context.Context, hostKey types.PublicKey, sector slabDownload, log *zap.Logger) error {
 		defer func() {
 			<-sema
 		}()
-		ctx, timeoutCancel := context.WithTimeout(ctx, m.shardTimeout)
-		defer timeoutCancel()
-
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -103,41 +90,56 @@ func (m *SlabManager) downloadShards(ctx context.Context, slab Slab, log *zap.Lo
 		return nil
 	}
 
-	if len(candidates) < int(slab.MinShards) {
-		return nil, fmt.Errorf("only %d available sectors, minimum required: %d: %w", len(candidates), slab.MinShards, errNotEnoughShards)
-	}
-
-	// start initial shards
+	var wg sync.WaitGroup
 	failedCh := make(chan struct{}, slab.MinShards)
-initialLoop:
-	for _, hostKey := range candidates[:int(slab.MinShards)] {
-		select {
-		case <-ctx.Done():
-			break initialLoop
-		case sema <- struct{}{}:
-		}
-
-		sector := slabHosts[hostKey]
+	spawnDownload := func(hostKey types.PublicKey, sector slabDownload, release func(), initial bool) {
 		log := log.With(zap.Stringer("hostKey", hostKey), zap.Stringer("sectorRoot", sector.root))
 		wg.Go(func() {
-			if err := downloadShard(initialCtx, hostKey, slabHosts[hostKey], log); err != nil {
+			defer release()
+			timeoutCtx, timeoutCancel := context.WithTimeout(ctx, m.shardTimeout)
+			defer timeoutCancel()
+			if err := downloadShard(timeoutCtx, hostKey, slabHosts[hostKey], log); err != nil {
 				log.Debug("shard download failed", zap.Error(err))
 				// non-blocking send to indicate a failure
 				select {
 				case failedCh <- struct{}{}:
 				default:
 				}
+				// a host gets demoted if either
+				// 1. it hit the shard timeout
+				// 2. it was part of the initial batch of hosts and was interrupted
+				if (timeoutCtx.Err() != nil && ctx.Err() == nil) || (initial && ctx.Err() != nil) {
+					log.Debug("demoting host for failed download", zap.Error(err))
+					m.hosts.AddFailedRPC(hostKey)
+				}
 			}
 		})
+	}
+
+	initialHosts, releases, remaining := m.hosts.PickReads(candidates, int(slab.MinShards))
+	if len(initialHosts) == 0 {
+		return nil, fmt.Errorf("only %d available sectors, minimum required: %d: %w", len(remaining), slab.MinShards, errNotEnoughShards)
+	}
+
+initialLoop:
+	for i, hostKey := range initialHosts {
+		select {
+		case <-ctx.Done():
+			for _, r := range releases[i:] {
+				r()
+			}
+			break initialLoop
+		case sema <- struct{}{}:
+		}
+		spawnDownload(hostKey, slabHosts[hostKey], releases[i], true)
 	}
 
 	t := time.NewTicker(m.shardTimeout / 4)
 	defer t.Stop()
 raceLoop:
-	for i := int(slab.MinShards); downloaded.Load() < uint32(slab.MinShards) && i < len(candidates); i++ {
-		hostKey := candidates[i]
+	for downloaded.Load() < uint32(slab.MinShards) && len(remaining) > 0 {
 		select {
-		case <-initialCtx.Done():
+		case <-ctx.Done():
 			break raceLoop
 		case <-failedCh:
 			// a download has failed
@@ -146,22 +148,19 @@ raceLoop:
 			log.Debug("racing slow shards", zap.Uint32("downloaded", downloaded.Load()), zap.Uint32("required", uint32(slab.MinShards)))
 		}
 
-		// wait for an available slot
 		select {
 		case sema <- struct{}{}:
-			sector := slabHosts[hostKey]
-			log := log.With(zap.Stringer("hostKey", hostKey), zap.Stringer("sectorRoot", sector.root))
-			wg.Go(func() {
-				if err := downloadShard(overdriveCtx, hostKey, slabHosts[hostKey], log); err != nil {
-					log.Debug("shard download failed", zap.Error(err))
-					// non-blocking send to indicate a failure
-					select {
-					case failedCh <- struct{}{}:
-					default:
-					}
-				}
-			})
-		case <-initialCtx.Done():
+			// re-pick the best remaining candidate atomically so we see
+			// fresh inflight state from other concurrent downloads.
+			picked, pickReleases, rem := m.hosts.PickReads(remaining, 1)
+			if len(picked) == 0 {
+				break raceLoop
+			}
+			remaining = rem
+			hostKey, release := picked[0], pickReleases[0]
+
+			spawnDownload(hostKey, slabHosts[hostKey], release, false)
+		case <-ctx.Done():
 			break raceLoop
 		}
 	}

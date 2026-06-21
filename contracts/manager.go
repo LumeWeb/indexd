@@ -45,9 +45,11 @@ var (
 )
 
 type (
-	// AccountFunder defines an interface to fund accounts.
+	// AccountFunder defines an interface to fund accounts and pools.
 	AccountFunder interface {
+		AttachPools(ctx context.Context, hostKey types.PublicKey, inputs []rhp.PoolAttachInput, validity time.Duration) error
 		FundAccounts(ctx context.Context, host hosts.Host, contractIDs []types.FileContractID, accounts []accounts.HostAccount, target types.Currency, log *zap.Logger) (int, int, []FundedDeposit, error)
+		FundPools(ctx context.Context, host hosts.Host, contractIDs []types.FileContractID, pools []accounts.HostPool, target types.Currency, log *zap.Logger) (int, int, error)
 	}
 
 	// AccountManager defines an interface that allows fetching and updating
@@ -55,10 +57,16 @@ type (
 	AccountManager interface {
 		AccountsForFunding(hk types.PublicKey, quotaName string, threshold time.Time, limit int) ([]accounts.HostAccount, error)
 		AccountFundingInfo(threshold time.Time) ([]accounts.QuotaFundInfo, error)
+		PendingPoolAttachments(hk types.PublicKey, limit int) ([]accounts.PendingAttachment, error)
+		SharingPoolAttachments(hk types.PublicKey, limit int) ([]accounts.PendingAttachment, error)
+		MarkSharingPoolsAttached(hk types.PublicKey, attachments []accounts.PendingAttachment) error
+		PoolFundingInfo(threshold time.Time) ([]accounts.QuotaFundInfo, error)
+		PoolsForFunding(hk types.PublicKey, quotaName string, threshold time.Time, limit int) ([]accounts.HostPool, error)
 		Quotas(ctx context.Context, offset, limit int) ([]accounts.Quota, error)
-		ScheduleAccountsForFunding(hostKey types.PublicKey) error
 		ServiceAccounts(hk types.PublicKey) []accounts.HostAccount
 		UpdateHostAccounts(accounts []accounts.HostAccount) error
+		UpdateHostPools(pools []accounts.HostPool) error
+		InsertPoolAttachments(hk types.PublicKey, attachments []accounts.PendingAttachment) error
 		UpdateServiceAccounts(accounts []accounts.HostAccount, balance types.Currency) error
 		RecordFundingEvents(events []accounts.FundingEvent) error
 	}
@@ -210,7 +218,7 @@ type (
 		rev       *RevisionManager
 		renterKey types.PublicKey
 
-		triggerFundingChan chan bool
+		triggerFundingChan chan struct{}
 
 		log *zap.Logger
 		tg  *threadgroup.ThreadGroup
@@ -365,10 +373,10 @@ func (cm *ContractManager) blockBadHosts(ctx context.Context) error {
 	return nil
 }
 
-// TriggerAccountFunding triggers the account funding process. This trigger is
-// used when a new account is added and ensures users don't have to wait for the
-// next maintenance loop before their account is funded.
-func (cm *ContractManager) TriggerAccountFunding(force bool) error {
+// TriggerAccountFunding triggers the funding process when a new account is added.
+// By doing so we ensures users don't have to wait for the next maintenance loop
+// before their account is usable.
+func (cm *ContractManager) TriggerAccountFunding() error {
 	ctx, cancel, err := cm.tg.AddContext(context.Background())
 	if err != nil {
 		return err
@@ -379,7 +387,7 @@ func (cm *ContractManager) TriggerAccountFunding(force bool) error {
 
 		select {
 		case <-ctx.Done():
-		case cm.triggerFundingChan <- force:
+		case cm.triggerFundingChan <- struct{}{}:
 		}
 	}()
 	return nil
@@ -400,45 +408,21 @@ func (cm *ContractManager) MaintenanceSettings(ctx context.Context) (Maintenance
 	return cm.store.MaintenanceSettings()
 }
 
-// ContractsForAppend returns all contracts that are good for appending data.
-// These contracts are revisable, not in their renew window, good and have not
-// reached their maximum size.
-func (cm *ContractManager) ContractsForAppend() (good []Contract, err error) {
-	settings, err := cm.store.MaintenanceSettings()
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch maintenance settings: %w", err)
-	}
-
-	hostsMap := make(map[types.PublicKey]proto.HostSettings)
-
+// HealthyContracts returns all contracts that are revisable and good regardless
+// of renew window or size limits.
+func (cm *ContractManager) HealthyContracts() ([]Contract, error) {
+	var good []Contract
 	const batchSize = 50
 	for offset := 0; ; offset += batchSize {
 		batch, err := cm.store.Contracts(offset, batchSize, WithRevisable(true), WithGood(true))
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch contracts: %w", err)
-		} else if len(batch) == 0 {
-			break
 		}
-
-		height := cm.chain.TipState().Index.Height
-
-		for _, c := range batch {
-			hostSettings, ok := hostsMap[c.HostKey]
-			if !ok {
-				host, err := cm.hosts.Host(context.Background(), c.HostKey)
-				if err != nil {
-					return nil, fmt.Errorf("failed to fetch host %s: %w", c.HostKey.String(), err)
-				}
-				hostSettings = host.Settings
-				hostsMap[c.HostKey] = hostSettings
-			}
-
-			if c.GoodForAppend(hostSettings, settings.RenewWindow, height, settings.Period) == nil {
-				good = append(good, c)
-			}
+		good = append(good, batch...)
+		if len(batch) < batchSize {
+			return good, nil
 		}
 	}
-	return
 }
 
 // TriggerAccountRefill triggers a refill for the given account by marking it
@@ -447,7 +431,7 @@ func (cm *ContractManager) TriggerAccountRefill(ctx context.Context, hostKey typ
 	if err := cm.store.ScheduleAccountForFunding(hostKey, account); err != nil {
 		return fmt.Errorf("failed to schedule account for funding: %w", err)
 	}
-	return cm.TriggerAccountFunding(true)
+	return cm.TriggerAccountFunding()
 }
 
 // UpdateMaintenanceSettings updates the maintenance settings.
@@ -486,7 +470,7 @@ func newContractManager(renterKey types.PublicKey, accounts AccountManager, acco
 
 		renterKey: renterKey,
 
-		triggerFundingChan: make(chan bool, 1),
+		triggerFundingChan: make(chan struct{}, 1),
 
 		log: zap.NewNop(),
 		tg:  threadgroup.New(),

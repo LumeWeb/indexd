@@ -54,8 +54,17 @@ func (s *Store) AddAppConnectKey(meta accounts.AppConnectKeyRequest) (key accoun
 				return accounts.ErrQuotaNotFound
 			case pgerrcode.UniqueViolation:
 				return accounts.ErrKeyAlreadyExists
+			default:
+				return err
 			}
+		} else if err != nil {
+			return err
 		}
+
+		// create a pool for the new connect key, all accounts under a connect
+		// key share a single pool for host funding on pool capable hosts
+		poolKey := types.GeneratePrivateKey()
+		_, err = tx.Exec(ctx, `INSERT INTO pools (connect_key_id, pool_key) VALUES ((SELECT id FROM app_connect_keys WHERE app_key = $1), $2)`, meta.Key, []byte(poolKey))
 		return err
 	})
 	return
@@ -193,6 +202,21 @@ func (s *Store) AppConnectKeyUserSecret(connectKey string) (secret types.Hash256
 	if errors.Is(err, sql.ErrNoRows) {
 		return types.Hash256{}, accounts.ErrKeyNotFound
 	}
+	return
+}
+
+// HasAppAccount reports whether an account already exists for the given
+// connect key and app ID.
+func (s *Store) HasAppAccount(connectKey string, appID types.Hash256) (exists bool, err error) {
+	err = s.transaction(func(ctx context.Context, tx *txn) error {
+		return tx.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM accounts a
+				INNER JOIN app_connect_keys ack ON ack.id = a.connect_key_id
+				WHERE ack.app_key = $1 AND a.app_id = $2 AND a.deleted_at IS NULL
+			)
+		`, connectKey, sqlHash256(appID)).Scan(&exists)
+	})
 	return
 }
 

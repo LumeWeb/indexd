@@ -775,23 +775,25 @@ func TestContractsAPI(t *testing.T) {
 	c.MineBlocks(t, types.Address{}, renewHeight-ci.Height)
 	time.Sleep(time.Second)
 
-	// assert contract was renewed - we don't pass the option here to asserts
-	// the contracts API returns only revisable contracts by default
-	contracts, err := adminClient.Contracts(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	} else if len(contracts) < 1 {
-		t.Fatal("expected at least 1 contract, got", len(contracts))
-	}
+	// the original is now in its renew window; maintenance should leave the host
+	// with a newer contract - either the renewed original, or a retained zero-size
+	// contract kept in its place (we keep only one zero-size contract per host).
 	var renewed bool
-	for _, c := range contracts {
-		if c.RenewedFrom == contract.ID {
-			renewed = true
+	for range 100 {
+		active, err := adminClient.Contracts(context.Background(), admin.WithGood(true), admin.WithRevisable(true))
+		if err != nil {
+			t.Fatal(err)
+		}
+		renewed = slices.ContainsFunc(active, func(c contracts.Contract) bool {
+			return c.ProofHeight > contract.ProofHeight
+		})
+		if renewed {
 			break
 		}
+		time.Sleep(100 * time.Millisecond)
 	}
 	if !renewed {
-		t.Fatal("expected contract to be renewed")
+		t.Fatal("expected the host to have a contract newer than the original")
 	}
 
 	// assert usage is being tracked
@@ -806,7 +808,7 @@ func TestContractsAPI(t *testing.T) {
 	}
 
 	// test deletion
-	contracts, err = adminClient.Contracts(context.Background(), admin.WithRevisable(false))
+	contracts, err := adminClient.Contracts(context.Background(), admin.WithRevisable(false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1517,8 +1519,8 @@ func TestPruneSlabs(t *testing.T) {
 		t.Fatalf("expected 2 slabs, got %d", len(slabIDs))
 	}
 
-	// prune slabs via admin API
-	if err := adminClient.PruneSlabs(context.Background(), account); err != nil {
+	// prune slabs via admin API (use a future cutoff to cover the just-pinned slabs)
+	if err := adminClient.PruneSlabs(context.Background(), account, api.WithBefore(time.Now().Add(time.Hour))); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1530,6 +1532,56 @@ func TestPruneSlabs(t *testing.T) {
 		t.Fatalf("expected 1 slab after prune, got %d", len(slabIDs))
 	} else if slabIDs[0] != slab1.Digest() {
 		t.Fatal("expected slab1 to remain")
+	}
+
+	// now verify the cutoff: pin two more orphaned slabs, backdate one to look
+	// like it was pinned an hour ago, then prune with a cutoff of 30 min ago.
+	// Only the backdated slab should be pruned.
+	slabOld := slabs.SlabPinParams{
+		EncryptionKey: frand.Entropy256(),
+		MinShards:     1,
+		Sectors: []slabs.PinnedSector{{
+			Root:    frand.Entropy256(),
+			HostKey: hk,
+		}},
+	}
+	slabNew := slabs.SlabPinParams{
+		EncryptionKey: frand.Entropy256(),
+		MinShards:     1,
+		Sectors: []slabs.PinnedSector{{
+			Root:    frand.Entropy256(),
+			HostKey: hk,
+		}},
+	}
+	if _, err := store.PinSlabs(acc, time.Time{}, slabOld, slabNew); err != nil {
+		t.Fatal(err)
+	}
+
+	// backdate slabOld's pinned_at directly in the db (postgres NOW() isn't
+	// controlled by the Go test clock, so we can't actually sleep for an hour)
+	oldDigest := slabOld.Digest()
+	if _, err := store.Exec(t.Context(), `UPDATE slabs SET pinned_at = NOW() - INTERVAL '1 hour' WHERE digest = $1`, oldDigest[:]); err != nil {
+		t.Fatal(err)
+	}
+
+	// prune with cutoff = 30 min ago: slabOld is eligible, slabNew is not
+	if err := adminClient.PruneSlabs(t.Context(), account, api.WithBefore(time.Now().Add(-30*time.Minute))); err != nil {
+		t.Fatal(err)
+	}
+
+	slabIDs, err = store.SlabIDs(acc, 0, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(slabIDs) != 2 {
+		t.Fatalf("expected 2 slabs after cutoff prune, got %d", len(slabIDs))
+	}
+	remaining := map[slabs.SlabID]bool{slabIDs[0]: true, slabIDs[1]: true}
+	if !remaining[slab1.Digest()] {
+		t.Fatal("expected slab1 to remain")
+	} else if !remaining[slabNew.Digest()] {
+		t.Fatal("expected slabNew to remain (pinned after cutoff)")
+	} else if remaining[slabOld.Digest()] {
+		t.Fatal("expected slabOld to be pruned (pinned before cutoff)")
 	}
 }
 
@@ -1694,8 +1746,8 @@ func TestPruneAccounts(t *testing.T) {
 		t.Fatalf("expected 2 slabs for acc1, got %d", len(slabIDs))
 	}
 
-	// prune all accounts
-	if err := adminClient.PruneAccounts(t.Context()); err != nil {
+	// prune all accounts (use a future cutoff to cover the just-pinned slabs)
+	if err := adminClient.PruneAccounts(t.Context(), api.WithBefore(time.Now().Add(time.Hour))); err != nil {
 		t.Fatal(err)
 	}
 

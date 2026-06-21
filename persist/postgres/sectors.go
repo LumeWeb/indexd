@@ -13,6 +13,7 @@ import (
 	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/contracts"
 	"go.sia.tech/indexd/slabs"
+	"go.uber.org/zap"
 )
 
 const (
@@ -79,44 +80,56 @@ func (s *Store) MarkSectorsLost(hostKey types.PublicKey, roots []types.Hash256) 
 	return err
 }
 
+const integrityCheckChunkSize = 100
+
 // RecordIntegrityCheck records the result of integrity checks for the given
 // sectors stored on the given host.
 func (s *Store) RecordIntegrityCheck(success bool, nextCheck time.Time, hostKey types.PublicKey, roots []types.Hash256) error {
-	return s.transaction(func(ctx context.Context, tx *txn) error {
-		sqlRoots := make([]sqlHash256, len(roots))
-		for i, root := range roots {
-			sqlRoots[i] = sqlHash256(root)
+	for start := 0; start < len(roots); start += integrityCheckChunkSize {
+		end := min(start+integrityCheckChunkSize, len(roots))
+		if err := s.transaction(func(ctx context.Context, tx *txn) error {
+			return recordIntegrityCheck(ctx, tx, success, nextCheck, hostKey, roots[start:end])
+		}); err != nil {
+			return fmt.Errorf("chunk [%d:%d] of %d: %w", start, end, len(roots), err)
 		}
-		var err error
-		if success {
-			_, err = tx.Exec(ctx, `
-				UPDATE sectors
-				SET next_integrity_check = $1, consecutive_failed_checks = 0
-				WHERE host_id = (SELECT id FROM hosts WHERE public_key = $2) AND
-					sector_root = ANY($3)
-			`, nextCheck, sqlPublicKey(hostKey), sqlRoots)
-		} else {
-			_, err = tx.Exec(ctx, `
-				UPDATE sectors
-				SET next_integrity_check = $1, consecutive_failed_checks = consecutive_failed_checks + 1
-				WHERE host_id = (SELECT id FROM hosts WHERE public_key = $2) AND
-					sector_root = ANY($3)
-			`, nextCheck, sqlPublicKey(hostKey), sqlRoots)
-		}
-		if err != nil {
-			return fmt.Errorf("failed to record integrity check: %w", err)
-		}
+	}
+	return nil
+}
 
-		if err := incrementNumSectorsChecked(ctx, tx, uint64(len(roots))); err != nil {
-			return fmt.Errorf("failed to increment sectors checked stat: %w", err)
+func recordIntegrityCheck(ctx context.Context, tx *txn, success bool, nextCheck time.Time, hostKey types.PublicKey, roots []types.Hash256) error {
+	sqlRoots := make([]sqlHash256, len(roots))
+	for i, root := range roots {
+		sqlRoots[i] = sqlHash256(root)
+	}
+	var err error
+	if success {
+		_, err = tx.Exec(ctx, `
+			UPDATE sectors
+			SET next_integrity_check = $1, consecutive_failed_checks = 0
+			WHERE host_id = (SELECT id FROM hosts WHERE public_key = $2) AND
+				sector_root = ANY($3)
+		`, nextCheck, sqlPublicKey(hostKey), sqlRoots)
+	} else {
+		_, err = tx.Exec(ctx, `
+			UPDATE sectors
+			SET next_integrity_check = $1, consecutive_failed_checks = consecutive_failed_checks + 1
+			WHERE host_id = (SELECT id FROM hosts WHERE public_key = $2) AND
+				sector_root = ANY($3)
+		`, nextCheck, sqlPublicKey(hostKey), sqlRoots)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to record integrity check: %w", err)
+	}
+
+	if err := incrementNumSectorsChecked(ctx, tx, uint64(len(roots))); err != nil {
+		return fmt.Errorf("failed to increment sectors checked stat: %w", err)
+	}
+	if !success {
+		if err := incrementNumSectorsFailed(ctx, tx, uint64(len(roots))); err != nil {
+			return fmt.Errorf("failed to increment sectors failed stat: %w", err)
 		}
-		if !success {
-			if err := incrementNumSectorsFailed(ctx, tx, uint64(len(roots))); err != nil {
-				return fmt.Errorf("failed to increment sectors failed stat: %w", err)
-			}
-		}
-		return nil
-	})
+	}
+	return nil
 }
 
 // SectorsForIntegrityCheck returns up to `limit` sectors that are due for an
@@ -261,7 +274,7 @@ func (s *Store) PinSlabs(account proto.Account, nextIntegrityCheck time.Time, to
 			}
 
 			digest := slab.Digest()
-			digests = append(digests, slab.Digest())
+			digests = append(digests, digest)
 
 			// insert slab
 			var slabID int64
@@ -292,17 +305,15 @@ func (s *Store) PinSlabs(account proto.Account, nextIntegrityCheck time.Time, to
 				newPinnedSize += slab.Size()
 			}
 
-			// if the slab already existed, we don't need to insert the sectors
-			if existingSlab {
-				continue
+			if !existingSlab {
+				if err := incrementNumSlabs(ctx, tx, 1); err != nil {
+					return fmt.Errorf("failed to increment number of slabs: %w", err)
+				}
 			}
 
-			// update slab stats
-			if err := incrementNumSlabs(ctx, tx, 1); err != nil {
-				return fmt.Errorf("failed to increment number of slabs: %w", err)
-			}
-
-			// insert slab's sectors in a single batch
+			// insert the slab's sectors. For a slab that already
+			// exists this may rebind any sectors that were marked
+			// lost since it was pinned.
 			batch := &pgx.Batch{}
 			for _, sector := range slab.Sectors {
 				batch.Queue(`
@@ -310,15 +321,17 @@ func (s *Store) PinSlabs(account proto.Account, nextIntegrityCheck time.Time, to
 				SELECT $1, h.id, $3
 				FROM hosts h
 				WHERE h.public_key = $2
-				ON CONFLICT (sector_root) DO UPDATE SET uploaded_at=NOW()
-				RETURNING id, host_id, (xmax = 0) AS inserted`,
+				ON CONFLICT (sector_root) DO UPDATE SET
+					uploaded_at = NOW(),
+					host_id = COALESCE(sectors.host_id, EXCLUDED.host_id)
+				RETURNING id, host_id, (OLD.id IS NULL) AS inserted, (OLD.id IS NOT NULL AND OLD.host_id IS NULL) AS rebound`,
 					sqlHash256(sector.Root),
 					sqlPublicKey(sector.HostKey),
 					nextIntegrityCheck)
 			}
 
 			var badHosts int
-			var unpinned int64
+			var unpinned, rebound int64
 			var unpinnedDeltas []unpinnedDelta
 			br := tx.SendBatch(ctx, batch)
 			sectorIDs := make([]int64, len(slab.Sectors))
@@ -327,17 +340,21 @@ func (s *Store) PinSlabs(account proto.Account, nextIntegrityCheck time.Time, to
 					badHosts++
 				}
 
-				var inserted bool
+				var inserted, isRebound bool
 				var hostID int64
-				if err := br.QueryRow().Scan(&sectorIDs[i], &hostID, &inserted); err != nil {
+				if err := br.QueryRow().Scan(&sectorIDs[i], &hostID, &inserted, &isRebound); err != nil {
 					br.Close()
 					if errors.Is(err, sql.ErrNoRows) {
 						return fmt.Errorf("unknown host %q for sector", sector.HostKey)
 					}
 					return fmt.Errorf("failed to insert sector %q: %w", sector.Root, err)
-				} else if inserted {
+				}
+				if inserted || isRebound {
 					unpinned++
 					unpinnedDeltas = append(unpinnedDeltas, unpinnedDelta{hostID: hostID, delta: 1})
+				}
+				if isRebound {
+					rebound++
 				}
 			}
 			br.Close()
@@ -354,6 +371,13 @@ func (s *Store) PinSlabs(account proto.Account, nextIntegrityCheck time.Time, to
 					return fmt.Errorf("failed to increment number of unpinned sectors: %w", err)
 				} else if err := incrementHostsUnpinnedSectors(ctx, tx, unpinnedDeltas); err != nil {
 					return fmt.Errorf("failed to update hosts unpinned sectors: %w", err)
+				}
+			}
+
+			// a hostless sector is counted as unpinnable; rebinding clears that.
+			if rebound > 0 {
+				if err := incrementNumUnpinnableSectors(ctx, tx, -rebound); err != nil {
+					return fmt.Errorf("failed to decrement number of unpinnable sectors: %w", err)
 				}
 			}
 
@@ -670,10 +694,9 @@ ORDER BY ss.slab_index ASC`, slabID).Query(func(rows pgx.Rows) error {
 	return results, err
 }
 
-// PinSectors pins a batch of sector roots to a given contract. This also
-// updates the host the sector is associated with to the host that we have the
-// contract with. That way, we can avoid a race where the host changes in the
-// meantime and the contract then no longer matches the host.
+// PinSectors pins a batch of sector roots to a given contract. Only sectors
+// that are currently on the contract's host or have no host set are updated.
+// Sectors that were migrated to a different host in the meantime are skipped.
 func (s *Store) PinSectors(contractID types.FileContractID, roots []types.Hash256) error {
 	if len(roots) == 0 {
 		return nil
@@ -701,8 +724,8 @@ func (s *Store) PinSectors(contractID types.FileContractID, roots []types.Hash25
 		rows, err := tx.Query(ctx, `
 			SELECT id, host_id, contract_sectors_map_id
 			FROM sectors
-			WHERE sector_root = ANY($1) AND (contract_sectors_map_id IS NULL OR contract_sectors_map_id != $2)
-			FOR UPDATE`, sqlRoots, contractMapID)
+			WHERE sector_root = ANY($1) AND (host_id IS NULL OR host_id = $2) AND (contract_sectors_map_id IS NULL OR contract_sectors_map_id != $3)
+			FOR UPDATE`, sqlRoots, hostID, contractMapID)
 		if err != nil {
 			return fmt.Errorf("failed to query sectors: %w", err)
 		}
@@ -847,7 +870,8 @@ func (s *Store) UnpinnedSectors(hostKey types.PublicKey, limit int) ([]types.Has
 }
 
 // UnhealthySlabs returns the IDs of slabs which have at least one sector that
-// needs to be migrated and have not been abandoned.
+// needs to be migrated. It walks the sectors table by id starting after cursor
+// and returns the next cursor to resume from, or 0 once the end is reached.
 //
 // The condition for such a sector is that it's either not stored on a host or
 // it's not pinned to a good contract.
@@ -858,31 +882,42 @@ func (s *Store) UnpinnedSectors(hostKey types.PublicKey, limit int) ([]types.Has
 // migration was attempted.
 //
 // NOTE: For the sake of scalability, we don't prioritize slabs based on their
-// health but simply return the slabs that have been waiting the longest for a
-// repair first.
-func (s *Store) UnhealthySlabs(limit int) (unhealthy []slabs.SlabID, err error) {
+// health but walk the sectors table by id, which roughly follows upload order.
+func (s *Store) UnhealthySlabs(cursor int64, limit int) (unhealthy []slabs.SlabID, nextCursor int64, err error) {
+	start := time.Now()
 	err = s.transaction(func(ctx context.Context, tx *txn) error {
 		unhealthy = unhealthy[:0] // reuse same slice if transaction retries
+		nextCursor = 0            // reset on retry
 
-		const query = `SELECT s.id, s.digest
-			FROM slabs s
-			WHERE s.next_repair_attempt < NOW()
-				AND EXISTS (
-					SELECT 1
-					FROM slab_sectors ss
-					JOIN sectors sec ON sec.id = ss.sector_id
-					LEFT JOIN contract_sectors_map csm ON csm.id = sec.contract_sectors_map_id
-					LEFT JOIN contracts c ON c.contract_id = csm.contract_id
-					WHERE ss.slab_id = s.id
-						AND (
-						sec.host_id IS NULL
-						OR (sec.contract_sectors_map_id IS NOT NULL
-							AND (c.good = FALSE OR c.state NOT IN (0, 1)))
-						)
-				)
-			ORDER BY s.next_repair_attempt ASC
-			LIMIT $1;`
-		rows, err := tx.Query(ctx, query, limit)
+		const query = `WITH lost AS (
+				SELECT id FROM sectors
+				WHERE host_id IS NULL AND id > $1
+				ORDER BY id LIMIT $2
+			), bad AS (
+				SELECT sec.id
+				FROM contract_sectors_map csm
+				JOIN contracts c ON c.contract_id = csm.contract_id
+				CROSS JOIN LATERAL (
+					SELECT id FROM sectors
+					WHERE contract_sectors_map_id = csm.id AND id > $1
+					ORDER BY id LIMIT $2
+				) sec
+				WHERE c.good = FALSE OR c.state NOT IN (0, 1)
+			), batch AS (
+				SELECT id FROM (SELECT id FROM lost UNION ALL SELECT id FROM bad) u
+				ORDER BY id LIMIT $2
+			), unhealthy AS (
+				SELECT DISTINCT s.id, s.digest
+				FROM slab_sectors ss
+				JOIN slabs s ON s.id = ss.slab_id
+				WHERE ss.sector_id IN (SELECT id FROM batch)
+					AND s.next_repair_attempt < NOW()
+			)
+			SELECT cur.next_cursor, u.id, u.digest
+			FROM (SELECT max(id) AS next_cursor FROM batch) cur
+			LEFT JOIN unhealthy u ON true;`
+
+		rows, err := tx.Query(ctx, query, cursor, limit)
 		if err != nil {
 			return fmt.Errorf("failed to query unhealthy slabs: %w", err)
 		}
@@ -890,19 +925,22 @@ func (s *Store) UnhealthySlabs(limit int) (unhealthy []slabs.SlabID, err error) 
 
 		var slabIDs []int64
 		for rows.Next() {
-			var id int64
-			var slabID slabs.SlabID
-			if err := rows.Scan(&id, (*sqlHash256)(&slabID)); err != nil {
+			var nc, slabID sql.NullInt64
+			var digest sql.Null[sqlHash256]
+			if err := rows.Scan(&nc, &slabID, &digest); err != nil {
 				return fmt.Errorf("failed to scan unhealthy slab: %w", err)
 			}
-			unhealthy = append(unhealthy, slabID)
-			slabIDs = append(slabIDs, id)
+			nextCursor = nc.Int64
+			if slabID.Valid {
+				unhealthy = append(unhealthy, slabs.SlabID(digest.V))
+				slabIDs = append(slabIDs, slabID.Int64)
+			}
 		}
 		rows.Close()
 		if err := rows.Err(); err != nil {
 			return fmt.Errorf("failed to get unhealthy slabs: %w", err)
 		} else if len(slabIDs) == 0 {
-			return nil // no unhealthy slabs
+			return nil
 		}
 
 		// update next repair attempt time
@@ -913,25 +951,51 @@ func (s *Store) UnhealthySlabs(limit int) (unhealthy []slabs.SlabID, err error) 
 
 		return nil
 	})
+	if err == nil {
+		s.log.Debug("unhealthy slabs", zap.Int64("cursor", cursor), zap.Int64("nextCursor", nextCursor), zap.Int("slabs", len(unhealthy)), zap.Duration("elapsed", time.Since(start)))
+	}
 	return
+}
+
+// RecordSlabMigrated updates the database to reflect that a slab was migrated.
+// This should be called after a slab was migrated and one or more of its
+// sectors were updated.
+func (s *Store) RecordSlabMigrated(slabID slabs.SlabID) error {
+	return s.transaction(func(ctx context.Context, tx *txn) error {
+		_, err := tx.Exec(ctx, `
+			UPDATE object_events
+			SET updated_at = date_trunc('second', NOW())
+			WHERE object_key IN (
+				SELECT DISTINCT o.object_key
+				FROM object_slabs os
+				INNER JOIN objects o ON os.object_id = o.id
+				WHERE os.slab_digest = $1
+			)
+		`, sqlHash256(slabID))
+		if err != nil {
+			return fmt.Errorf("failed to update affected object events: %w", err)
+		}
+		return nil
+	})
 }
 
 // MigrateSector updates a sector that was just migrated in the database to be
 // linked to the new host identified by 'hostKey'. This will reset the contract
 // ID since a freshly migrated sector isn't pinned yet. To pin a sector
 // 'PinSectors' is used. If the host is not found, e.g. due to being deleted in
-// the meantime, this operation is a no-op.
+// the meantime, this operation is a no-op. The caller is responsible for
+// invoking RecordSlabMigrated once per slab after the batch completes to bump
+// the corresponding object_events rows.
 func (s *Store) MigrateSector(root types.Hash256, hostKey types.PublicKey) (migrated bool, err error) {
 	err = s.transaction(func(ctx context.Context, tx *txn) error {
 		var oldHostID sql.NullInt64
 		var contractMapID sql.NullInt64
-		var sectorID int64
 		err := tx.QueryRow(ctx, `
-			SELECT id, host_id, contract_sectors_map_id
+			SELECT host_id, contract_sectors_map_id
 			FROM sectors
 			WHERE sector_root = $1
 			FOR UPDATE
-		`, sqlHash256(root)).Scan(&sectorID, &oldHostID, &contractMapID)
+		`, sqlHash256(root)).Scan(&oldHostID, &contractMapID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil // not migrated
 		} else if err != nil {
@@ -950,23 +1014,6 @@ func (s *Store) MigrateSector(root types.Hash256, hostKey types.PublicKey) (migr
 			return nil
 		} else if err != nil {
 			return err
-		}
-
-		// update affected objects
-		_, err = tx.Exec(ctx, `
-			UPDATE object_events
-			SET updated_at = date_trunc('second', NOW())
-			WHERE (account_id, object_key) IN (
-				SELECT DISTINCT o.account_id, o.object_key
-				FROM slab_sectors
-				INNER JOIN slabs ON slab_sectors.slab_id = slabs.id
-				INNER JOIN object_slabs ON object_slabs.slab_digest = slabs.digest
-				INNER JOIN objects o ON object_slabs.object_id = o.id
-				WHERE slab_sectors.sector_id = $1
-			)
-		`, sectorID)
-		if err != nil {
-			return fmt.Errorf("failed to update affected object events: %w", err)
 		}
 
 		migrated = true

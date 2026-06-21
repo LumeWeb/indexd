@@ -36,7 +36,7 @@ type (
 	// Slabs defines the slab interface for the application API.
 	Slabs interface {
 		PinSlabs(ctx context.Context, account proto.Account, nextIntegrityCheck time.Time, toPin ...slabs.SlabPinParams) ([]slabs.SlabID, error)
-		PruneSlabs(ctx context.Context, account proto.Account) error
+		PruneSlabs(ctx context.Context, account proto.Account, cutoff time.Time) error
 		PinnedSlab(ctx context.Context, account proto.Account, slabID slabs.SlabID) (slabs.PinnedSlab, error)
 		SlabIDs(ctx context.Context, account proto.Account, offset, limit int) ([]slabs.SlabID, error)
 		UnpinSlab(ctx context.Context, account proto.Account, slabID slabs.SlabID) error
@@ -58,6 +58,7 @@ type (
 		ValidAppConnectKey(context.Context, string) error
 		RegisterAppKey(string, types.PublicKey, accounts.AppMeta) error
 		AppSecret(connectKey string, appID types.Hash256) (types.Hash256, error)
+		HasAppAccount(connectKey string, appID types.Hash256) (bool, error)
 
 		HasAccount(context.Context, types.PublicKey) (bool, error)
 		Account(context.Context, types.PublicKey) (accounts.Account, error)
@@ -65,7 +66,7 @@ type (
 
 	// Contracts defines the contract management interface for the application API.
 	Contracts interface {
-		TriggerAccountFunding(force bool) error
+		TriggerAccountFunding() error
 	}
 
 	// A RateLimiter allows or denies a request for the given key.
@@ -80,9 +81,10 @@ type (
 		Expiration   time.Time
 
 		// set when the user approves the request
-		Approved   bool
-		UserSecret types.Hash256
-		ConnectKey string // ties the request to the app connect key used
+		Approved     bool
+		Reconnecting bool
+		UserSecret   types.Hash256
+		ConnectKey   string // ties the request to the app connect key used
 	}
 
 	// A RegisterAppRequest is the request body for registering a new application.
@@ -98,8 +100,11 @@ type (
 	// AuthConnectStatusResponse is the response body for checking the status of an
 	// application connection request.
 	AuthConnectStatusResponse struct {
-		Approved   bool          `json:"approved"`
-		UserSecret types.Hash256 `json:"userSecret,omitempty"`
+		Approved bool `json:"approved"`
+		// Reconnecting is true if the user has previously connected the app.
+		// It is only set if the user approved the request.
+		Reconnecting bool          `json:"reconnecting"`
+		UserSecret   types.Hash256 `json:"userSecret,omitempty"`
 	}
 
 	// RegisterAppResponse is the response body for registering a new application.
@@ -380,7 +385,13 @@ func (a *app) handlePOSTSlabs(jc jape.Context, pk types.PublicKey) {
 }
 
 func (a *app) handlePOSTSlabsPrune(jc jape.Context, pk types.PublicKey) {
-	err := a.slabs.PruneSlabs(jc.Request.Context(), proto.Account(pk))
+	cutoff := time.Now().Add(-time.Hour)
+	if jc.Request.FormValue("before") != "" {
+		if jc.DecodeForm("before", &cutoff) != nil {
+			return
+		}
+	}
+	err := a.slabs.PruneSlabs(jc.Request.Context(), proto.Account(pk), cutoff)
 	if jc.Check("failed to prune slabs", err) != nil {
 		return
 	}
@@ -595,9 +606,17 @@ func (a *app) handlePOSTAuthConnect(jc jape.Context) {
 		return
 	}
 
+	// check whether the user has previously connected the app
+	reconnecting, err := a.accounts.HasAppAccount(connectKey, authReq.Request.AppID)
+	if err != nil {
+		jc.Error(fmt.Errorf("failed to check for existing app account: %w", err), http.StatusInternalServerError)
+		return
+	}
+
 	// update the auth request with the shared secret and approval status
 	authReq.UserSecret = sharedSecret
 	authReq.Approved = approveReq.Approve
+	authReq.Reconnecting = reconnecting
 	authReq.ConnectKey = connectKey
 	a.authRequests[requestID] = authReq
 	jc.Encode(nil)
@@ -622,8 +641,9 @@ func (a *app) handleGETAuthConnectStatus(jc jape.Context) {
 		return
 	}
 	jc.Encode(AuthConnectStatusResponse{
-		Approved:   authReq.Approved,
-		UserSecret: authReq.UserSecret,
+		Approved:     authReq.Approved,
+		Reconnecting: authReq.Reconnecting,
+		UserSecret:   authReq.UserSecret,
 	})
 }
 
@@ -688,7 +708,7 @@ func (a *app) handleAuthRegister(jc jape.Context) {
 		a.log.Debug("failed to use app connect key", zap.Error(err))
 		jc.Error(ErrInternalError, http.StatusInternalServerError)
 	default:
-		if err := a.contracts.TriggerAccountFunding(false); err != nil {
+		if err := a.contracts.TriggerAccountFunding(); err != nil {
 			// error is ignored since the account is already connected
 			a.log.Debug("failed to trigger account funding", zap.Error(err))
 		}
