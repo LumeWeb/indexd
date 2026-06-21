@@ -31,6 +31,26 @@ type Client struct {
 	validity time.Duration
 }
 
+// HTTPError is returned by the client when the server responds with a non-2xx
+// status code. Callers can use errors.As to inspect StatusCode and decide
+// whether to retry.
+type HTTPError struct {
+	StatusCode int
+	Body       string
+}
+
+// Error implements the error interface.
+func (e *HTTPError) Error() string {
+	msg := e.Body
+	if msg == "" {
+		msg = http.StatusText(e.StatusCode)
+	}
+	if msg == "" {
+		return fmt.Sprintf("HTTP %d", e.StatusCode)
+	}
+	return fmt.Sprintf("HTTP %d: %s", e.StatusCode, msg)
+}
+
 // sign signs the request with the appropriate headers and returns the signed URL
 // and request body.
 func sign(appKey types.PrivateKey, validUntil time.Time, method, endpointURL string, requestBuf []byte) (*url.URL, io.Reader, error) {
@@ -83,11 +103,13 @@ func doRequest(ctx context.Context, method string, u *url.URL, body io.Reader, a
 	}
 
 	if !(200 <= r.StatusCode && r.StatusCode < 300) {
-		defer io.Copy(io.Discard, r.Body)
 		defer r.Body.Close()
-		b, _ := io.ReadAll(r.Body)
-		return nil, errors.New(strings.TrimSpace(string(b)))
+		defer io.Copy(io.Discard, r.Body)
+		b, _ := io.ReadAll(io.LimitReader(r.Body, 1024))
+		return nil, &HTTPError{StatusCode: r.StatusCode, Body: strings.TrimSpace(string(b))}
 	} else if contentType := r.Header.Get("Content-Type"); r.StatusCode != http.StatusNoContent && accept != contentType {
+		defer r.Body.Close()
+		defer io.Copy(io.Discard, r.Body)
 		return nil, fmt.Errorf("expected content type %s, got %s", accept, contentType)
 	}
 
@@ -166,9 +188,17 @@ func (c *Client) Slab(ctx context.Context, appKey types.PrivateKey, slabID slabs
 }
 
 // PruneSlabs prunes all pinned slabs of a user not currently connected to an
-// object.
-func (c *Client) PruneSlabs(ctx context.Context, appKey types.PrivateKey) error {
-	return c.signedRequestJSON(ctx, appKey, http.MethodPost, "/slabs/prune", nil, nil)
+// object. Use api.WithBefore to override the default cutoff (1 hour ago).
+func (c *Client) PruneSlabs(ctx context.Context, appKey types.PrivateKey, opts ...api.URLQueryParameterOption) error {
+	values := url.Values{}
+	for _, opt := range opts {
+		opt(values)
+	}
+	path := "/slabs/prune"
+	if q := values.Encode(); q != "" {
+		path += "?" + q
+	}
+	return c.signedRequestJSON(ctx, appKey, http.MethodPost, path, nil, nil)
 }
 
 // SlabIDs fetches the digests of slabs associated with the account. It supports

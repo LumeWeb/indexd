@@ -112,6 +112,34 @@ CREATE TABLE account_hosts (
 CREATE INDEX account_hosts_host_id_next_fund_idx ON account_hosts (host_id, next_fund);
 CREATE INDEX account_hosts_account_id_consecutive_failed_funds_idx ON account_hosts (account_id, consecutive_failed_funds);
 
+CREATE TABLE pools (
+    id SERIAL PRIMARY KEY,
+    connect_key_id INTEGER UNIQUE NOT NULL REFERENCES app_connect_keys(id) ON DELETE CASCADE,
+    pool_key BYTEA UNIQUE NOT NULL CHECK (LENGTH(pool_key) = 64)
+);
+
+CREATE TABLE pool_hosts (
+    pool_id INTEGER NOT NULL REFERENCES pools(id) ON DELETE CASCADE,
+    host_id INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    next_fund TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    consecutive_failed_funds INTEGER NOT NULL DEFAULT 0,
+    sharing_attached BOOLEAN NOT NULL DEFAULT FALSE, -- whether the pool's derived sharing account has been attached on this host
+    CONSTRAINT pool_hosts_pk PRIMARY KEY (pool_id, host_id)
+);
+CREATE INDEX pool_hosts_host_id_next_fund_idx ON pool_hosts (host_id, next_fund);
+-- partial index for SharingPoolAttachments: only indexes pools whose sharing
+-- account still needs attaching
+CREATE INDEX pool_hosts_sharing_unattached_idx ON pool_hosts (host_id) WHERE sharing_attached = FALSE;
+
+CREATE TABLE pool_attachments (
+    pool_id INTEGER NOT NULL,
+    host_id INTEGER NOT NULL,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    CONSTRAINT pool_attachments_pk PRIMARY KEY (pool_id, host_id, account_id),
+    CONSTRAINT pool_attachments_pool_host_fk FOREIGN KEY (pool_id, host_id) REFERENCES pool_hosts(pool_id, host_id) ON DELETE CASCADE
+);
+CREATE INDEX pool_attachments_account_id_host_id_idx ON pool_attachments (account_id, host_id);
+
 CREATE TABLE hosts_blocklist (
     public_key BYTEA PRIMARY KEY CHECK (LENGTH(public_key) = 32),
     added TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
@@ -308,11 +336,7 @@ CREATE TABLE slabs (
     next_repair_attempt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 
 );
-CREATE INDEX slabs_digest_idx ON slabs(digest);
 CREATE INDEX slabs_pinned_at_idx ON slabs(pinned_at ASC);
-
--- speeds up lookup of unhealthy slabs
-CREATE INDEX slabs_id_next_repair_attempt_idx ON slabs(next_repair_attempt ASC);
 
 CREATE TABLE objects (
     id BIGSERIAL PRIMARY KEY,
@@ -356,6 +380,9 @@ CREATE TABLE object_events (
 
 -- fast sorting by update time and key
 CREATE INDEX object_events_updated_at_object_key_idx ON object_events(updated_at ASC, object_key ASC);
+
+-- probe by object_key alone since the PK leads with account_id
+CREATE INDEX object_events_object_key_idx ON object_events(object_key);
 
 CREATE TABLE account_slabs (
     account_id INTEGER REFERENCES accounts(id) NOT NULL, -- account that owns slab
@@ -412,10 +439,11 @@ CREATE INDEX sectors_contract_sectors_map_id_sector_root_idx ON sectors(contract
 
 -- foreign key constraint keys
 CREATE INDEX sectors_host_id_idx ON sectors(host_id);
--- CREATE INDEX sectors_contract_sectors_map_id_idx ON sectors(contract_sectors_map_id); -- covered by sectors_contract_sectors_map_id_uploaded_at_idx
+
+-- speeds up the bad contract scan in the unhealthy slabs query
+CREATE INDEX sectors_contract_sectors_map_id_id_idx ON sectors(contract_sectors_map_id, id);
 
 -- speed up integrity check query
-CREATE INDEX sectors_next_integrity_check_idx ON sectors(next_integrity_check ASC);
 CREATE INDEX sectors_host_id_next_integrity_check_idx ON sectors(host_id, next_integrity_check ASC);
 
 -- speed up hosts for pinning query
@@ -426,6 +454,9 @@ CREATE INDEX sectors_host_id_sector_root_idx ON sectors(host_id, sector_root);
 
 -- for pruning unpinned sectors
 CREATE INDEX sectors_uploaded_at_unpinned_idx ON sectors(uploaded_at) WHERE host_id IS NOT NULL AND contract_sectors_map_id IS NULL;
+
+-- speeds up finding sectors that lost their host for the unhealthy slabs query
+CREATE INDEX sectors_lost_idx ON sectors(id) WHERE host_id IS NULL;
 
 CREATE TABLE slab_sectors (
     slab_id BIGINT REFERENCES slabs(id) ON DELETE CASCADE,

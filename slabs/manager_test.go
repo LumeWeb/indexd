@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,8 +15,10 @@ import (
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/rhp/v4"
+	"go.sia.tech/indexd/alerts"
 	"go.sia.tech/indexd/contracts"
 	"go.sia.tech/indexd/hosts"
+	"go.sia.tech/indexd/slabs"
 	"go.sia.tech/indexd/testutils"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
@@ -336,7 +339,7 @@ func (m *mockContractManager) TriggerAccountRefill(ctx context.Context, hostKey 
 	return nil
 }
 
-func (m *mockContractManager) ContractsForAppend() ([]contracts.Contract, error) {
+func (m *mockContractManager) HealthyContracts() ([]contracts.Contract, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return slices.Clone(m.contracts), nil
@@ -391,6 +394,7 @@ type mockHostClient struct {
 	hostKeys        map[types.PublicKey]types.PrivateKey
 	hostSettings    map[types.PublicKey]proto.HostSettings
 	unusable        map[types.PublicKey]struct{}
+	failedRPCs      map[types.PublicKey]int
 }
 
 func (m *mockHostClient) resetStorage() {
@@ -407,6 +411,13 @@ func (m *mockHostClient) addTestHost(sk types.PrivateKey) hosts.Host {
 	m.hostSettings[sk.PublicKey()] = h.Settings
 	m.hostKeys[sk.PublicKey()] = sk
 	return h
+}
+
+// AddFailedRPC records demote calls for inspection by tests.
+func (m *mockHostClient) AddFailedRPC(hostKey types.PublicKey) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.failedRPCs[hostKey]++
 }
 
 // Prices is a mock implementation that returns the preset host settings.
@@ -518,6 +529,40 @@ func (m *mockHostClient) Prioritize(hosts []types.PublicKey) []types.PublicKey {
 	return filtered
 }
 
+// PickWrite pops the first candidate in input order.
+func (m *mockHostClient) PickWrite(candidates []types.PublicKey) (host types.PublicKey, release func(), remaining []types.PublicKey, ok bool) {
+	if len(candidates) == 0 {
+		return types.PublicKey{}, nil, candidates, false
+	}
+	return candidates[0], func() {}, candidates[1:], true
+}
+
+func (m *mockHostClient) TrackInflightRead(hostKey types.PublicKey) func() {
+	return func() {}
+}
+
+// PickReads filters unusable hosts and keeps the input order. Returns
+// picked=nil when fewer than n usable hosts remain.
+func (m *mockHostClient) PickReads(candidates []types.PublicKey, n int) (picked []types.PublicKey, releases []func(), remaining []types.PublicKey) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	sorted := make([]types.PublicKey, 0, len(candidates))
+	for _, hk := range candidates {
+		if _, bad := m.unusable[hk]; !bad {
+			sorted = append(sorted, hk)
+		}
+	}
+	if len(sorted) < n {
+		return nil, nil, sorted
+	}
+	releases = make([]func(), n)
+	for i := range n {
+		releases[i] = func() {}
+	}
+	return sorted[:n], releases, sorted[n:]
+}
+
 func (m *mockHostClient) setSlowHost(hostKey types.PublicKey, delay time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -525,6 +570,45 @@ func (m *mockHostClient) setSlowHost(hostKey types.PublicKey, delay time.Duratio
 		delete(m.slowHosts, hostKey)
 	} else {
 		m.slowHosts[hostKey] = delay
+	}
+}
+
+func TestSlabManagerPinSlabsValidation(t *testing.T) {
+	store := newMockStore(t)
+	sm := slabs.NewSlabManager(newMockChainManager(), newMockAccountManager(), nil, newMockHostManager(), store, newMockHostClient(), alerts.NewManager(), types.GeneratePrivateKey(), types.GeneratePrivateKey())
+
+	accountPK := types.GeneratePrivateKey().PublicKey()
+	store.AddTestAccount(t, accountPK)
+	account := proto.Account(accountPK)
+	nextCheck := time.Now().Add(time.Hour)
+
+	hostKeys := make([]types.PublicKey, 30)
+	for i := range hostKeys {
+		hostKeys[i] = types.GeneratePrivateKey().PublicKey()
+		store.AddTestHost(t, hosts.Host{PublicKey: hostKeys[i], Settings: goodSettings, Usability: hosts.GoodUsability})
+		store.addTestContract(t, hostKeys[i])
+	}
+	newSlab := func(key byte, hostFor func(i int) types.PublicKey) slabs.SlabPinParams {
+		sectors := make([]slabs.PinnedSector, len(hostKeys))
+		for i := range sectors {
+			sectors[i] = slabs.PinnedSector{Root: frand.Entropy256(), HostKey: hostFor(i)}
+		}
+		return slabs.SlabPinParams{EncryptionKey: slabs.EncryptionKey{key}, MinShards: 10, Sectors: sectors}
+	}
+
+	dup := newSlab(1, func(i int) types.PublicKey {
+		if i == 1 {
+			return hostKeys[0]
+		}
+		return hostKeys[i]
+	})
+	if _, err := sm.PinSlabs(context.Background(), account, nextCheck, dup); err == nil || !strings.Contains(err.Error(), "duplicate host key") {
+		t.Fatalf("expected duplicate host key error, got %v", err)
+	}
+
+	valid := newSlab(2, func(i int) types.PublicKey { return hostKeys[i] })
+	if _, err := sm.PinSlabs(context.Background(), account, nextCheck, valid); err != nil {
+		t.Fatalf("expected valid slab to pin, got %v", err)
 	}
 }
 
@@ -538,5 +622,6 @@ func newMockHostClient() *mockHostClient {
 		hostKeys:        make(map[types.PublicKey]types.PrivateKey),
 		hostSettings:    make(map[types.PublicKey]proto.HostSettings),
 		unusable:        make(map[types.PublicKey]struct{}),
+		failedRPCs:      make(map[types.PublicKey]int),
 	}
 }

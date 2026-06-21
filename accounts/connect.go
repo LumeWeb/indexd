@@ -165,6 +165,12 @@ func (m *AccountManager) Quotas(ctx context.Context, offset, limit int) ([]Quota
 	return m.store.Quotas(offset, limit)
 }
 
+// HasAppAccount reports whether an account already exists for the given
+// connect key and app ID.
+func (m *AccountManager) HasAppAccount(connectKey string, appID types.Hash256) (bool, error) {
+	return m.store.HasAppAccount(connectKey, appID)
+}
+
 // AppSecret derives a unique application secret using a stored user secret
 // associated with the given connect key and the provided app ID.
 func (m *AccountManager) AppSecret(connectKey string, appID types.Hash256) (types.Hash256, error) {
@@ -173,4 +179,12 @@ func (m *AccountManager) AppSecret(connectKey string, appID types.Hash256) (type
 		return types.Hash256{}, err
 	}
 	return types.Hash256(keys.Derive(secret[:], appID[:], []byte("server app secret"), 32)), nil
+}
+
+// DeriveSharingAccountKey deterministically derives a connect key's sharing
+// account key pair from its user secret.
+func DeriveSharingAccountKey(userSecret types.Hash256) types.PrivateKey {
+	seed := keys.Derive(userSecret[:], []byte("sharing"), nil, 32)
+	defer clear(seed)
+	return types.NewPrivateKeyFromSeed(seed)
 }

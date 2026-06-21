@@ -115,9 +115,12 @@ func (v *SectorVerifier) VerifySectors(ctx context.Context, hostKey types.Public
 			return results, fmt.Errorf("failed to update service account balance: %w", err)
 		}
 
-		// check a random segment of the sector
+		// hold an inflight read across the RPC so concurrent slab
+		// migrations see the verifier load on this host.
 		segment := frand.Uint64n(proto.LeavesPerSector)
+		release := v.hosts.TrackInflightRead(hostKey)
 		_, err = v.hosts.ReadSector(ctx, v.serviceAccount, hostKey, root, io.Discard, segment*proto.LeafSize, proto.LeafSize)
+		release()
 		if err != nil && ctx.Err() != nil {
 			return results, err // interrupted
 		}

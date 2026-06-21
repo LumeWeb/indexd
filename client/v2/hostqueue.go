@@ -2,14 +2,13 @@ package client
 
 import (
 	"cmp"
-	"errors"
 	"iter"
 	"math"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/chain"
 	"go.sia.tech/indexd/hosts"
@@ -17,14 +16,8 @@ import (
 
 const (
 	emaAlpha            = 0.2
-	settingsPayloadSize = 270       // size of host settings in bytes
-	defaultThroughput   = 125000000 // 1 Gbps in bytes per second
+	settingsPayloadSize = 270 // size of host settings in bytes
 )
-
-// ErrAbortedRPC is a special error that can be used as the cancel for an RPC
-// context to indicate that the RPC was interrupted and that the corresponding
-// host should not have a failure recorded for that RPC.
-var ErrAbortedRPC = errors.New("aborted RPC")
 
 type rpcAverage struct {
 	value float64
@@ -48,13 +41,10 @@ func (ra *rpcAverage) AddSample(v float64) {
 	}
 }
 
-// Value returns the current average, or defaultThroughput if no samples have
-// been recorded.
-func (ra *rpcAverage) Value() float64 {
-	if !ra.init {
-		return defaultThroughput
-	}
-	return ra.value
+// Value returns the current average and whether any samples have been
+// recorded.
+func (ra *rpcAverage) Value() (float64, bool) {
+	return ra.value, ra.init
 }
 
 type failureRate struct {
@@ -91,6 +81,37 @@ type hostMetric struct {
 	rpcWriteAverage rpcAverage
 	rpcReadAverage  rpcAverage
 	rpcFailRate     failureRate
+
+	// inflight tracks the number of read/write RPCs currently in flight to
+	// this host. The score divides throughput by (inflight + 1) so a
+	// host already serving many shards gets demoted relative to its idle
+	// peers, spreading concurrent slab work across the candidate pool
+	// instead of piling onto the same top-N.
+	inflightReads  atomic.Int64
+	inflightWrites atomic.Int64
+}
+
+// combinedThroughput returns the average of read and write throughput
+// and whether either side has been sampled.
+func (hm *hostMetric) combinedThroughput() (float64, bool) {
+	r, rok := hm.rpcReadAverage.Value()
+	w, wok := hm.rpcWriteAverage.Value()
+	switch {
+	case rok && wok:
+		return (r + w) / 2, true
+	case rok:
+		return r, true
+	case wok:
+		return w, true
+	default:
+		return 0, false
+	}
+}
+
+// inflight returns the total number of read+write RPCs currently in
+// flight to this host.
+func (hm *hostMetric) inflight() int64 {
+	return hm.inflightReads.Load() + hm.inflightWrites.Load()
 }
 
 // A HostQueue manages an ordered queue of hosts for uploading or
@@ -178,6 +199,18 @@ func (p *Provider) sortHosts(hosts []types.PublicKey) {
 	})
 }
 
+// cmpMetrics returns a negative number, zero, or a positive number when
+// host a sorts ahead of, equal to, or behind host b. Ordering:
+//  1. Lower failure rate wins.
+//  2. Unsampled hosts (no read/write samples) outrank sampled ones — the
+//     "discovery" bucket so every available host eventually gets tried.
+//  3. Among sampled hosts, higher throughput / (inflight + 1) wins — the
+//     expected per-shard throughput if you started one more shard. A
+//     saturated fast host can lose to an idle slower one, while a
+//     genuinely much-faster host still wins even when serving a few
+//     shards.
+//  4. Among unsampled hosts (rare; only seen before any samples land),
+//     lower current inflight wins so concurrent pickers spread out.
 func (p *Provider) cmpMetrics(a, b types.PublicKey) int {
 	am, aok := p.metrics[a]
 	bm, bok := p.metrics[b]
@@ -188,15 +221,33 @@ func (p *Provider) cmpMetrics(a, b types.PublicKey) int {
 	} else if !bok {
 		return 1
 	}
-	fc := cmp.Compare(am.rpcFailRate.Value(), bm.rpcFailRate.Value())
-	if fc != 0 {
-		return fc
+	if c := cmp.Compare(am.rpcFailRate.Value(), bm.rpcFailRate.Value()); c != 0 {
+		return c
 	}
 
-	// higher throughput is better, so reverse the comparison
-	at := (am.rpcReadAverage.Value() + am.rpcWriteAverage.Value()) / 2
-	bt := (bm.rpcReadAverage.Value() + bm.rpcWriteAverage.Value()) / 2
-	return cmp.Compare(bt, at)
+	at, asampled := am.combinedThroughput()
+	bt, bsampled := bm.combinedThroughput()
+	if !asampled && !bsampled {
+		return cmp.Compare(am.inflight(), bm.inflight())
+	} else if !asampled {
+		return -1
+	} else if !bsampled {
+		return 1
+	}
+	aw := at / float64(am.inflight()+1)
+	bw := bt / float64(bm.inflight()+1)
+	return cmp.Compare(bw, aw)
+}
+
+// metric returns the per-host metric pointer, creating it on
+// first use. Caller must hold p.mu.
+func (p *Provider) metric(hostKey types.PublicKey) *hostMetric {
+	m, ok := p.metrics[hostKey]
+	if !ok {
+		m = &hostMetric{}
+		p.metrics[hostKey] = m
+	}
+	return m
 }
 
 // AddReadSample records a successful read RPC attempt to the specified host.
@@ -205,11 +256,7 @@ func (p *Provider) cmpMetrics(a, b types.PublicKey) int {
 func (p *Provider) AddReadSample(hostKey types.PublicKey, bytes uint64, elapsed time.Duration) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	metric, exists := p.metrics[hostKey]
-	if !exists {
-		metric = &hostMetric{}
-		p.metrics[hostKey] = metric
-	}
+	metric := p.metric(hostKey)
 	if elapsed > 0 {
 		metric.rpcReadAverage.AddSample(float64(bytes) / elapsed.Seconds())
 	}
@@ -222,11 +269,7 @@ func (p *Provider) AddReadSample(hostKey types.PublicKey, bytes uint64, elapsed 
 func (p *Provider) AddWriteSample(hostKey types.PublicKey, bytes uint64, elapsed time.Duration) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	metric, exists := p.metrics[hostKey]
-	if !exists {
-		metric = &hostMetric{}
-		p.metrics[hostKey] = metric
-	}
+	metric := p.metric(hostKey)
 	if elapsed > 0 {
 		metric.rpcWriteAverage.AddSample(float64(bytes) / elapsed.Seconds())
 	}
@@ -241,18 +284,97 @@ func (p *Provider) AddSettingsSample(hostKey types.PublicKey, latency time.Durat
 }
 
 // AddFailedRPC records a failed RPC attempt to the specified host.
-func (p *Provider) AddFailedRPC(hostKey types.PublicKey, err error) {
-	if errors.Is(err, ErrAbortedRPC) || errors.Is(err, proto.ErrSectorNotFound) {
-		return // do not record aborted RPCs or missing sectors as failures
+func (p *Provider) AddFailedRPC(hostKey types.PublicKey) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.metric(hostKey).rpcFailRate.AddSample(false)
+}
+
+// TrackInflightRead increments the host's inflight read counter and
+// returns a function that decrements it. Hold the returned function for
+// the duration of the RPC so concurrent prioritization sees the load.
+func (p *Provider) TrackInflightRead(hostKey types.PublicKey) func() {
+	p.mu.Lock()
+	m := p.metric(hostKey)
+	p.mu.Unlock()
+	m.inflightReads.Add(1)
+	return func() { m.inflightReads.Add(-1) }
+}
+
+// TrackInflightWrite increments the host's inflight write counter and
+// returns a function that decrements it. Prefer [Provider.PickWrite] for
+// concurrent upload selection where the host comes from a shared pool;
+// use this directly only when the host is already fixed.
+func (p *Provider) TrackInflightWrite(hostKey types.PublicKey) func() {
+	p.mu.Lock()
+	m := p.metric(hostKey)
+	p.mu.Unlock()
+	m.inflightWrites.Add(1)
+	return func() { m.inflightWrites.Add(-1) }
+}
+
+// PickWrite selects the highest-scoring host from candidates and
+// atomically reserves an inflight write slot under the Provider lock,
+// so concurrent pickers see each other's reservations and disperse
+// across less-busy hosts instead of dogpiling the same top-N.
+//
+// The chosen host is swap-removed from candidates; the shortened slice
+// is returned as `remaining`. Caller MUST defer `release`. Returns
+// ok=false when candidates is empty.
+func (p *Provider) PickWrite(candidates []types.PublicKey) (host types.PublicKey, release func(), remaining []types.PublicKey, ok bool) {
+	if len(candidates) == 0 {
+		return types.PublicKey{}, nil, candidates, false
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	metric, exists := p.metrics[hostKey]
-	if !exists {
-		metric = &hostMetric{}
-		p.metrics[hostKey] = metric
+	best := 0
+	for i := 1; i < len(candidates); i++ {
+		if p.cmpMetrics(candidates[i], candidates[best]) < 0 {
+			best = i
+		}
 	}
-	metric.rpcFailRate.AddSample(false)
+	picked := candidates[best]
+	m := p.metric(picked)
+	m.inflightWrites.Add(1)
+	candidates[best] = candidates[len(candidates)-1]
+	return picked, func() { m.inflightWrites.Add(-1) }, candidates[:len(candidates)-1], true
+}
+
+// PickReads filters candidates for usable hosts, sorts them by score,
+// and atomically reserves an inflight read slot on the top n — all
+// under a single Provider lock so concurrent callers in a burst see
+// each other's reservations and steer to less-busy hosts. Pass n=1 to
+// atomically re-pick the best remaining candidate during a race loop.
+//
+// Returns the top n hosts as `picked` with matching `releases`, and
+// the sorted-by-score tail as `remaining`. Callers MUST call all
+// releases. When fewer than n usable hosts are available, returns
+// picked=nil with no reservations made; the partial sorted list is
+// still returned as `remaining`.
+func (p *Provider) PickReads(candidates []types.PublicKey, n int) (picked []types.PublicKey, releases []func(), remaining []types.PublicKey) {
+	sorted := candidates[:0]
+	for _, host := range candidates {
+		if u, err := p.store.Usable(host); err == nil && u {
+			sorted = append(sorted, host)
+		}
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return p.cmpMetrics(sorted[i], sorted[j]) < 0
+	})
+	if len(sorted) < n {
+		return nil, nil, sorted
+	}
+
+	releases = make([]func(), n)
+	for i := range n {
+		m := p.metric(sorted[i])
+		m.inflightReads.Add(1)
+		releases[i] = func() { m.inflightReads.Add(-1) }
+	}
+	return sorted[:n], releases, sorted[n:]
 }
 
 // Addresses returns the network addresses for the specified host.

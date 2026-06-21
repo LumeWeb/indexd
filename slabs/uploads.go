@@ -9,7 +9,6 @@ import (
 
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/rhp/v4"
-	"go.sia.tech/indexd/client/v2"
 	"go.uber.org/zap"
 )
 
@@ -39,8 +38,20 @@ func (m *SlabManager) uploadShards(ctx context.Context, slab Slab, shards [][]by
 		}
 	}
 
-	// prioritize available hosts based on latest reliability and performance
-	queue := client.NewHostQueue(m.hosts.Prioritize(available))
+	// Prioritize filters unusable hosts; PickWrite re-scores on each
+	// call so concurrent shard goroutines see each other's inflight
+	// reservations and disperse across less-busy hosts. poolMu
+	// serializes access to the shared `available` slice header.
+	available = m.hosts.Prioritize(available)
+	var poolMu sync.Mutex
+
+	pickHost := func() (types.PublicKey, func(), bool) {
+		poolMu.Lock()
+		defer poolMu.Unlock()
+		host, release, remaining, ok := m.hosts.PickWrite(available)
+		available = remaining
+		return host, release, ok
+	}
 
 	var wg sync.WaitGroup
 	sema := make(chan struct{}, 10)
@@ -55,10 +66,6 @@ top:
 		case <-ctx.Done():
 			break top
 		case sema <- struct{}{}:
-			if queue.Available() == 0 {
-				log.Debug("no more hosts for migration")
-				break top
-			}
 			shard := shards[i]
 			shardRoot := slab.Sectors[i].Root
 			log := log.With(zap.Stringer("sectorRoot", shardRoot))
@@ -66,18 +73,32 @@ top:
 				defer func() {
 					<-sema
 				}()
-				for hostKey := range queue.Iter() {
+				for {
 					if ctx.Err() != nil {
-						// context already cancelled
+						return
+					}
+					hostKey, release, ok := pickHost()
+					if !ok {
+						log.Debug("no more hosts for migration")
 						return
 					}
 
 					log := log.With(zap.Stringer("hostKey", hostKey))
 					// upload the shard
 					start := time.Now()
-					result, err := m.uploadShard(ctx, hostKey, shard)
+					timeoutCtx, timeoutCancel := context.WithTimeout(ctx, m.shardTimeout)
+					result, err := m.uploadShard(timeoutCtx, hostKey, shard)
+					timedOut := timeoutCtx.Err() != nil
+					timeoutCancel()
+					release()
 					if err != nil {
 						log.Debug("failed to upload shard", zap.Duration("elapsed", time.Since(start)), zap.Error(err))
+						// demote the host if it hit the per-shard timeout while
+						// the overall migration is still in progress
+						if timedOut && ctx.Err() == nil {
+							log.Debug("demoting host for failed upload", zap.Error(err))
+							m.hosts.AddFailedRPC(hostKey)
+						}
 						continue
 					} else if result.Root != shardRoot {
 						// note: since the RHP verifies that the root returned by the host
@@ -112,13 +133,15 @@ top:
 	if migrated == 0 {
 		return 0, fmt.Errorf("no shards were uploaded during migration")
 	}
+
+	// record the slab got migrated so object events gets updated
+	if err := m.store.RecordSlabMigrated(slab.ID); err != nil {
+		log.Debug("failed to record slab migration", zap.Error(err))
+	}
 	return int(migrated), nil
 }
 
 func (m *SlabManager) uploadShard(ctx context.Context, hostKey types.PublicKey, shard []byte) (rhp.RPCWriteSectorResult, error) {
-	ctx, cancel := context.WithTimeout(ctx, m.shardTimeout)
-	defer cancel()
-
 	usable, err := m.hm.Usable(ctx, hostKey)
 	if err != nil {
 		return rhp.RPCWriteSectorResult{}, fmt.Errorf("failed to check if host is usable: %w", err)

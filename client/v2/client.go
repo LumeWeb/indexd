@@ -186,16 +186,22 @@ func (c *Client) hostTransport(ctx context.Context, hostKey types.PublicKey) (rh
 	return t.dial(ctx, hostKey, addresses)
 }
 
+func isFailedRPC(ctx context.Context, err error) bool {
+	switch {
+	case ctx.Err() != nil:
+		return false // interrupted RPC
+	case errors.Is(err, proto.ErrSectorNotFound):
+		return false
+	default:
+		return err != nil
+	}
+}
+
 func (c *Client) rpcFn(ctx context.Context, hostKey types.PublicKey, fn func(ctx context.Context, transport rhp.TransportClient) error) (err error) {
 	defer func() {
-		// increment the failed RPC count for the host if the RPC failed
-		if err != nil {
-			// decorate the error with the context error to indicate whether the failed
-			// rpc is a consequence of context cancellation or timeout
-			if context.Cause(ctx) != nil {
-				err = fmt.Errorf("%w: %w", err, context.Cause(ctx))
-			}
-			c.hosts.AddFailedRPC(hostKey, err)
+		// increment the failed RPC count if the RPC is considered failed
+		if isFailedRPC(ctx, err) {
+			c.hosts.AddFailedRPC(hostKey)
 		}
 	}()
 
@@ -213,6 +219,17 @@ func (c *Client) rpcFn(ctx context.Context, hostKey types.PublicKey, fn func(ctx
 	}
 
 	return err
+}
+
+// AddFailedRPC records a failed RPC attempt to the specified host, lowering its
+// priority in future queues.
+// NOTE: This should only be used after an RPC failed due to context
+// cancellation or a context deadline as those failures won't be recorded by the
+// client implicitly. The client can't know whether the caller intends to treat
+// those as failed RPCs or not and punishing a good host for a cancelled RPC
+// could severely degrade performance.
+func (c *Client) AddFailedRPC(hostKey types.PublicKey) {
+	c.hosts.AddFailedRPC(hostKey)
 }
 
 // AccountBalance fetches the account balance from the specified host.
@@ -315,6 +332,30 @@ func (c *Client) UploadQueue() (*HostQueue, error) {
 // The reordered slice is returned with unusable hosts removed.
 func (c *Client) Prioritize(hosts []types.PublicKey) []types.PublicKey {
 	return c.hosts.Prioritize(hosts)
+}
+
+// PickWrite atomically selects the highest-scoring write candidate and
+// reserves an inflight slot. See [Provider.PickWrite].
+func (c *Client) PickWrite(candidates []types.PublicKey) (host types.PublicKey, release func(), remaining []types.PublicKey, ok bool) {
+	return c.hosts.PickWrite(candidates)
+}
+
+// PickReads atomically sorts candidates and reserves inflight read
+// slots on the top n. See [Provider.PickReads].
+func (c *Client) PickReads(candidates []types.PublicKey, n int) (picked []types.PublicKey, releases []func(), remaining []types.PublicKey) {
+	return c.hosts.PickReads(candidates, n)
+}
+
+// TrackInflightRead increments the host's inflight read counter and
+// returns a function that decrements it. See [Provider.TrackInflightRead].
+func (c *Client) TrackInflightRead(hostKey types.PublicKey) func() {
+	return c.hosts.TrackInflightRead(hostKey)
+}
+
+// TrackInflightWrite increments the host's inflight write counter and
+// returns a function that decrements it. See [Provider.TrackInflightWrite].
+func (c *Client) TrackInflightWrite(hostKey types.PublicKey) func() {
+	return c.hosts.TrackInflightWrite(hostKey)
 }
 
 // WarmConnections establishes siamux connections and fetches prices from
@@ -430,11 +471,6 @@ func shouldResetTransport(err error) bool {
 	case errors.Is(err, os.ErrDeadlineExceeded):
 		// os.ErrDeadlineExceeded indicates that the stream hit a timeout which was set
 		// using SetDeadline. In this case, the mux is still healthy.
-		return false
-	case errors.Is(err, rhp.ErrInvalidProof):
-		// An invalid proof error indicates that the host sent us a response
-		// with an invalid proof. This error is raised on our side and therefore
-		// not transport related.
 		return false
 	default:
 		return proto.ErrorCode(err) == proto.ErrorCodeTransport

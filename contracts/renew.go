@@ -18,34 +18,60 @@ func (cm *ContractManager) performContractRenewals(ctx context.Context, period, 
 	minProofHeight := bh + renewWindow
 	newProofHeight := bh + period
 
-	var eligible, attempted, successful int
+	var attempted, successful int
+
+	// collect all contracts eligible for renewal and remember hosts that already have a retained
+	// zero-size contract (renewing it would produce a zero-capacity contract); we only want to
+	// keep around one such contract per host.
+	var eligible []Contract
+	hostsWithActiveEmptyContract := make(map[types.PublicKey]struct{})
 	batchSize := 50
 	for offset := 0; ; offset += batchSize {
 		contracts, err := cm.store.Contracts(offset, batchSize, WithGood(true), WithRevisable(true))
 		if err != nil {
 			return fmt.Errorf("failed to fetch contracts for renewal: %w", err)
 		}
-		eligible += len(contracts)
 		for _, contract := range contracts {
 			if contract.ProofHeight > minProofHeight {
-				continue // too early to renew
-			} else if !contract.Good {
-				continue // contract is bad
+				// too early to renew; an empty one is the host's retained empty contract
+				if contract.Size == 0 {
+					hostsWithActiveEmptyContract[contract.HostKey] = struct{}{}
+				}
+				continue
 			}
-			attempted++
-			log := log.With(zap.Stringer("contractID", contract.ID), zap.Stringer("host", contract.HostKey))
-			if err := cm.renewContract(ctx, contract, newProofHeight, log); err != nil {
-				log.Error("failed to renew contract", zap.Error(err))
-			} else {
-				successful++
-			}
+			eligible = append(eligible, contract)
 		}
 
 		if len(contracts) < batchSize {
 			break
 		}
 	}
-	log.Debug("renewals finished", zap.Int("eligible", eligible), zap.Int("attempted", attempted), zap.Int("successful", successful))
+
+	// perform renewals on eligible contracts
+	for _, contract := range eligible {
+		log := log.With(zap.Stringer("contractID", contract.ID), zap.Stringer("host", contract.HostKey))
+		if contract.Size == 0 {
+			if _, ok := hostsWithActiveEmptyContract[contract.HostKey]; ok {
+				log.Debug("skipping zero-size contract renewal, host already has a retained zero-size contract")
+				continue
+			}
+		}
+		attempted++
+		if err := cm.renewContract(ctx, contract, newProofHeight, log); err != nil {
+			log.Error("failed to renew contract", zap.Error(err))
+			continue
+		}
+
+		// success
+		successful++
+
+		// remember that this host now has an active empty contract
+		if contract.Size == 0 {
+			hostsWithActiveEmptyContract[contract.HostKey] = struct{}{}
+		}
+	}
+
+	log.Debug("renewals finished", zap.Int("eligible", len(eligible)), zap.Int("attempted", attempted), zap.Int("successful", successful))
 	return nil
 }
 
