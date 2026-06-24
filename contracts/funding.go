@@ -155,12 +155,10 @@ func (cm *ContractManager) FundAccounts(ctx context.Context, host hosts.Host, co
 	serviceAccounts := cm.accounts.ServiceAccounts(host.PublicKey)
 	if len(serviceAccounts) > 0 {
 		fundTarget := accounts.HostFundTarget(host, serviceAccountFundTargetBytes)
-		funded, _, deposits, err := cm.accountFunder.FundAccounts(ctx, host, contractIDs, serviceAccounts, fundTarget, log)
+		funded, _, _, err := cm.accountFunder.FundAccounts(ctx, host, contractIDs, serviceAccounts, fundTarget, log)
 		if err != nil {
 			return fmt.Errorf("failed to fund service accounts: %w", err)
 		}
-
-		recordFundingEvents(cm.accounts, host, deposits, log)
 
 		if err := cm.accounts.UpdateServiceAccounts(serviceAccounts[:funded], fundTarget); err != nil {
 			cm.log.Warn("failed to update service account balances", zap.Error(err))
@@ -201,11 +199,12 @@ OUTER:
 
 			// fund each group with the appropriate target
 			for _, batch := range []struct {
-				accs   []accounts.HostAccount
-				target types.Currency
+				accs     []accounts.HostAccount
+				target   types.Currency
+				readOnly bool
 			}{
-				{uploadAccs, fundTarget},
-				{fullStorageAccs, readFundTarget},
+				{uploadAccs, fundTarget, false},
+				{fullStorageAccs, readFundTarget, true},
 			} {
 				if len(batch.accs) == 0 || batch.target.IsZero() {
 					continue
@@ -217,7 +216,7 @@ OUTER:
 					return fmt.Errorf("failed to fund accounts: %w", err)
 				}
 
-				recordFundingEvents(cm.accounts, host, deposits, log)
+				recordFundingEvents(cm.accounts, host, deposits, batch.readOnly, log)
 
 				// update funded accounts
 				accounts.UpdateFundedAccounts(batch.accs, funded, cm.maxAccountFundingBackoff)
@@ -254,12 +253,10 @@ func (cm *ContractManager) FundServiceAccounts(ctx context.Context, host hosts.H
 	serviceAccounts := cm.accounts.ServiceAccounts(host.PublicKey)
 	if len(serviceAccounts) > 0 {
 		fundTarget := accounts.HostFundTarget(host, serviceAccountFundTargetBytes)
-		funded, _, deposits, err := cm.accountFunder.FundAccounts(ctx, host, contractIDs, serviceAccounts, fundTarget, log)
+		funded, _, _, err := cm.accountFunder.FundAccounts(ctx, host, contractIDs, serviceAccounts, fundTarget, log)
 		if err != nil {
 			return fmt.Errorf("failed to fund service accounts: %w", err)
 		}
-
-		recordFundingEvents(cm.accounts, host, deposits, log)
 
 		if err := cm.accounts.UpdateServiceAccounts(serviceAccounts[:funded], fundTarget); err != nil {
 			cm.log.Warn("failed to update service account balances", zap.Error(err))
@@ -318,11 +315,12 @@ OUTER:
 			}
 
 			for _, batch := range []struct {
-				pools  []accounts.HostPool
-				target types.Currency
+				pools    []accounts.HostPool
+				target   types.Currency
+				readOnly bool
 			}{
-				{uploadPools, fundTarget},
-				{fullStoragePools, readFundTarget},
+				{uploadPools, fundTarget, false},
+				{fullStoragePools, readFundTarget, true},
 			} {
 				if len(batch.pools) == 0 || batch.target.IsZero() {
 					continue
@@ -333,7 +331,7 @@ OUTER:
 					return fmt.Errorf("failed to fund pools: %w", err)
 				}
 
-				recordPoolFundingEvents(cm.accounts, host, deposits, batch.pools, log)
+				recordPoolFundingEvents(cm.accounts, host, deposits, batch.pools, batch.readOnly, log)
 
 				accounts.UpdateFundedPools(batch.pools, funded, cm.maxAccountFundingBackoff)
 				if err := cm.accounts.UpdateHostPools(batch.pools); err != nil {
@@ -355,9 +353,18 @@ OUTER:
 // estimatedBytes estimates the bytes covered by a single operation type (upload or download)
 // from the actual SC deposited. The deposit covers both read and write usage in a 50/50 split,
 // so we divide by 2 to approximate each operation's share, then convert SC to sectors and bytes.
-func estimatedBytes(amount types.Currency, costPerSector types.Currency) uint64 {
+func estimatedBytes(amount types.Currency, costPerSector types.Currency, readOnly bool) uint64 {
 	if costPerSector.IsZero() {
 		return 0
+	}
+	if readOnly {
+		// full-storage accounts fund read-only deposits; don't apply the
+		// 50/50 read+write split — the full amount covers download bytes only.
+		result := amount.Mul64(proto.SectorSize).Div(costPerSector)
+		if !result.Big().IsUint64() {
+			return math.MaxInt64
+		}
+		return result.Big().Uint64()
 	}
 	divisor := costPerSector.Mul64(2)
 	if divisor.IsZero() {
@@ -370,13 +377,13 @@ func estimatedBytes(amount types.Currency, costPerSector types.Currency) uint64 
 	return result.Big().Uint64()
 }
 
-func recordFundingEvents(am AccountManager, host hosts.Host, deposits []FundedDeposit, log *zap.Logger) {
-	recordFundingEventsTyped(am, host, deposits, accounts.FundingTypeAccount, nil, log)
+func recordFundingEvents(am AccountManager, host hosts.Host, deposits []FundedDeposit, readOnly bool, log *zap.Logger) {
+	recordFundingEventsTyped(am, host, deposits, accounts.FundingTypeAccount, nil, readOnly, log)
 }
 
 // recordPoolFundingEvents records funding events for pool deposits. It maps
 // each deposit's account key back to the pool DB ID to set the pool_id column.
-func recordPoolFundingEvents(am AccountManager, host hosts.Host, deposits []FundedDeposit, pools []accounts.HostPool, log *zap.Logger) {
+func recordPoolFundingEvents(am AccountManager, host hosts.Host, deposits []FundedDeposit, pools []accounts.HostPool, readOnly bool, log *zap.Logger) {
 	if len(deposits) == 0 {
 		return
 	}
@@ -391,23 +398,26 @@ func recordPoolFundingEvents(am AccountManager, host hosts.Host, deposits []Fund
 	events := make([]accounts.FundingEvent, 0, len(deposits))
 	for _, d := range deposits {
 		poolID := poolIDs[d.Deposit.Account]
-		events = append(events, accounts.FundingEvent{
+		ev := accounts.FundingEvent{
 			AccountKey:             d.Deposit.Account,
 			HostKey:                host.PublicKey,
 			ContractID:             d.ContractID,
 			AmountSC:               d.Deposit.Amount,
-			EstimatedUploadBytes:   estimatedBytes(d.Deposit.Amount, writeCostPerSector),
-			EstimatedDownloadBytes: estimatedBytes(d.Deposit.Amount, readCostPerSector),
+			EstimatedDownloadBytes: estimatedBytes(d.Deposit.Amount, readCostPerSector, readOnly),
 			FundType:               accounts.FundingTypePool,
 			PoolID:                 &poolID,
-		})
+		}
+		if !readOnly {
+			ev.EstimatedUploadBytes = estimatedBytes(d.Deposit.Amount, writeCostPerSector, false)
+		}
+		events = append(events, ev)
 	}
 	if err := am.RecordFundingEvents(events); err != nil {
 		log.Warn("failed to record funding events", zap.Error(err))
 	}
 }
 
-func recordFundingEventsTyped(am AccountManager, host hosts.Host, deposits []FundedDeposit, fundType string, poolID *int, log *zap.Logger) {
+func recordFundingEventsTyped(am AccountManager, host hosts.Host, deposits []FundedDeposit, fundType string, poolID *int, readOnly bool, log *zap.Logger) {
 	if len(deposits) == 0 {
 		return
 	}
@@ -415,16 +425,19 @@ func recordFundingEventsTyped(am AccountManager, host hosts.Host, deposits []Fun
 	readCostPerSector := host.Settings.Prices.RPCReadSectorCost(proto.SectorSize).RenterCost()
 	events := make([]accounts.FundingEvent, 0, len(deposits))
 	for _, d := range deposits {
-		events = append(events, accounts.FundingEvent{
+		ev := accounts.FundingEvent{
 			AccountKey:             d.Deposit.Account,
 			HostKey:                host.PublicKey,
 			ContractID:             d.ContractID,
 			AmountSC:               d.Deposit.Amount,
-			EstimatedUploadBytes:   estimatedBytes(d.Deposit.Amount, writeCostPerSector),
-			EstimatedDownloadBytes: estimatedBytes(d.Deposit.Amount, readCostPerSector),
+			EstimatedDownloadBytes: estimatedBytes(d.Deposit.Amount, readCostPerSector, readOnly),
 			FundType:               fundType,
 			PoolID:                 poolID,
-		})
+		}
+		if !readOnly {
+			ev.EstimatedUploadBytes = estimatedBytes(d.Deposit.Amount, writeCostPerSector, false)
+		}
+		events = append(events, ev)
 	}
 	if err := am.RecordFundingEvents(events); err != nil {
 		log.Warn("failed to record funding events", zap.Error(err))
