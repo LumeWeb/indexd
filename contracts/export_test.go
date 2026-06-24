@@ -28,6 +28,7 @@ var (
 
 	ContractFunding           = contractFunding
 	IsBeyondMaxRevisionHeight = isBeyondMaxRevisionHeight
+	EstimatedBytes            = estimatedBytes
 )
 
 type CandidateContract = candidateContract

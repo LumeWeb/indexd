@@ -405,3 +405,120 @@ func TestFundAccountsRecordsFundingEvents(t *testing.T) {
 		t.Fatal("expected to find funding event matching deposit")
 	}
 }
+
+func TestEstimatedBytesReadOnly(t *testing.T) {
+	// When readOnly is false, the deposit covers both read+write, so the
+	// estimated bytes are halved (deposit / (costPerSector * 2) * SectorSize).
+	// When readOnly is true, the deposit covers only reads, so no halving
+	// (deposit / costPerSector * SectorSize) — double the non-readOnly result.
+	costPerSector := types.NewCurrency64(1000)
+	amount := types.NewCurrency64(1000)
+
+	nonReadOnly := contracts.EstimatedBytes(amount, costPerSector, false)
+	readOnly := contracts.EstimatedBytes(amount, costPerSector, true)
+
+	if nonReadOnly == 0 {
+		t.Fatal("expected non-zero bytes for non-readOnly")
+	}
+	if readOnly == 0 {
+		t.Fatal("expected non-zero bytes for readOnly")
+	}
+	if readOnly != nonReadOnly*2 {
+		t.Fatalf("readOnly should be 2x non-readOnly: got %d vs %d", readOnly, nonReadOnly)
+	}
+}
+
+func TestFundAccountsRecordsFundingEventsFullStorage(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	s := newTestStore(t)
+
+	hk := types.GeneratePrivateKey().PublicKey()
+	host := hosts.Host{
+		PublicKey: hk,
+		Settings: proto.HostSettings{
+			Prices: proto.HostPrices{
+				EgressPrice:  types.NewCurrency64(100),
+				IngressPrice: types.NewCurrency64(100),
+				StoragePrice: types.NewCurrency64(100),
+			},
+		},
+		Addresses: []chain.NetAddress{{Protocol: siamux.Protocol, Address: "foo"}},
+		Usability: hosts.GoodUsability,
+	}
+
+	s.addTestHost(t, host)
+
+	pk := types.GeneratePrivateKey()
+	s.AddTestAccount(t, pk.PublicKey())
+
+	// mark the account as full storage by setting pinned_data >= max_pinned_data
+	// on the app_connect_keys table (the funding query checks
+	// ack.pinned_data >= q.max_pinned_data)
+	ak := proto.Account(pk.PublicKey())
+	_, err := s.Exec(context.Background(), `
+		UPDATE app_connect_keys ack
+		SET pinned_data = (SELECT max_pinned_data FROM quotas WHERE name = ack.quota_name)
+		WHERE app_key = 'test'`)
+	if err != nil {
+		t.Fatalf("failed to set full storage: %v", err)
+	}
+
+	fcid := types.FileContractID{1}
+	s.addTestContract(t, hk, true, fcid)
+	s.setContractRemainingAllowance(t, fcid, types.Siacoins(10000))
+
+	depositAmount := types.Siacoins(50)
+	f := &mockFunder{
+		deposits: []contracts.FundedDeposit{
+			{
+				ContractID: fcid,
+				Deposit: proto.AccountDeposit{
+					Account: ak,
+					Amount:  depositAmount,
+				},
+			},
+		},
+	}
+
+	am, _ := accounts.NewManager(s, accounts.WithLogger(log))
+	defer am.Close()
+	network, genesis := testutil.V2Network()
+	dbstore, tipState, _ := chain.NewDBStore(chain.NewMemDB(), network, genesis, nil)
+	hm, _ := hosts.NewManager(nil, nil, nil, s, alerts.NewManager(), hosts.WithLogger(log.Named("hosts")))
+	defer hm.Close()
+	cm, _ := contracts.NewManager(types.GeneratePrivateKey(), am, f, chain.NewManager(dbstore, tipState), s, nil, nil, nil, contracts.NewContractLocker(), hm, nil, nil, contracts.WithLogger(log.Named("contracts")))
+	defer cm.Close()
+
+	s.resetNextFund(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := cm.FundAccounts(ctx, host, []types.FileContractID{fcid}, []accounts.Quota{{Key: testutils.TestQuotaName, FundTargetBytes: testutils.TestQuotaFundTargetBytes}}, log); err != nil {
+		t.Fatalf("failed to fund accounts: %v", err)
+	}
+
+	events, err := s.FundingEvents(accounts.FundingCursor{}, 100)
+	if err != nil {
+		t.Fatalf("failed to get funding events: %v", err)
+	}
+	if len(events) == 0 {
+		t.Fatal("expected funding events to be recorded")
+	}
+
+	found := false
+	for _, ev := range events {
+		if ev.AccountKey == ak && ev.AmountSC.Cmp(depositAmount) == 0 {
+			found = true
+			if ev.EstimatedUploadBytes != 0 {
+				t.Fatalf("expected zero EstimatedUploadBytes for full-storage account, got %d", ev.EstimatedUploadBytes)
+			}
+			if ev.EstimatedDownloadBytes == 0 {
+				t.Fatal("expected non-zero EstimatedDownloadBytes for full-storage account")
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected to find funding event matching deposit")
+	}
+}
