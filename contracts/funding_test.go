@@ -412,7 +412,7 @@ func TestEstimatedBytesReadOnly(t *testing.T) {
 	// When readOnly is true, the deposit covers only reads, so no halving
 	// (deposit / costPerSector * SectorSize) — double the non-readOnly result.
 	costPerSector := types.NewCurrency64(1000)
-	amount := types.NewCurrency64(1000)
+	amount := types.NewCurrency64(10000)
 
 	nonReadOnly := contracts.EstimatedBytes(amount, costPerSector, false)
 	readOnly := contracts.EstimatedBytes(amount, costPerSector, true)
