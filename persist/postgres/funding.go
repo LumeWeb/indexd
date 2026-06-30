@@ -466,7 +466,7 @@ func newHostPoolsForFunding(ctx context.Context, tx *txn, hk types.PublicKey, ho
 	pools := make([]accounts.HostPool, 0, limit)
 
 	rows, err := tx.Query(ctx, `
-SELECT p.id, p.pool_key,
+SELECT p.pool_key,
 	ack.pinned_data >= q.max_pinned_data AS full_storage
 FROM pools p
 INNER JOIN app_connect_keys ack ON ack.id = p.connect_key_id
@@ -482,7 +482,7 @@ LIMIT $2;`, hostID, limit, quotaName, threshold)
 
 	for rows.Next() {
 		pool := accounts.HostPool{HostKey: hk, NextFund: time.Now()}
-		if err := rows.Scan(&pool.ID, (*[]byte)(&pool.PoolKey), &pool.FullStorage); err != nil {
+		if err := rows.Scan((*[]byte)(&pool.PoolKey), &pool.FullStorage); err != nil {
 			return nil, fmt.Errorf("failed to scan pool: %w", err)
 		}
 		pools = append(pools, pool)
@@ -528,7 +528,7 @@ func existingHostPoolsForFunding(ctx context.Context, tx *txn, hk types.PublicKe
 	pools := make([]accounts.HostPool, 0, limit)
 
 	rows, err := tx.Query(ctx, `
-SELECT p.id, p.pool_key, ph.consecutive_failed_funds, ph.next_fund,
+SELECT p.pool_key, ph.consecutive_failed_funds, ph.next_fund,
 	ack.pinned_data >= q.max_pinned_data AS full_storage
 FROM pool_hosts ph
 INNER JOIN pools p ON p.id = ph.pool_id
@@ -545,7 +545,7 @@ LIMIT $2`, hostID, limit, quotaName, threshold)
 
 	for rows.Next() {
 		pool := accounts.HostPool{HostKey: hk}
-		if err := rows.Scan(&pool.ID, (*[]byte)(&pool.PoolKey), &pool.ConsecutiveFailedFunds, &pool.NextFund, &pool.FullStorage); err != nil {
+		if err := rows.Scan((*[]byte)(&pool.PoolKey), &pool.ConsecutiveFailedFunds, &pool.NextFund, &pool.FullStorage); err != nil {
 			return nil, fmt.Errorf("failed to scan pool: %w", err)
 		}
 		pools = append(pools, pool)

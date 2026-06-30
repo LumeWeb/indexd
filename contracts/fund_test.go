@@ -191,6 +191,7 @@ func (f *accountFunderMock) FundPools(_ context.Context, host hosts.Host, contra
 	return len(pools), 0, nil, nil
 }
 
+
 func TestPerformAccountFunding(t *testing.T) {
 	amMock := newAccountsManagerMock()
 	amMock.accountsToFund = []accounts.HostAccount{{AccountKey: [32]byte{1}}}

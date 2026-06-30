@@ -24,7 +24,8 @@ type (
 	// checking their integrity on the network and migrating their sectors if
 	// necessary.
 	SlabManager struct {
-		healthCheckInterval time.Duration
+		healthCheckInterval       time.Duration
+		pruneDeletedSlabsInterval time.Duration
 
 		integrityCheckInterval       time.Duration
 		failedIntegrityCheckInterval time.Duration
@@ -38,6 +39,12 @@ type (
 		numMigrationGoroutines      int
 		shardTimeout                time.Duration
 		integrityCheckTimeout       time.Duration
+
+		// recoveryChunkSize is the size of the segment-aligned byte range
+		// requested from each host during slab recovery. Smaller chunks
+		// spread a recovery across more hosts (more parallel pipes) at the
+		// cost of more RPCs. Must be a multiple of proto.LeafSize.
+		recoveryChunkSize int
 
 		alerter AlertsManager
 		chain   ChainManager
@@ -83,6 +90,10 @@ type (
 		ReadSector(ctx context.Context, accountKey types.PrivateKey, hostKey types.PublicKey, root types.Hash256, w io.Writer, offset, length uint64) (rhp.RPCReadSectorResult, error)
 
 		Prioritize([]types.PublicKey) []types.PublicKey
+		// ReadEstimate returns the expected time to read the given number
+		// of bytes based on the network-wide observed read throughput. It
+		// is used to size adaptive download racing.
+		ReadEstimate(bytes uint64) time.Duration
 		// PickWrite atomically selects the best write candidate and
 		// reserves an inflight slot. The release function MUST be called
 		// when the RPC completes; the picked host is removed from
@@ -131,6 +142,7 @@ type (
 		SlabIDs(account proto.Account, offset, limit int) ([]SlabID, error)
 		UnhealthySlabs(cursor int64, limit int) ([]SlabID, int64, error)
 		PruneSlabs(account proto.Account, cutoff time.Time) error
+		PruneDeletedSlabs(limit int) (int, error)
 
 		// Object methods
 		Object(account proto.Account, key types.Hash256) (SealedObject, error)
@@ -161,6 +173,15 @@ type Option func(*SlabManager)
 func WithHealthCheckInterval(interval time.Duration) Option {
 	return func(m *SlabManager) {
 		m.healthCheckInterval = interval
+	}
+}
+
+// WithPruneDeletedSlabsInterval sets the interval at which the slab manager
+// prunes deleted slabs, removing those no longer pinned by any account along
+// with their orphaned sectors.
+func WithPruneDeletedSlabsInterval(interval time.Duration) Option {
+	return func(m *SlabManager) {
+		m.pruneDeletedSlabsInterval = interval
 	}
 }
 
@@ -198,6 +219,20 @@ func WithNumMigrationGoroutines(size int) Option {
 			panic("migration batch size must be positive") // developer error
 		}
 		m.numMigrationGoroutines = size
+	}
+}
+
+// WithRecoveryChunkSize sets the size of the segment-aligned byte range
+// requested from each host during slab recovery. Smaller chunks spread a
+// recovery across more hosts at the cost of more RPCs. The value is clamped
+// to [proto.LeafSize, proto.SectorSize] and rounded down to a multiple of
+// proto.LeafSize when used. The default is 1 MiB.
+func WithRecoveryChunkSize(size int) Option {
+	return func(m *SlabManager) {
+		if size <= 0 {
+			panic("recovery chunk size must be positive") // developer error
+		}
+		m.recoveryChunkSize = size
 	}
 }
 
@@ -247,7 +282,8 @@ func NewManager(chain ChainManager, am AccountManager, cm ContractManager, hm Ho
 
 func newSlabManager(chain ChainManager, am AccountManager, cm ContractManager, hm HostManager, store Store, hosts HostClient, alerter AlertsManager, migrationAccount, integrityAccount types.PrivateKey, opts ...Option) *SlabManager {
 	m := &SlabManager{
-		healthCheckInterval: time.Minute,
+		healthCheckInterval:       time.Minute,
+		pruneDeletedSlabsInterval: time.Minute,
 
 		integrityCheckInterval:       14 * 24 * time.Hour,
 		failedIntegrityCheckInterval: 12 * time.Hour,
@@ -261,6 +297,7 @@ func newSlabManager(chain ChainManager, am AccountManager, cm ContractManager, h
 		integrityCheckTimeout:       5 * time.Minute,
 		numIntegrityCheckGoroutines: 50,
 		numMigrationGoroutines:      runtime.NumCPU(),
+		recoveryChunkSize:           defaultRecoveryChunkSize,
 
 		chain:   chain,
 		am:      am,
@@ -310,14 +347,14 @@ func (m *SlabManager) initServiceAccounts(migrationAccount, integrityAccount typ
 // perform on slabs
 func (m *SlabManager) maintenanceLoop(ctx context.Context) {
 	var wg sync.WaitGroup
-	launch := func(descr string, task func(context.Context) error) {
-		healthTicker := time.NewTicker(m.healthCheckInterval)
+	launch := func(descr string, interval time.Duration, task func(context.Context) error) {
+		ticker := time.NewTicker(interval)
 
 		wg.Go(func() {
-			defer healthTicker.Stop()
+			defer ticker.Stop()
 			for {
 				select {
-				case <-healthTicker.C:
+				case <-ticker.C:
 				case <-ctx.Done():
 					return
 				}
@@ -331,9 +368,36 @@ func (m *SlabManager) maintenanceLoop(ctx context.Context) {
 	// register lost sectors alerts on startup
 	m.registerLostSectorsAlert()
 
-	launch("integrity checks", m.performIntegrityChecks)
-	launch("slab migrations", m.performSlabMigrations)
+	launch("integrity checks", m.healthCheckInterval, m.performIntegrityChecks)
+	launch("slab migrations", m.healthCheckInterval, m.performSlabMigrations)
+	launch("prune deleted slabs", m.pruneDeletedSlabsInterval, m.performPruneDeletedSlabs)
 	wg.Wait()
+}
+
+// performPruneDeletedSlabs prunes deleted slabs, removing those no longer pinned
+// by any account along with their orphaned sectors.
+func (m *SlabManager) performPruneDeletedSlabs(ctx context.Context) error {
+	start := time.Now()
+	log := m.log.Named("prune")
+	log.Debug("starting deleted slab pruning")
+
+	const batchSize = 100
+	var pruned int
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		n, err := m.store.PruneDeletedSlabs(batchSize)
+		if err != nil {
+			return fmt.Errorf("failed to prune deleted slabs: %w", err)
+		} else if n == 0 {
+			break
+		}
+		pruned += n
+	}
+
+	log.Debug("finished pruning deleted slabs", zap.Int("pruned", pruned), zap.Duration("elapsed", time.Since(start)))
+	return nil
 }
 
 func newLostSectorsAlert(hks []types.PublicKey) alerts.Alert {

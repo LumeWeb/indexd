@@ -140,7 +140,7 @@ type (
 		EstimatedDownloadBytes uint64               `json:"estimatedDownloadBytes"`
 		FundType               string               `json:"fundType"`            // accounts.FundingTypeAccount or accounts.FundingTypePool
 		PoolID                 *int                 `json:"poolID,omitempty"`    // non-nil when FundType is "pool"
-		QuotaName              *string              `json:"quotaName,omitempty"` // resolved from pool_id → pools → app_connect_keys; non-nil for pool events
+		QuotaName              *string              `json:"quotaName,omitempty"` // resolved from pool_id -> pools -> app_connect_keys; non-nil for pool events
 		CreatedAt              time.Time            `json:"createdAt"`
 	}
 

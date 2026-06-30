@@ -22,6 +22,13 @@ const (
 	// maxBadParityShards is the maximum proportion of parity shards that can be
 	// on bad hosts when pinning a slab.
 	maxBadParityShards = 0.2
+	// integrityCheckClaimInterval is how far into the future
+	// SectorsForIntegrityCheck pushes the next_integrity_check of the sectors
+	// it hands out. It acts as a lease so that concurrent integrity-check
+	// workers never fetch the same sectors. If a check is interrupted before
+	// its result is recorded, the sectors are retried after this interval
+	// instead of immediately.
+	integrityCheckClaimInterval = 30 * time.Minute
 )
 
 // MarkSectorsLost marks the sectors as lost by setting both the contract ID and
@@ -133,7 +140,13 @@ func recordIntegrityCheck(ctx context.Context, tx *txn, success bool, nextCheck 
 }
 
 // SectorsForIntegrityCheck returns up to `limit` sectors that are due for an
-// integrity check.
+// integrity check, claiming them by pushing their next_integrity_check
+// integrityCheckClaimInterval into the future. The claim is atomic (FOR UPDATE
+// SKIP LOCKED) so that concurrent callers receive disjoint sets of sectors
+// rather than re-verifying the same ones. Once a sector is checked,
+// RecordIntegrityCheck overwrites next_integrity_check with the real
+// (success/failure) interval; if the check is interrupted before that, the
+// sector is retried after the claim interval.
 func (s *Store) SectorsForIntegrityCheck(hostKey types.PublicKey, limit int) ([]types.Hash256, error) {
 	var sectors []types.Hash256
 	err := s.transaction(func(ctx context.Context, tx *txn) error {
@@ -143,14 +156,20 @@ func (s *Store) SectorsForIntegrityCheck(hostKey types.PublicKey, limit int) ([]
 			WITH hid AS (
 				SELECT id FROM hosts WHERE public_key = $1
 			)
-			SELECT sector_root
-			FROM sectors
-			WHERE
-				host_id = (SELECT id FROM hid)
-				AND next_integrity_check <= NOW()
-			ORDER BY next_integrity_check ASC
-			LIMIT $2
-		`, sqlPublicKey(hostKey), limit)
+			UPDATE sectors
+			SET next_integrity_check = NOW() + make_interval(secs => $3)
+			WHERE id IN (
+				SELECT id
+				FROM sectors
+				WHERE
+					host_id = (SELECT id FROM hid)
+					AND next_integrity_check <= NOW()
+				ORDER BY next_integrity_check ASC
+				LIMIT $2
+				FOR UPDATE SKIP LOCKED
+			)
+			RETURNING sector_root
+		`, sqlPublicKey(hostKey), limit, integrityCheckClaimInterval.Seconds())
 		if err != nil {
 			return err
 		}
@@ -423,6 +442,9 @@ func (s *Store) PinSlabs(account proto.Account, nextIntegrityCheck time.Time, to
 	return digests, err
 }
 
+// unpinSlabs removes the account's association with the given slabs and updates
+// the account's pinned totals. The slabs and their sectors are not deleted
+// inline; they are queued for deleteOrphanedSlabs to prune in a background loop.
 func (s *Store) unpinSlabs(ctx context.Context, tx *txn, accountID int64, sIDs []int64) error {
 	// delete the association between the account and the slab
 	_, err := tx.Exec(ctx, `DELETE FROM account_slabs a
@@ -450,6 +472,26 @@ RETURNING connect_key_id`, pinnedDataDelta, pinnedSizeDelta, accountID).Scan(&co
 	}
 	if _, err := tx.Exec(ctx, `UPDATE app_connect_keys SET pinned_data = pinned_data - $1, pinned_size = pinned_size - $2 WHERE id = $3`, pinnedDataDelta, pinnedSizeDelta, connectKeyID); err != nil {
 		return fmt.Errorf("failed to update connect key pinned data: %w", err)
+	}
+
+	// queue the slabs for background deletion; the queue is append-only so a
+	// concurrent prune can't swallow a re-queue
+	if _, err := tx.Exec(ctx, `INSERT INTO slab_deletion_queue (slab_id)
+SELECT * FROM unnest($1::bigint[])`, sIDs); err != nil {
+		return fmt.Errorf("failed to queue slabs for deletion: %w", err)
+	}
+	return nil
+}
+
+// deleteOrphanedSlabs deletes the slabs in sIDs that are no longer pinned by
+// any account, along with any sectors that are only referenced by those slabs,
+// and updates the relevant sector and slab statistics. Callers must have
+// already removed the relevant account_slabs associations.
+func (s *Store) deleteOrphanedSlabs(ctx context.Context, tx *txn, sIDs []int64) error {
+	// lock the candidate slabs so a concurrent re-pin serializes against the
+	// pinned check below
+	if _, err := tx.Exec(ctx, `SELECT id FROM slabs WHERE id = ANY($1) ORDER BY id FOR UPDATE`, sIDs); err != nil {
+		return fmt.Errorf("failed to lock slabs: %w", err)
 	}
 
 	// ignore the slabs that are pinned by another account
@@ -484,6 +526,14 @@ RETURNING connect_key_id`, pinnedDataDelta, pinnedSizeDelta, accountID).Scan(&co
 	var pinned, unpinned, unpinnable int64
 	var unpinnedDeltas []unpinnedDelta
 	if len(toDelete) > 0 {
+		// lock the candidate sectors too, so a concurrent re-pin reusing a shared
+		// sector serializes against the orphan check below
+		if _, err := tx.Exec(ctx, `SELECT id FROM sectors WHERE id IN (
+	SELECT sector_id FROM slab_sectors WHERE slab_id = ANY($1)
+) ORDER BY id FOR UPDATE`, toDelete); err != nil {
+			return fmt.Errorf("failed to lock sectors: %w", err)
+		}
+
 		// atomically delete candidate sectors and derive stats from the
 		// returned rows to avoid races with concurrent PinSectors or
 		// MarkSectorsUnpinnable calls
@@ -531,10 +581,13 @@ RETURNING connect_key_id`, pinnedDataDelta, pinnedSizeDelta, accountID).Scan(&co
 		}
 	}
 
-	// prune the slabs
-	if _, err := tx.Exec(ctx, `DELETE FROM slabs WHERE id = ANY($1)`, toDelete); err != nil {
+	// prune the slabs, counting rows actually deleted since the queue can hold
+	// a slab twice
+	res, err := tx.Exec(ctx, `DELETE FROM slabs WHERE id = ANY($1)`, toDelete)
+	if err != nil {
 		return fmt.Errorf("failed to prune slabs: %w", err)
 	}
+	deletedSlabs := res.RowsAffected()
 
 	// update sector stats
 	if err := incrementNumPinnedSectors(ctx, tx, -pinned); err != nil {
@@ -548,7 +601,7 @@ RETURNING connect_key_id`, pinnedDataDelta, pinnedSizeDelta, accountID).Scan(&co
 	}
 
 	// update slab stats
-	if err := incrementNumSlabs(ctx, tx, -int64(len(toDelete))); err != nil {
+	if err := incrementNumSlabs(ctx, tx, -deletedSlabs); err != nil {
 		return fmt.Errorf("failed to decrement number of slabs: %w", err)
 	}
 
@@ -556,8 +609,8 @@ RETURNING connect_key_id`, pinnedDataDelta, pinnedSizeDelta, accountID).Scan(&co
 }
 
 // UnpinSlab removes the association between the account and the given slab. If
-// this slab was only owned by the given account, it will also be deleted.  The
-// sectors of the slab will also be removed in that case.
+// this slab is no longer owned by any account, it and its sectors are queued
+// for deletion by PruneDeletedSlabs in a background loop.
 func (s *Store) UnpinSlab(account proto.Account, slabID slabs.SlabID) error {
 	return s.transaction(func(ctx context.Context, tx *txn) error {
 		id, _, err := accountID(ctx, tx, account)
@@ -907,23 +960,28 @@ func (s *Store) UnhealthySlabs(cursor int64, limit int) (unhealthy []slabs.SlabI
 				SELECT id FROM (SELECT id FROM lost UNION ALL SELECT id FROM bad) u
 				ORDER BY id LIMIT $2
 			), unhealthy AS (
-				SELECT DISTINCT s.id, s.digest
+				SELECT DISTINCT ss.slab_id AS id
 				FROM slab_sectors ss
-				JOIN slabs s ON s.id = ss.slab_id
 				WHERE ss.sector_id IN (SELECT id FROM batch)
-					AND s.next_repair_attempt < NOW()
+			), claimed AS (
+				UPDATE slabs SET next_repair_attempt = $3
+				WHERE id IN (
+					SELECT id FROM slabs
+					WHERE id IN (SELECT id FROM unhealthy) AND next_repair_attempt < NOW()
+					FOR UPDATE SKIP LOCKED
+				)
+				RETURNING id, digest
 			)
-			SELECT cur.next_cursor, u.id, u.digest
+			SELECT cur.next_cursor, c.id, c.digest
 			FROM (SELECT max(id) AS next_cursor FROM batch) cur
-			LEFT JOIN unhealthy u ON true;`
+			LEFT JOIN claimed c ON true;`
 
-		rows, err := tx.Query(ctx, query, cursor, limit)
+		rows, err := tx.Query(ctx, query, cursor, limit, time.Now().Add(minRepairBackoff))
 		if err != nil {
 			return fmt.Errorf("failed to query unhealthy slabs: %w", err)
 		}
 		defer rows.Close()
 
-		var slabIDs []int64
 		for rows.Next() {
 			var nc, slabID sql.NullInt64
 			var digest sql.Null[sqlHash256]
@@ -933,23 +991,9 @@ func (s *Store) UnhealthySlabs(cursor int64, limit int) (unhealthy []slabs.SlabI
 			nextCursor = nc.Int64
 			if slabID.Valid {
 				unhealthy = append(unhealthy, slabs.SlabID(digest.V))
-				slabIDs = append(slabIDs, slabID.Int64)
 			}
 		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return fmt.Errorf("failed to get unhealthy slabs: %w", err)
-		} else if len(slabIDs) == 0 {
-			return nil
-		}
-
-		// update next repair attempt time
-		_, err = tx.Exec(ctx, `UPDATE slabs SET next_repair_attempt = $1 WHERE id = ANY($2)`, time.Now().Add(minRepairBackoff), slabIDs)
-		if err != nil {
-			return fmt.Errorf("failed to update next repair attempt: %w", err)
-		}
-
-		return nil
+		return rows.Err()
 	})
 	if err == nil {
 		s.log.Debug("unhealthy slabs", zap.Int64("cursor", cursor), zap.Int64("nextCursor", nextCursor), zap.Int("slabs", len(unhealthy)), zap.Duration("elapsed", time.Since(start)))

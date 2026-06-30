@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -533,30 +534,141 @@ func TestSectorsForIntegrityCheck(t *testing.T) {
 	updateNextCheck(root3, now.Add(-time.Millisecond)) // requires check
 	updateNextCheck(root1, now.Add(1*time.Hour))       // doesn't require check
 
-	// make sure limit is applied
-	assertSectors := func(limit int) {
+	assertSet := func(got []types.Hash256, want ...types.Hash256) {
 		t.Helper()
-		expected := []types.Hash256{root2, root4, root3}
-		sectors, err := store.SectorsForIntegrityCheck(hk, limit)
-		if err != nil {
-			t.Fatal(err)
-		} else if len(sectors) != min(limit, len(expected)) {
-			t.Fatalf("expected 3 sectors, got %d", len(sectors))
-		} else if !reflect.DeepEqual(sectors, expected[:min(limit, len(expected))]) {
-			t.Fatal("sectors don't match expected roots")
+		gotSet := make(map[types.Hash256]struct{}, len(got))
+		for _, r := range got {
+			gotSet[r] = struct{}{}
+		}
+		if len(gotSet) != len(got) {
+			t.Fatalf("returned duplicate sectors: %v", got)
+		} else if len(got) != len(want) {
+			t.Fatalf("expected %d sectors, got %d", len(want), len(got))
+		}
+		for _, r := range want {
+			if _, ok := gotSet[r]; !ok {
+				t.Fatalf("expected sector %v in result %v", r, got)
+			}
 		}
 	}
-	assertSectors(10)
-	assertSectors(3)
-	assertSectors(2)
-	assertSectors(1)
 
-	// no sectors for unknown host
-	sectors, err := store.SectorsForIntegrityCheck(types.PublicKey{2}, 10)
+	// the limit selects the most-overdue sectors first: with a limit of 2 the two
+	// oldest (root2, root4) are returned, not the barely-due root3.
+	got, err := store.SectorsForIntegrityCheck(hk, 2)
 	if err != nil {
 		t.Fatal(err)
-	} else if len(sectors) != 0 {
-		t.Fatalf("expected 0 sectors, got %d", len(sectors))
+	}
+	assertSet(got, root2, root4)
+
+	// fetching claims the sectors (pushes their next_integrity_check into the
+	// future), so the next call no longer returns them and hands out the
+	// remaining due sector instead.
+	got, err = store.SectorsForIntegrityCheck(hk, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSet(got, root3)
+
+	// all due sectors have now been claimed -> nothing left to check
+	got, err = store.SectorsForIntegrityCheck(hk, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSet(got)
+
+	// the claimed sectors were pushed ~integrityCheckClaimInterval into the
+	// future, while root1 (never due, never returned) is untouched.
+	var root2Next, root1Next time.Time
+	if err := store.pool.QueryRow(t.Context(), `SELECT next_integrity_check FROM sectors WHERE sector_root = $1`, sqlHash256(root2)).Scan(&root2Next); err != nil {
+		t.Fatal(err)
+	} else if d := time.Until(root2Next); d < integrityCheckClaimInterval/2 {
+		t.Fatalf("expected root2 to be claimed ~%s into the future, got %s", integrityCheckClaimInterval, d)
+	}
+	if err := store.pool.QueryRow(t.Context(), `SELECT next_integrity_check FROM sectors WHERE sector_root = $1`, sqlHash256(root1)).Scan(&root1Next); err != nil {
+		t.Fatal(err)
+	} else if !root1Next.Equal(now.Add(time.Hour)) {
+		t.Fatalf("expected root1 next_integrity_check unchanged at %s, got %s", now.Add(time.Hour), root1Next)
+	}
+
+	// no sectors for unknown host
+	got, err = store.SectorsForIntegrityCheck(types.PublicKey{2}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSet(got)
+}
+
+// TestSectorsForIntegrityCheckConcurrent verifies that when multiple integrity
+// check workers - e.g. on different nodes checking the same host - fetch sectors
+// concurrently, each due sector is handed out exactly once (no duplicate checks,
+// full coverage), because fetching atomically claims the sectors.
+func TestSectorsForIntegrityCheckConcurrent(t *testing.T) {
+	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
+
+	account := proto.Account{1}
+	store.addTestAccount(t, types.PublicKey(account))
+	hk := store.addTestHost(t)
+	store.addTestContract(t, hk)
+
+	// pin many sectors, all due for an integrity check
+	const nSectors = 500
+	roots := make([]slabs.PinnedSector, nSectors)
+	want := make(map[types.Hash256]struct{}, nSectors)
+	for i := range roots {
+		root := frand.Entropy256()
+		roots[i] = slabs.PinnedSector{Root: root, HostKey: hk}
+		want[root] = struct{}{}
+	}
+	if _, err := store.PinSlabs(account, time.Now().Add(-time.Hour), slabs.SlabPinParams{
+		EncryptionKey: frand.Entropy256(),
+		MinShards:     1,
+		Sectors:       roots,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	const (
+		workers   = 8
+		batchSize = 7
+	)
+	var mu sync.Mutex
+	claimedBy := make(map[types.Hash256]int)
+
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Go(func() {
+			for {
+				batch, err := store.SectorsForIntegrityCheck(hk, batchSize)
+				if err != nil {
+					t.Errorf("worker failed: %v", err)
+					return
+				}
+				if len(batch) == 0 {
+					return
+				}
+				mu.Lock()
+				for _, r := range batch {
+					claimedBy[r]++
+				}
+				mu.Unlock()
+			}
+		})
+	}
+	wg.Wait()
+
+	// every sector must be claimed exactly once.
+	var duplicates, missing int
+	for r := range want {
+		switch claimedBy[r] {
+		case 0:
+			missing++
+		case 1:
+		default:
+			duplicates++
+		}
+	}
+	if duplicates != 0 || missing != 0 {
+		t.Fatalf("expected every sector claimed exactly once: %d duplicated, %d missing (of %d)", duplicates, missing, nSectors)
 	}
 }
 
@@ -1473,6 +1585,7 @@ func TestUnpinSlab(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	store.pruneAllDeletedSlabs(t)
 
 	// assert counts
 	assertAccountSlabs(acc1, 1)
@@ -1490,6 +1603,7 @@ func TestUnpinSlab(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	store.pruneAllDeletedSlabs(t)
 
 	// assert counts
 	assertAccountSlabs(acc1, 0)
@@ -1507,6 +1621,7 @@ func TestUnpinSlab(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	store.pruneAllDeletedSlabs(t)
 
 	// assert counts
 	assertAccountSlabs(acc1, 0)
@@ -1524,6 +1639,7 @@ func TestUnpinSlab(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	store.pruneAllDeletedSlabs(t)
 
 	// assert counts
 	assertAccountSlabs(acc1, 0)
@@ -1948,12 +2064,15 @@ func TestUnhealthySlabs(t *testing.T) {
 				SELECT decode(lpad(to_hex(2000000 + g), 64, '0'), 'hex'), $3, $4, NOW()
 				FROM generate_series($1::int, $2::int) g
 				RETURNING id
+			), linked AS (
+				INSERT INTO slab_sectors (slab_id, sector_id, slab_index)
+				SELECT sl.id, sec.id, 0
+				FROM (SELECT id, row_number() OVER (ORDER BY id) rn FROM new_slabs) sl
+				JOIN (SELECT id, row_number() OVER (ORDER BY id) rn FROM new_sectors) sec ON sl.rn = sec.rn
 			)
-			INSERT INTO slab_sectors (slab_id, sector_id, slab_index)
-			SELECT sl.id, sec.id, 0
-			FROM (SELECT id, row_number() OVER (ORDER BY id) rn FROM new_slabs) sl
-			JOIN (SELECT id, row_number() OVER (ORDER BY id) rn FROM new_sectors) sec ON sl.rn = sec.rn`,
-			from, to, hostID, csmID)
+			INSERT INTO account_slabs (account_id, slab_id)
+			SELECT (SELECT id FROM accounts WHERE public_key = $5), id FROM new_slabs`,
+			from, to, hostID, csmID, sqlPublicKey(types.PublicKey(account)))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2024,6 +2143,76 @@ func TestUnhealthySlabs(t *testing.T) {
 	unhealthy = assertUnhealthySlabs(1)
 	if unhealthy[0] != want {
 		t.Fatalf("expected slab ID %v, got %v", want, unhealthy[0])
+	}
+}
+
+// TestUnhealthySlabsConcurrent verifies that multiple processes walking
+// UnhealthySlabs against the same database claim disjoint sets of slabs.
+func TestUnhealthySlabsConcurrent(t *testing.T) {
+	store := initPostgres(t, zap.NewNop())
+
+	account := proto.Account{1}
+	store.addTestAccount(t, types.PublicKey(account))
+	hk := store.addTestHost(t)
+	store.addTestContract(t, hk)
+
+	const numSlabs = 2000
+	want := make(map[slabs.SlabID]struct{}, numSlabs)
+	for i := range numSlabs {
+		// mix 1-of-2 and 2-of-2 slabs
+		want[store.pinTestSlab(t, account, uint(1+i%2), []types.PublicKey{hk, hk})] = struct{}{}
+	}
+	// pin every sector to the contract, mark it bad, and make all slabs
+	// immediately eligible so the whole set is unhealthy at once.
+	if _, err := store.pool.Exec(t.Context(), "UPDATE sectors SET contract_sectors_map_id = 1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.pool.Exec(t.Context(), "UPDATE contracts SET good = FALSE"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.pool.Exec(t.Context(), "UPDATE slabs SET next_repair_attempt = NOW() - INTERVAL '1 hour'"); err != nil {
+		t.Fatal(err)
+	}
+
+	// run several concurrent walkers, each advancing its own cursor.
+	const workers = 8
+	var mu sync.Mutex
+	claimed := make(map[slabs.SlabID]int)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Go(func() {
+			var cursor int64
+			for {
+				batch, next, err := store.UnhealthySlabs(cursor, 10)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				mu.Lock()
+				for _, id := range batch {
+					claimed[id]++
+				}
+				mu.Unlock()
+				if next == 0 {
+					return
+				}
+				cursor = next
+			}
+		})
+	}
+	wg.Wait()
+
+	// every unhealthy slab claimed exactly once, by exactly one walker
+	for id, n := range claimed {
+		if n != 1 {
+			t.Fatalf("slab %v claimed %d times, want exactly 1", id, n)
+		}
+		if _, ok := want[id]; !ok {
+			t.Fatalf("claimed unexpected slab %v", id)
+		}
+	}
+	if len(claimed) != numSlabs {
+		t.Fatalf("claimed %d distinct slabs, want %d", len(claimed), numSlabs)
 	}
 }
 
