@@ -151,21 +151,6 @@ func (cm *ContractManager) FundAccounts(ctx context.Context, host hosts.Host, co
 		return nil
 	}
 
-	// fund service accounts
-	serviceAccounts := cm.accounts.ServiceAccounts(host.PublicKey)
-	if len(serviceAccounts) > 0 {
-		fundTarget := accounts.HostFundTarget(host, serviceAccountFundTargetBytes)
-		funded, _, _, err := cm.accountFunder.FundAccounts(ctx, host, contractIDs, serviceAccounts, fundTarget, log)
-		if err != nil {
-			return fmt.Errorf("failed to fund service accounts: %w", err)
-		}
-
-		if err := cm.accounts.UpdateServiceAccounts(serviceAccounts[:funded], fundTarget); err != nil {
-			cm.log.Warn("failed to update service account balances", zap.Error(err))
-		}
-		return nil
-	}
-
 	threshold := time.Now().Add(-accounts.AccountActivityThreshold)
 OUTER:
 	for _, quota := range quotas {
@@ -253,10 +238,11 @@ func (cm *ContractManager) FundServiceAccounts(ctx context.Context, host hosts.H
 	serviceAccounts := cm.accounts.ServiceAccounts(host.PublicKey)
 	if len(serviceAccounts) > 0 {
 		fundTarget := accounts.HostFundTarget(host, serviceAccountFundTargetBytes)
-		funded, _, _, err := cm.accountFunder.FundAccounts(ctx, host, contractIDs, serviceAccounts, fundTarget, log)
+		funded, _, deposits, err := cm.accountFunder.FundAccounts(ctx, host, contractIDs, serviceAccounts, fundTarget, log)
 		if err != nil {
 			return fmt.Errorf("failed to fund service accounts: %w", err)
 		}
+		recordFundingEvents(cm.accounts, host, deposits, false, log)
 
 		if err := cm.accounts.UpdateServiceAccounts(serviceAccounts[:funded], fundTarget); err != nil {
 			cm.log.Warn("failed to update service account balances", zap.Error(err))

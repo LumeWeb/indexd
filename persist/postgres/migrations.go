@@ -197,7 +197,10 @@ ALTER TABLE funding_events ADD COLUMN IF NOT EXISTS fund_type TEXT NOT NULL DEFA
 ALTER TABLE funding_events ADD COLUMN IF NOT EXISTS pool_id INTEGER NULL REFERENCES pools(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS funding_events_fund_type_idx ON funding_events(fund_type);
 CREATE INDEX IF NOT EXISTS funding_events_pool_id_idx ON funding_events(pool_id) WHERE pool_id IS NOT NULL;
-`)
+CREATE TABLE slab_deletion_queue (
+    id BIGSERIAL PRIMARY KEY,
+    slab_id BIGINT NOT NULL
+);`)
 		return err
 	},
 }

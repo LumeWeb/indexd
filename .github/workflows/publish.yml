@@ -1,9 +1,13 @@
 name: Publish
 
+# Controls when the action will run.
 on:
   push:
     branches:
       - '**'
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-**"
 
 concurrency:
   group: ${{ github.workflow }}
@@ -23,18 +27,18 @@ jobs:
       packages: write
       contents: read
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: "1.26"
-      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+      - uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+      - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+      - uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
         name: generate tags
         id: meta
         with:
@@ -42,7 +46,8 @@ jobs:
           tags: |
             type=ref,event=branch
             type=sha,prefix=
-      - uses: docker/build-push-action@v5
+            type=semver,pattern={{version}}
+      - uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -50,3 +55,127 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+  binaries:
+    name: Publish Binaries
+    needs:
+      - test
+    strategy:
+      matrix:
+        include:
+          - OS: ubuntu-latest
+            GOARCH: amd64
+            RELEASE_PLATFORM: linux
+          - OS: ubuntu-latest
+            GOARCH: arm64
+            RELEASE_PLATFORM: linux
+          - OS: macos-latest
+            GOARCH: amd64
+            RELEASE_PLATFORM: macos
+          - OS: macos-latest
+            GOARCH: arm64
+            RELEASE_PLATFORM: macos
+          - OS: windows-latest
+            GOARCH: amd64
+            RELEASE_PLATFORM: windows
+    runs-on: ${{ matrix.OS }}
+    env:
+      RELEASE_NAME: indexd_${{ matrix.RELEASE_PLATFORM }}_${{ matrix.GOARCH }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: "1.26"
+      - name: Setup macOS
+        if: ${{ matrix.OS == 'macos-latest' }}
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_KEY_B64: ${{ secrets.APPLE_KEY_B64 }}
+          APPLE_CERT_B64: ${{ secrets.APPLE_CERT_B64 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_KEYCHAIN_PASSWORD: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+        run: |
+          # extract apple cert
+          APPLE_CERT_PATH=$RUNNER_TEMP/apple_cert.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          echo -n "$APPLE_CERT_B64" | base64 --decode --output $APPLE_CERT_PATH
+
+          # extract apple key
+          mkdir -p ~/private_keys
+          APPLE_API_KEY_PATH=~/private_keys/AuthKey_$APPLE_API_KEY.p8
+          echo -n "$APPLE_KEY_B64" | base64 --decode --output $APPLE_API_KEY_PATH
+
+          # create temp keychain
+          security create-keychain -p "$APPLE_KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security default-keychain -s $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$APPLE_KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          # import keychain
+          security import $APPLE_CERT_PATH -P $APPLE_CERT_PASSWORD -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security find-identity -v $KEYCHAIN_PATH -p codesigning
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k $APPLE_KEYCHAIN_PASSWORD $KEYCHAIN_PATH
+
+          # resync system clock https://github.com/actions/runner/issues/2996#issuecomment-1833103110
+          sudo sntp -sS time.windows.com
+      - name: Setup Windows
+        if: ${{ matrix.OS == 'windows-latest' }}
+        run: |
+          dotnet tool install --global AzureSignTool
+      - name: Generate
+        run: |
+          go mod download
+          go generate ./...
+      - name: Build
+        env:
+          GOARCH: ${{ matrix.GOARCH }}
+        run: go build -o bin/ -tags='netgo timetzdata' -trimpath -a -ldflags '-s -w' ./...
+      - name: Sign macOS
+        if: ${{ matrix.OS == 'macos-latest' }}
+        env:
+          APPLE_CERT_ID: ${{ secrets.APPLE_CERT_ID }}
+        run: |
+          for file in bin/*; do
+            /usr/bin/codesign --deep -f -v --timestamp -o runtime,library -s $APPLE_CERT_ID $file
+          done
+      - name: Sign Windows
+        if: ${{ matrix.OS == 'windows-latest' }}
+        shell: bash
+        run: |
+          for file in bin/*; do
+            azuresigntool sign -kvu "${{ secrets.AZURE_KEY_VAULT_URI }}" -kvi "${{ secrets.AZURE_CLIENT_ID }}" -kvt "${{ secrets.AZURE_TENANT_ID }}" -kvs "${{ secrets.AZURE_CLIENT_SECRET }}" -kvc ${{ secrets.AZURE_CERT_NAME }} -tr http://timestamp.digicert.com -v $file
+          done
+      - name: Package macOS
+        if: ${{ matrix.OS == 'macos-latest' }}
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          mkdir -p release
+          ZIP_OUTPUT=release/$RELEASE_NAME.zip
+          # copy meta files to bin
+          cp README.md LICENSE bin/
+          # zip binaries with ditto for notarytool
+          ditto -ck bin $ZIP_OUTPUT
+          # submit to notary service
+          xcrun notarytool submit -k ~/private_keys/AuthKey_$APPLE_API_KEY.p8 -d $APPLE_API_KEY -i $APPLE_API_ISSUER --wait --timeout 10m $ZIP_OUTPUT
+      - name: Package
+        if: ${{ matrix.OS != 'macos-latest' }}
+        shell: bash
+        run: |
+          mkdir -p release
+          ZIP_OUTPUT=release/$RELEASE_NAME.zip
+          cp README.md LICENSE bin/
+          7z a $ZIP_OUTPUT ./bin/*
+      - name: Upload Artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ env.RELEASE_NAME}}
+          path: release/*
+  combine-release-assets:
+    runs-on: ubuntu-latest
+    needs: binaries
+    steps:
+      - name: Merge Artifacts
+        uses: actions/upload-artifact/merge@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: indexd

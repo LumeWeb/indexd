@@ -47,8 +47,6 @@ type (
 		PoolFundingInfo(threshold time.Time) ([]QuotaFundInfo, error)
 		UpdateHostAccounts(accounts []HostAccount) error
 		UpdateHostPools(pools []HostPool) error
-		RecordFundingEvents(events []FundingEvent) error
-		FundingEvents(cursor FundingCursor, limit int) ([]FundingEvent, error)
 
 		ValidAppConnectKey(string) error
 		AppConnectKeyUserSecret(string) (secret types.Hash256, err error)
@@ -66,12 +64,16 @@ type (
 		Quotas(offset, limit int) ([]Quota, error)
 
 		PruneAccounts(limit int) error
+		PruneDeletedSlabs(limit int) (int, error)
 		AccountFundingInfo(threshold time.Time) ([]QuotaFundInfo, error)
 		Account(types.PublicKey) (Account, error)
 		Accounts(offset, limit int, opts ...QueryAccountsOpt) ([]Account, error)
 		HasAccount(types.PublicKey) (bool, error)
 		DeleteAccount(acc proto.Account) error
 		UpdateAccount(types.PublicKey, UpdateAccountRequest) error
+
+		RecordFundingEvents(events []FundingEvent) error
+		FundingEvents(cursor FundingCursor, limit int) ([]FundingEvent, error)
 
 		AccountStats() (AccountStats, error)
 		AppStats(offset, limit int) ([]AppStats, error)
@@ -195,17 +197,6 @@ func (m *AccountManager) UpdateHostAccounts(accounts []HostAccount) error {
 // UpdateHostPools updates the given host pools.
 func (m *AccountManager) UpdateHostPools(pools []HostPool) error {
 	return m.store.UpdateHostPools(pools)
-}
-
-// RecordFundingEvents records the given funding events.
-func (m *AccountManager) RecordFundingEvents(events []FundingEvent) error {
-	return m.store.RecordFundingEvents(events)
-}
-
-// FundingEvents returns a list of funding events starting after the given
-// cursor.
-func (m *AccountManager) FundingEvents(cursor FundingCursor, limit int) ([]FundingEvent, error) {
-	return m.store.FundingEvents(cursor, limit)
 }
 
 // ServiceAccounts returns all registered service accounts for a given host.
@@ -341,4 +332,15 @@ func (m *AccountManager) performPruneAccounts() error {
 
 	log.Debug("finished pruning accounts", zap.Duration("elapsed", time.Since(start)))
 	return nil
+}
+
+// RecordFundingEvents records the given funding events.
+func (m *AccountManager) RecordFundingEvents(events []FundingEvent) error {
+	return m.store.RecordFundingEvents(events)
+}
+
+// FundingEvents returns a list of funding events starting after the given
+// cursor, up to the given limit.
+func (m *AccountManager) FundingEvents(cursor FundingCursor, limit int) ([]FundingEvent, error) {
+	return m.store.FundingEvents(cursor, limit)
 }
