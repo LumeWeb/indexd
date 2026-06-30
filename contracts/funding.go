@@ -195,7 +195,7 @@ OUTER:
 					continue
 				}
 
-			// fund accounts
+				// fund accounts
 				funded, drained, deposits, err := cm.accountFunder.FundAccounts(ctx, host, contractIDs, batch.accs, batch.target, log)
 				if err != nil {
 					return fmt.Errorf("failed to fund accounts: %w", err)
