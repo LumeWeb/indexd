@@ -1,0 +1,83 @@
+name: Sync Upstream
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork master
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config --global user.name github-actions[bot]
+          git config --global user.email 41898282+github-actions[bot]@users.noreply.github.com
+
+      - name: Merge upstream
+        id: merge
+        run: |
+          git remote add upstream https://github.com/SiaFoundation/indexd.git
+          git fetch upstream master
+
+          git checkout -b sync/upstream
+
+          if ! git merge upstream/master --no-edit; then
+            echo "::error::Merge has conflicts that require manual resolution."
+            git merge --abort
+            git remote remove upstream
+            exit 1
+          fi
+
+          # Capture upstream commit log for changelog before removing remote
+          RAW_LOG=$(git log --oneline origin/master..upstream/master 2>/dev/null || echo "")
+          {
+            echo "raw_log<<EOF"
+            echo "$RAW_LOG"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          git remote remove upstream
+
+      - name: Generate changelog
+        id: changelog
+        env:
+          RAW_LOG: ${{ steps.merge.outputs.raw_log }}
+        run: |
+          {
+            echo "body<<EOF"
+            echo "Merges \`SiaFoundation/indexd:master\` into \`LumeWeb/indexd:master\`."
+            echo ""
+            echo "### Upstream commits"
+            echo ""
+            if [ -z "$RAW_LOG" ]; then
+              echo "No new commits found."
+            else
+              while IFS= read -r line; do
+                SHA="${line%% *}"
+                SUBJECT="${line#* }"
+                echo "- [\`$SHA\`](https://github.com/SiaFoundation/indexd/commit/$SHA) $SUBJECT"
+              done <<< "$RAW_LOG"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@4320041ed380b20e97d388d56a7fb4f9b8c20e79 # v7.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          base: master
+          branch: sync/upstream
+          title: "chore: sync upstream SiaFoundation/indexd"
+          body: ${{ steps.changelog.outputs.body }}
+          labels: |
+            sync
+            automated
+          delete-branch: true
