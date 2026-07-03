@@ -15,6 +15,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Configure Git
         run: |
@@ -45,6 +46,11 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
           git remote remove upstream
+
+          # Soft-reset the merge commit so changes are uncommitted in the
+          # working tree. CPR needs uncommitted changes to create its own
+          # commit and push the branch.
+          git reset --soft origin/master
 
       - name: Generate changelog
         id: changelog
