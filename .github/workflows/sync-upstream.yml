@@ -15,7 +15,6 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
-          persist-credentials: false
 
       - name: Configure Git
         run: |
@@ -47,11 +46,6 @@ jobs:
 
           git remote remove upstream
 
-          # Soft-reset the merge commit so changes are uncommitted in the
-          # working tree. CPR needs uncommitted changes to create its own
-          # commit and push the branch.
-          git reset --soft origin/master
-
       - name: Generate changelog
         id: changelog
         env:
@@ -75,15 +69,26 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Push sync branch
+        run: |
+          git push origin sync/upstream --force
+
       - name: Create pull request
-        uses: peter-evans/create-pull-request@4320041ed380b20e97d388d56a7fb4f9b8c20e79 # v7.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          base: master
-          branch: sync/upstream
-          title: "chore: sync upstream SiaFoundation/indexd"
-          body: ${{ steps.changelog.outputs.body }}
-          labels: |
-            sync
-            automated
-          delete-branch: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_EXISTS=$(gh pr list --repo LumeWeb/indexd --head sync/upstream --base master --json number --jq 'length')
+          if [ "$PR_EXISTS" -eq 0 ]; then
+            gh pr create \
+              --repo LumeWeb/indexd \
+              --base master \
+              --head sync/upstream \
+              --title "chore: sync upstream SiaFoundation/indexd" \
+              --body "${{ steps.changelog.outputs.body }}" \
+              --label sync \
+              --label automated
+          else
+            PR_NUMBER=$(gh pr list --repo LumeWeb/indexd --head sync/upstream --base master --json number --jq '.[0].number')
+            gh pr edit "$PR_NUMBER" --repo LumeWeb/indexd --body "${{ steps.changelog.outputs.body }}"
+            echo "PR #$PR_NUMBER already exists, updated body."
+          fi
