@@ -27,6 +27,8 @@ jobs:
           git remote add upstream https://github.com/SiaFoundation/indexd.git
           git fetch upstream master
 
+          git checkout -b sync/upstream
+
           if ! git merge upstream/master --no-edit; then
             echo "::error::Merge has conflicts that require manual resolution."
             git merge --abort
