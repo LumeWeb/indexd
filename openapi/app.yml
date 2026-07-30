@@ -171,6 +171,10 @@ paths:
       tags:
         - objects
       summary: Delete an object
+      description: >
+        Deletes the object. Slabs that were referenced by the object and are no
+        longer referenced by any of the account's objects are unpinned and
+        queued for deletion by a background process.
       parameters:
         - name: key
           in: path
@@ -268,6 +272,12 @@ paths:
             schema:
               type: object
               properties:
+                version:
+                  type: integer
+                  format: uint8
+                  maximum: 1
+                  default: 0
+                  description: The slab encoding version.
                 encryptionKey:
                   allOf:
                     - $ref: "#/components/schemas/EncryptionKey"
@@ -348,6 +358,10 @@ paths:
                     allOf:
                       - $ref: "#/components/schemas/SlabID"
                       - description: The ID of the slab
+                  version:
+                    type: integer
+                    format: uint8
+                    description: The slab encoding version, folded into the slab ID for versions greater than 0
                   encryptionKey:
                     allOf:
                       - $ref: "#/components/schemas/EncryptionKey"
@@ -405,6 +419,10 @@ paths:
       responses:
         "204":
           description: Slab unpinned successfully
+        "404":
+          description: Slab not found
+        "409":
+          description: Slab is still referenced by one of the account's objects
 
       x-codeSamples:
         - lang: Go
@@ -436,7 +454,7 @@ paths:
       parameters:
         - name: before
           in: query
-          description: Only slabs pinned before this timestamp are eligible for pruning. Defaults to one hour ago.
+          description: Only slabs pinned before this timestamp are eligible for pruning. Defaults to 72 hours ago.
           schema:
             type: string
             format: date-time
@@ -453,6 +471,8 @@ paths:
         Initiates a connection request. The request must be signed with an ephemeral ed25519 key
         using the signed URL scheme. The server binds the connection flow to that ephemeral key —
         subsequent calls to the status and register endpoints must be signed with the same key.
+        When a valid pre-authorization proof is supplied, the request is approved immediately. The
+        proof signs the exact request and ephemeral key; the private pre-authorized key is never sent.
       operationId: requestAppConnection
       requestBody:
         required: true
@@ -492,6 +512,14 @@ paths:
                   format: uri
                   maxLength: 2048
                   description: Optional URL the indexer can redirect to after approval
+                preAuthorizedKey:
+                  allOf:
+                    - $ref: "#/components/schemas/PublicKey"
+                    - description: Optional pre-authorized public key used to bypass interactive approval
+                preAuthorizationSignature:
+                  allOf:
+                    - $ref: "#/components/schemas/Signature"
+                    - description: Signature binding the pre-authorized key to this connection request and ephemeral key
       responses:
         "200":
           description: Application connection request accepted
@@ -501,6 +529,8 @@ paths:
                 $ref: "#/components/schemas/RegisterAppResponse"
         "400":
           description: Invalid request (missing required fields or field exceeds maximum length)
+        "401":
+          description: Invalid request signature or pre-authorization proof
         "409":
           description: Application already connected
         "429":
@@ -520,6 +550,7 @@ paths:
             )
 
             var appID = frand.Entropy256() // app ID should be constant for your application, not random
+            var preAuthorizedKey types.PrivateKey // generated and retained when its public key was pre-authorized
 
             func main() {
               client := app.NewClient("http://localhost:9982")
@@ -531,7 +562,7 @@ paths:
                 LogoURL:     "https://example.com/logo.png",
                 ServiceURL:  "https://example.com",
                 CallbackURL: "https://example.com/connected",
-              })
+              }, app.WithPreAuthorizedKey(preAuthorizedKey)) // optional
               ...
             }
 
@@ -717,6 +748,8 @@ components:
       $ref: "./components.yml#/components/schemas/ObjectEvent"
     PublicKey:
       $ref: "./components.yml#/components/schemas/PublicKey"
+    Signature:
+      $ref: "./components.yml#/components/schemas/Signature"
     RegisterAppResponse:
       $ref: "./components.yml#/components/schemas/RegisterAppResponse"
     SlabID:

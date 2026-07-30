@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/slabs"
@@ -59,8 +60,8 @@ func (s *Store) Slab(slabID slabs.SlabID) (slab slabs.Slab, err error) {
 		slab.Sectors = slab.Sectors[:0] // reuse same slice if transaction retries
 
 		var dbID int64
-		err = tx.QueryRow(ctx, `SELECT s.id, s.encryption_key, s.min_shards, s.pinned_at FROM slabs s WHERE digest = $1`, sqlHash256(slabID)).Scan(
-			&dbID, (*sqlHash256)(&slab.EncryptionKey), &slab.MinShards, &slab.PinnedAt)
+		err = tx.QueryRow(ctx, `SELECT s.id, s.encryption_key, s.min_shards, s.version, s.pinned_at FROM slabs s WHERE digest = $1`, sqlHash256(slabID)).Scan(
+			&dbID, (*sqlHash256)(&slab.EncryptionKey), &slab.MinShards, &slab.Version, &slab.PinnedAt)
 		if errors.Is(err, sql.ErrNoRows) {
 			return slabs.ErrSlabNotFound
 		} else if err != nil {
@@ -113,12 +114,12 @@ func (s *Store) PinnedSlab(account proto.Account, slabID slabs.SlabID) (slab sla
 
 		// require an account_slabs association so an unpinned slab reads as not found
 		var dbID int64
-		err = tx.QueryRow(ctx, `SELECT s.id, s.encryption_key, s.min_shards
+		err = tx.QueryRow(ctx, `SELECT s.id, s.encryption_key, s.min_shards, s.version
 FROM slabs s
 JOIN account_slabs a ON a.slab_id = s.id
 JOIN accounts acc ON acc.id = a.account_id
 WHERE s.digest = $1 AND acc.public_key = $2`, sqlHash256(slabID), sqlPublicKey(account)).Scan(
-			&dbID, (*sqlHash256)(&slab.EncryptionKey), &slab.MinShards)
+			&dbID, (*sqlHash256)(&slab.EncryptionKey), &slab.MinShards, &slab.Version)
 		if errors.Is(err, sql.ErrNoRows) {
 			return slabs.ErrSlabNotFound
 		} else if err != nil {
@@ -189,38 +190,23 @@ LIMIT $3
 		if err != nil {
 			return nil, fmt.Errorf("failed to get unused slabs: %w", err)
 		}
-		defer rows.Close()
-
-		var slabIDs []int64
-		for rows.Next() {
-			var slabID int64
-			if err := rows.Scan(&slabID); err != nil {
-				return nil, fmt.Errorf("failed to scan slab ID: %w", err)
-			}
-			slabIDs = append(slabIDs, slabID)
-		}
-		if err := rows.Err(); err != nil {
-			return nil, fmt.Errorf("failed to get slab IDs: %w", err)
-		} else if len(slabIDs) == 0 {
-			return nil, nil
-		}
-		return slabIDs, nil
+		return pgx.CollectRows(rows, pgx.RowTo[int64])
 	}
 
 	var exhausted bool
 	const batchSize = 100
 	for !exhausted {
 		err := s.transaction(func(ctx context.Context, tx *txn) error {
-			slabIDs, err := getSlabs(ctx, tx, batchSize)
+			candidates, err := getSlabs(ctx, tx, batchSize)
 			if err != nil {
 				return fmt.Errorf("failed to get slabs to unpin: %w", err)
-			} else if err := s.unpinSlabs(ctx, tx, id, slabIDs); err != nil {
-				return fmt.Errorf("failed to unpin slabs: %w", err)
 			}
-			if len(slabIDs) < batchSize {
-				exhausted = true
+			exhausted = len(candidates) < batchSize
+			if len(candidates) == 0 {
+				return nil
 			}
-			return nil
+
+			return s.unpinUnreferencedSlabs(ctx, tx, id, candidates, &cutoff)
 		})
 		if err != nil {
 			return err

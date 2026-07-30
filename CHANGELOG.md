@@ -1,3 +1,41 @@
+## 0.4.1 (2026-07-23)
+
+### Features
+
+- Add `remote` subcommand for spinning up a migration-only remote indexer which can help the main indexer migrate faster.
+- Added tracking for active connect key metrics.
+
+#### Added support for pre-authorized keys
+
+Pre-authorized keys let developers connect apps without requiring users to complete an interactive approval flow first.
+
+### Fixes
+
+- Bound host connects in the RHP4 client with a 10 second connect timeout
+- Clamp value of failureRate at sane epsilon to make sure hosts go back to 0 failures eventually
+- Extend ContractsStats and HostStats with information about locked allowance
+- Treat corrupt sectors as lost
+- Unblock usable hosts that were automatically blocked due to being unusable
+- Update default cutoff when pruning slabs to 72 hours
+
+## 0.4.0 (2026-07-08)
+
+### Breaking Changes
+
+#### Added support for slab versioning
+
+Slab versioning lets us change the encoding scheme of slabs to add new features or change functionality
+
+### Fixes
+
+- Updated coreutils to v0.23.3
+
+## 0.3.2 (2026-07-04)
+
+### Fixes
+
+- Updated coreutils to v0.23.1 for new sector read error message.
+
 ## 0.3.0 (2026-06-30)
 
 ### Breaking Changes

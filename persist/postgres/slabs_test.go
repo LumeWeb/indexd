@@ -100,6 +100,64 @@ func TestSlab(t *testing.T) {
 	}
 }
 
+func TestSlabVersionRoundTrip(t *testing.T) {
+	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
+	account := proto.Account{1}
+	store.addTestAccount(t, types.PublicKey(account))
+
+	hosts := make([]types.PublicKey, 3)
+	for i := range hosts {
+		hosts[i] = store.addTestHost(t)
+		store.addTestContract(t, hosts[i])
+	}
+
+	params := slabs.SlabPinParams{
+		Version:       1,
+		EncryptionKey: frand.Entropy256(),
+		MinShards:     1,
+		Sectors:       make([]slabs.PinnedSector, 0, len(hosts)),
+	}
+	for _, host := range hosts {
+		params.Sectors = append(params.Sectors, slabs.PinnedSector{
+			Root:    frand.Entropy256(),
+			HostKey: host,
+		})
+	}
+
+	slabIDs, err := store.PinSlabs(account, time.Time{}, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// the version is folded into the slab ID
+	if slabIDs[0] != params.Digest() {
+		t.Fatalf("expected slab ID %v, got %v", params.Digest(), slabIDs[0])
+	}
+
+	slab, err := store.Slab(slabIDs[0])
+	if err != nil {
+		t.Fatal(err)
+	} else if slab.Version != 1 {
+		t.Fatalf("Slab: expected version 1, got %d", slab.Version)
+	}
+
+	pinned, err := store.PinnedSlab(account, slabIDs[0])
+	if err != nil {
+		t.Fatal(err)
+	} else if pinned.Version != 1 {
+		t.Fatalf("PinnedSlab: expected version 1, got %d", pinned.Version)
+	}
+
+	bulk, err := store.Slabs(account, slabIDs)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(bulk) != 1 {
+		t.Fatalf("expected 1 slab, got %d", len(bulk))
+	} else if bulk[0].Version != 1 {
+		t.Fatalf("Slabs: expected version 1, got %d", bulk[0].Version)
+	}
+}
+
 func TestMarkSlabRepaired(t *testing.T) {
 	store := initPostgres(t, zap.NewNop())
 
@@ -389,6 +447,20 @@ func TestSlabPruning(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// pin a third slab for the first account that is never attached to an
+	// object
+	slab3 := slabs.SlabPinParams{
+		MinShards: 1,
+		Sectors: []slabs.PinnedSector{{
+			Root:    frand.Entropy256(),
+			HostKey: hk,
+		}},
+	}
+	if _, err := store.PinSlabs(acc1, time.Time{}, slab3); err != nil {
+		t.Fatal(err)
+	}
+	slab3ID := slab3.Digest()
+
 	assertSlabs := func(acc proto.Account, expected ...slabs.SlabID) {
 		t.Helper()
 
@@ -401,18 +473,20 @@ func TestSlabPruning(t *testing.T) {
 		}
 	}
 
-	assertSlabs(acc1, slab2ID, slab1ID)
+	assertSlabs(acc1, slab3ID, slab2ID, slab1ID)
 	assertSlabs(acc2, slab1ID)
 
-	// delete object for acc1
+	// delete object for acc1; slab1 is no longer referenced by any of acc1's
+	// objects and is unpinned right away
 	if err := store.DeleteObject(acc1, obj1Key); err != nil {
 		t.Fatal(err)
 	}
 
-	assertSlabs(acc1, slab2ID, slab1ID)
+	assertSlabs(acc1, slab3ID, slab2ID)
 	assertSlabs(acc2, slab1ID)
 
-	// prune slabs for acc1
+	// prune slabs for acc1; this removes slab3 which was pinned but never
+	// attached to an object
 	if err := store.PruneSlabs(acc1, time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -420,15 +494,15 @@ func TestSlabPruning(t *testing.T) {
 	assertSlabs(acc1, slab2ID)
 	assertSlabs(acc2, slab1ID)
 
-	// delete object for acc2
+	// delete object for acc2; slab1 is unpinned right away
 	if err := store.DeleteObject(acc2, obj1Key); err != nil {
 		t.Fatal(err)
 	}
 
 	assertSlabs(acc1, slab2ID)
-	assertSlabs(acc2, slab1ID)
+	assertSlabs(acc2)
 
-	// prune slabs for acc2
+	// prune slabs for acc2 is a no-op
 	if err := store.PruneSlabs(acc2, time.Now()); err != nil {
 		t.Fatal(err)
 	}
