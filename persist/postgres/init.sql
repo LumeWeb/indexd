@@ -24,6 +24,19 @@ CREATE TABLE app_connect_keys (
 );
 CREATE INDEX app_connect_keys_quota_name_idx ON app_connect_keys(quota_name);
 
+CREATE TABLE preauthorized_keys (
+    public_key BYTEA PRIMARY KEY CHECK (LENGTH(public_key) = 32),
+    connect_key_id INTEGER NOT NULL REFERENCES app_connect_keys(id) ON DELETE CASCADE,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    total_uses INTEGER NOT NULL CHECK (total_uses > 0),
+    remaining_uses INTEGER NOT NULL CHECK (remaining_uses >= 0 AND remaining_uses <= total_uses),
+    allowed_app_id BYTEA CHECK (allowed_app_id IS NULL OR LENGTH(allowed_app_id) = 32),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    last_used TIMESTAMP WITH TIME ZONE
+);
+CREATE INDEX preauthorized_keys_connect_key_id_idx ON preauthorized_keys(connect_key_id);
+CREATE INDEX preauthorized_keys_expires_at_idx ON preauthorized_keys(expires_at);
+
 CREATE TABLE accounts (
     id SERIAL PRIMARY KEY,
     public_key BYTEA UNIQUE NOT NULL CHECK (LENGTH(public_key) = 32),
@@ -283,7 +296,7 @@ CREATE TABLE contracts (
 CREATE INDEX contracts_host_id_idx ON contracts(host_id);
 
 -- fetching contracts statistics
-CREATE INDEX contracts_active_host_size_idx ON contracts(proof_height, host_id) INCLUDE (good, capacity, size) WHERE state IN (0,1) AND renewed_to IS NULL;
+CREATE INDEX contracts_active_host_size_idx ON contracts(proof_height, host_id) INCLUDE (good, capacity, size, initial_allowance, remaining_allowance) WHERE state IN (0,1) AND renewed_to IS NULL;
 
  -- listing contracts
 CREATE INDEX contracts_host_id_active_good_idx ON contracts(host_id) WHERE state IN (0,1) AND renewed_to IS NULL AND good;
@@ -331,6 +344,7 @@ CREATE TABLE slabs (
 
     encryption_key BYTEA NOT NULL,
     min_shards SMALLINT NOT NULL CHECK(min_shards > 0),
+    version SMALLINT NOT NULL DEFAULT 0 CHECK(version >= 0), -- slab encoding version, folded into digest for version > 0
 
     consecutive_failed_repairs SMALLINT NOT NULL DEFAULT 0 CHECK (consecutive_failed_repairs >= 0),
     next_repair_attempt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
@@ -356,7 +370,7 @@ CREATE UNIQUE INDEX objects_account_id_object_key_idx ON objects(account_id, obj
 
 CREATE TABLE object_slabs (
     object_id BIGINT REFERENCES objects(id) ON DELETE CASCADE,
-    slab_digest BYTEA REFERENCES slabs(digest) ON DELETE CASCADE,
+    slab_digest BYTEA REFERENCES slabs(digest) ON DELETE RESTRICT, -- don't delete slabs that are still referenced by objects
     slab_index INTEGER NOT NULL, -- index within corresponding object to retrieve slabs in right order
     slab_offset INTEGER NOT NULL, -- offset within slab
     slab_length INTEGER NOT NULL, -- length of object data within slab

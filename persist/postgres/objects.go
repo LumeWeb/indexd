@@ -25,7 +25,7 @@ func (s *Store) SharedObject(key types.Hash256) (obj slabs.SharedObject, _ error
 			return fmt.Errorf("failed to query shared object: %w", err)
 		}
 
-		rows, err := tx.Query(ctx, `SELECT s.id, s.encryption_key, s.min_shards, os.slab_offset, os.slab_length
+		rows, err := tx.Query(ctx, `SELECT s.id, s.encryption_key, s.min_shards, os.slab_offset, os.slab_length, s.version
 		FROM object_slabs os
 		INNER JOIN slabs s ON (os.slab_digest = s.digest)
 		WHERE os.object_id = $1
@@ -39,7 +39,7 @@ func (s *Store) SharedObject(key types.Hash256) (obj slabs.SharedObject, _ error
 		for rows.Next() {
 			var slab slabs.SlabSlice
 			var slabDBID int64
-			err := rows.Scan(&slabDBID, (*sqlHash256)(&slab.EncryptionKey), &slab.MinShards, &slab.Offset, &slab.Length)
+			err := rows.Scan(&slabDBID, (*sqlHash256)(&slab.EncryptionKey), &slab.MinShards, &slab.Offset, &slab.Length, &slab.Version)
 			if err != nil {
 				return fmt.Errorf("failed to scan slab: %w", err)
 			}
@@ -106,7 +106,7 @@ func (s *Store) Object(account proto.Account, key types.Hash256) (obj slabs.Seal
 		}
 
 		rows, err := tx.Query(ctx, `
-			SELECT slabs.id, slab_offset, slab_length, slabs.encryption_key, slabs.min_shards
+			SELECT slabs.id, slab_offset, slab_length, slabs.encryption_key, slabs.min_shards, slabs.version
 			FROM object_slabs
 			JOIN slabs ON slabs.digest = object_slabs.slab_digest
 			WHERE object_id = $1
@@ -121,7 +121,7 @@ func (s *Store) Object(account proto.Account, key types.Hash256) (obj slabs.Seal
 		for rows.Next() {
 			var slab slabs.SlabSlice
 			var slabID int64
-			err := rows.Scan(&slabID, &slab.Offset, &slab.Length, (*sqlHash256)(&slab.EncryptionKey), &slab.MinShards)
+			err := rows.Scan(&slabID, &slab.Offset, &slab.Length, (*sqlHash256)(&slab.EncryptionKey), &slab.MinShards, &slab.Version)
 			if err != nil {
 				return fmt.Errorf("failed to scan slab: %w", err)
 			}
@@ -209,7 +209,7 @@ func (s *Store) ListObjects(account proto.Account, cursor slabs.Cursor, limit in
 			}
 
 			rows, err = tx.Query(ctx, `
-				SELECT slabs.id, slab_offset, slab_length, slabs.encryption_key, slabs.min_shards
+				SELECT slabs.id, slab_offset, slab_length, slabs.encryption_key, slabs.min_shards, slabs.version
 				FROM object_slabs
 				JOIN slabs ON slabs.digest = object_slabs.slab_digest
 				WHERE object_id = $1
@@ -223,7 +223,7 @@ func (s *Store) ListObjects(account proto.Account, cursor slabs.Cursor, limit in
 			for rows.Next() {
 				var slab slabs.SlabSlice
 				var slabID int64
-				err := rows.Scan(&slabID, &slab.Offset, &slab.Length, (*sqlHash256)(&slab.EncryptionKey), &slab.MinShards)
+				err := rows.Scan(&slabID, &slab.Offset, &slab.Length, (*sqlHash256)(&slab.EncryptionKey), &slab.MinShards, &slab.Version)
 				if err != nil {
 					rows.Close()
 					return fmt.Errorf("failed to scan slab: %w", err)
@@ -246,6 +246,9 @@ func (s *Store) ListObjects(account proto.Account, cursor slabs.Cursor, limit in
 }
 
 // DeleteObject deletes the object with the given key for the given account.
+// Slabs that were referenced by the object and are no longer referenced by any
+// of the account's objects are unpinned and queued for deletion by
+// PruneDeletedSlabs.
 func (s *Store) DeleteObject(account proto.Account, objectKey types.Hash256) error {
 	return s.transaction(func(ctx context.Context, tx *txn) error {
 		accountID, _, err := accountID(ctx, tx, account)
@@ -254,16 +257,28 @@ func (s *Store) DeleteObject(account proto.Account, objectKey types.Hash256) err
 		}
 
 		var objectID int64
-		err = tx.QueryRow(ctx, `SELECT id FROM objects WHERE object_key = $1 AND account_id = $2`, sqlHash256(objectKey), accountID).Scan(&objectID)
+		err = tx.QueryRow(ctx, `SELECT id FROM objects WHERE object_key = $1 AND account_id = $2 FOR UPDATE`, sqlHash256(objectKey), accountID).Scan(&objectID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return slabs.ErrObjectNotFound
 		} else if err != nil {
 			return fmt.Errorf("failed to get object id: %w", err)
 		}
-		_, err = tx.Exec(ctx, `DELETE FROM object_slabs WHERE object_id = $1`, objectID)
+
+		// delete the object's slab references, remembering the slabs so the
+		// now unreferenced ones can be unpinned after the object is deleted
+		rows, err := tx.Query(ctx, `WITH deleted AS (
+	DELETE FROM object_slabs WHERE object_id = $1 RETURNING slab_digest
+)
+SELECT DISTINCT s.id FROM slabs s
+INNER JOIN deleted d ON (d.slab_digest = s.digest)`, objectID)
 		if err != nil {
 			return fmt.Errorf("failed to delete object slabs: %w", err)
 		}
+		objectSlabIDs, err := pgx.CollectRows(rows, pgx.RowTo[int64])
+		if err != nil {
+			return fmt.Errorf("failed to collect object slab ids: %w", err)
+		}
+
 		_, err = tx.Exec(ctx, `DELETE FROM objects WHERE id = $1`, objectID)
 		if err != nil {
 			return fmt.Errorf("failed to delete object: %w", err)
@@ -276,7 +291,12 @@ func (s *Store) DeleteObject(account proto.Account, objectKey types.Hash256) err
 			return fmt.Errorf("failed to update object events: %w", err)
 		}
 
-		return nil
+		// unpin the object's slabs that are no longer referenced by any of
+		// the account's objects; the locking inside serializes concurrent
+		// deletions of objects sharing a slab, which could otherwise each
+		// still see the other's object and leave the shared slab pinned
+		// forever
+		return s.unpinUnreferencedSlabs(ctx, tx, accountID, objectSlabIDs, nil)
 	})
 }
 
@@ -361,6 +381,19 @@ func (s *Store) PinObject(account proto.Account, obj slabs.PinObjectRequest) err
 			args = append(args, sqlHash256(slabIDs[i]))
 		}
 
+		// lock the slabs so a concurrent prune of the deletion queue can't
+		// delete them between the pin check and the object_slabs insert
+		// below. KEY SHARE is what the FK insert takes anyway; it conflicts
+		// with the FOR UPDATE held by deleters but not with pinned_at
+		// refreshes. Locks are acquired in digest order like everywhere else.
+		if _, err := tx.Exec(ctx, `SELECT digest FROM slabs WHERE digest = ANY($1) ORDER BY digest FOR KEY SHARE`, args); err != nil {
+			return fmt.Errorf("failed to lock slabs: %w", err)
+		}
+
+		// check that this account has pinned these slabs. The check runs as
+		// a separate statement after the lock so its snapshot includes pins
+		// removed by a concurrent unpin we may have waited on; a single
+		// combined statement would count rows from before the wait.
 		var count int
 		if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM slabs
 JOIN account_slabs ON account_slabs.slab_id = slabs.id

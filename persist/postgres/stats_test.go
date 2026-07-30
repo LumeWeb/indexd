@@ -606,6 +606,15 @@ func TestHostStats(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	updateContractAllowances := func(id types.FileContractID, initial, remaining types.Currency) {
+		t.Helper()
+		res, err := store.pool.Exec(t.Context(), "UPDATE contracts SET initial_allowance = $1, remaining_allowance = $2 WHERE contract_id = $3", sqlCurrency(initial), sqlCurrency(remaining), sqlHash256(id))
+		if err != nil {
+			t.Fatal(err)
+		} else if res.RowsAffected() != 1 {
+			t.Fatalf("expected 1 row to be affected, got %d", res.RowsAffected())
+		}
+	}
 
 	// add three hosts
 	hk1 := store.addTestHost(t)
@@ -622,8 +631,11 @@ func TestHostStats(t *testing.T) {
 
 	// add test contracts
 	fcid1 := store.addTestContract(t, hk1)
-	store.addTestContract(t, hk2)
-	store.addTestContract(t, hk3)
+	fcid2 := store.addTestContract(t, hk2)
+	fcid3 := store.addTestContract(t, hk3)
+	updateContractAllowances(fcid1, types.Siacoins(10), types.Siacoins(4))
+	updateContractAllowances(fcid2, types.Siacoins(20), types.Siacoins(15))
+	updateContractAllowances(fcid3, types.Siacoins(30), types.Siacoins(20))
 
 	// assert empty stats - no usage
 	stats, err = store.HostStats(0, 10)
@@ -655,6 +667,10 @@ func TestHostStats(t *testing.T) {
 		t.Fatalf("expected first host to have %d active contract size, got %d", testRevision.Filesize, stats[0].ActiveContractsSize)
 	} else if stats[1].ActiveContractsSize != int64(testRevision.Filesize) {
 		t.Fatalf("expected second host to have %d active contract size, got %d", testRevision.Filesize, stats[1].ActiveContractsSize)
+	} else if !stats[0].LockedAllowance.Equals(types.Siacoins(20)) || !stats[0].RemainingAllowance.Equals(types.Siacoins(15)) {
+		t.Fatalf("expected first host to have locked %v and remaining %v, got locked %v and remaining %v", types.Siacoins(20), types.Siacoins(15), stats[0].LockedAllowance, stats[0].RemainingAllowance)
+	} else if !stats[1].LockedAllowance.Equals(types.Siacoins(10)) || !stats[1].RemainingAllowance.Equals(types.Siacoins(4)) {
+		t.Fatalf("expected second host to have locked %v and remaining %v, got locked %v and remaining %v", types.Siacoins(10), types.Siacoins(4), stats[1].LockedAllowance, stats[1].RemainingAllowance)
 	}
 	if stats[0].Blocked || stats[1].Blocked {
 		t.Fatal("expected both hosts to be unblocked")
@@ -678,7 +694,7 @@ func TestHostStats(t *testing.T) {
 		t.Fatalf("expected blocked reasons %v, got %v", []string{reason}, stats[1].BlockedReasons)
 	}
 
-	// resolve first contract manually - should exclude it from total_contract_size
+	// resolve first contract manually - should exclude it from active_contracts_size
 	_, err = store.pool.Exec(t.Context(), "UPDATE contracts SET state = $1 WHERE contract_id = $2", sqlContractState(2), sqlHash256(fcid1))
 	if err != nil {
 		t.Fatal(err)
@@ -706,6 +722,10 @@ func TestHostStats(t *testing.T) {
 		t.Fatalf("expected first host to have %d active contract size, got %d", testRevision.Filesize, stats[0].ActiveContractsSize)
 	} else if stats[1].ActiveContractsSize != 0 {
 		t.Fatalf("expected second host to have 0 active contract size, got %d", stats[1].ActiveContractsSize)
+	} else if !stats[0].LockedAllowance.Equals(types.Siacoins(20)) || !stats[0].RemainingAllowance.Equals(types.Siacoins(15)) {
+		t.Fatalf("expected first host to have locked %v and remaining %v, got locked %v and remaining %v", types.Siacoins(20), types.Siacoins(15), stats[0].LockedAllowance, stats[0].RemainingAllowance)
+	} else if !stats[1].LockedAllowance.IsZero() || !stats[1].RemainingAllowance.IsZero() {
+		t.Fatalf("expected resolved contract allowances to be excluded, got locked %v, remaining %v", stats[1].LockedAllowance, stats[1].RemainingAllowance)
 	}
 	// set scanned height to the proof height - should exclude it
 	proofHeight := testRevision.ProofHeight
@@ -725,6 +745,10 @@ func TestHostStats(t *testing.T) {
 		t.Fatalf("expected first host to have 0 active contract size, got %d", stats[0].ActiveContractsSize)
 	} else if stats[1].ActiveContractsSize != 0 {
 		t.Fatalf("expected second host to have 0 active contract size, got %d", stats[1].ActiveContractsSize)
+	} else if !stats[0].LockedAllowance.IsZero() || !stats[0].RemainingAllowance.IsZero() {
+		t.Fatalf("expected expired contract allowances to be excluded, got locked %v, remaining %v", stats[0].LockedAllowance, stats[0].RemainingAllowance)
+	} else if !stats[1].LockedAllowance.IsZero() || !stats[1].RemainingAllowance.IsZero() {
+		t.Fatalf("expected resolved contract allowances to remain excluded, got locked %v, remaining %v", stats[1].LockedAllowance, stats[1].RemainingAllowance)
 	}
 
 	// assert limit and offset are applied
@@ -974,6 +998,8 @@ func TestConnectKeyStats(t *testing.T) {
 		t.Fatal(err)
 	} else if stats.Total != 5 {
 		t.Fatalf("expected 5 total connect keys, got %d", stats.Total)
+	} else if stats.Active != 0 {
+		t.Fatalf("expected 0 active connect keys, got %d", stats.Active)
 	} else if len(stats.Quotas) != 2 {
 		t.Fatalf("expected 2 quotas, got %d", len(stats.Quotas))
 	}
@@ -984,6 +1010,39 @@ func TestConnectKeyStats(t *testing.T) {
 	}
 	if stats.Quotas[1].Quota != "premium" || stats.Quotas[1].Total != 2 {
 		t.Fatalf("expected premium quota with 2 keys, got %q with %d", stats.Quotas[1].Quota, stats.Quotas[1].Total)
+	}
+
+	recent := time.Now().Add(-time.Hour)
+	stale := time.Now().Add(-2 * accounts.AccountActivityThreshold)
+
+	if _, err := store.pool.Exec(t.Context(),
+		`UPDATE app_connect_keys SET last_used = $1 WHERE app_key = $2`, recent, "default-key-0"); err != nil {
+		t.Fatal(err)
+	}
+
+	insertAccount := func(appKey string, lastUsed time.Time) {
+		var connectKeyID int64
+		if err := store.pool.QueryRow(t.Context(), `SELECT id FROM app_connect_keys WHERE app_key = $1`, appKey).Scan(&connectKeyID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.pool.Exec(t.Context(),
+			`INSERT INTO accounts (public_key, connect_key_id, last_used, max_pinned_data) VALUES ($1, $2, $3, 1000000)`,
+			sqlPublicKey(types.GeneratePrivateKey().PublicKey()), connectKeyID, lastUsed); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insertAccount("default-key-1", recent)
+	insertAccount("premium-key-0", stale)
+
+	stats, err = store.ConnectKeyStats()
+	if err != nil {
+		t.Fatal(err)
+	} else if stats.Active != 2 {
+		t.Fatalf("expected 2 active connect keys, got %d", stats.Active)
+	} else if stats.Quotas[0].Quota != "default" || stats.Quotas[0].Active != 2 {
+		t.Fatalf("expected default quota with 2 active keys, got %q with %d", stats.Quotas[0].Quota, stats.Quotas[0].Active)
+	} else if stats.Quotas[1].Quota != "premium" || stats.Quotas[1].Active != 0 {
+		t.Fatalf("expected premium quota with 0 active keys, got %q with %d", stats.Quotas[1].Quota, stats.Quotas[1].Active)
 	}
 
 	// delete a key and verify stats update

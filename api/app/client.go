@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -29,6 +30,21 @@ type Client struct {
 	baseURL string
 
 	validity time.Duration
+}
+
+type requestAppConnectionOptions struct {
+	preAuthorizedKey types.PrivateKey
+}
+
+// RequestAppConnectionOption configures an application connection request.
+type RequestAppConnectionOption func(*requestAppConnectionOptions)
+
+// WithPreAuthorizedKey authorizes a connection request without interactive
+// approval. The key is used only to sign the request and is not transmitted.
+func WithPreAuthorizedKey(key types.PrivateKey) RequestAppConnectionOption {
+	return func(opts *requestAppConnectionOptions) {
+		opts.preAuthorizedKey = key
+	}
 }
 
 // HTTPError is returned by the client when the server responds with a non-2xx
@@ -176,7 +192,8 @@ func (c *Client) PinSlabs(ctx context.Context, appKey types.PrivateKey, params .
 	return
 }
 
-// UnpinSlab unpins a slab from the indexer.
+// UnpinSlab unpins a slab from the indexer. A slab that is still referenced by
+// one of the account's objects can not be unpinned.
 func (c *Client) UnpinSlab(ctx context.Context, appKey types.PrivateKey, slabID slabs.SlabID) error {
 	return c.signedRequestJSON(ctx, appKey, http.MethodDelete, fmt.Sprintf("/slabs/%s", slabID), nil, nil)
 }
@@ -188,7 +205,7 @@ func (c *Client) Slab(ctx context.Context, appKey types.PrivateKey, slabID slabs
 }
 
 // PruneSlabs prunes all pinned slabs of a user not currently connected to an
-// object. Use api.WithBefore to override the default cutoff (1 hour ago).
+// object. Use api.WithBefore to override the default cutoff (72 hours ago).
 func (c *Client) PruneSlabs(ctx context.Context, appKey types.PrivateKey, opts ...api.URLQueryParameterOption) error {
 	values := url.Values{}
 	for _, opt := range opts {
@@ -239,6 +256,8 @@ func (c *Client) PinObject(ctx context.Context, appKey types.PrivateKey, obj sla
 }
 
 // DeleteObject deletes the object with the given key for the given account.
+// Slabs that were referenced by the object and are no longer referenced by any
+// of the account's objects are unpinned and queued for deletion.
 func (c *Client) DeleteObject(ctx context.Context, appKey types.PrivateKey, key types.Hash256) (err error) {
 	err = c.signedRequestJSON(ctx, appKey, http.MethodDelete, fmt.Sprintf("/objects/%s", key), nil, nil)
 	return
@@ -299,7 +318,22 @@ func (c *Client) SharedObject(ctx context.Context, sharedURL string) (slabs.Shar
 }
 
 // RequestAppConnection requests an application connection to the indexer.
-func (c *Client) RequestAppConnection(ctx context.Context, ephemeralKey types.PrivateKey, request RegisterAppRequest) (resp RegisterAppResponse, err error) {
+func (c *Client) RequestAppConnection(ctx context.Context, ephemeralKey types.PrivateKey, info Info, options ...RequestAppConnectionOption) (resp RegisterAppResponse, err error) {
+	var opts requestAppConnectionOptions
+	for _, option := range options {
+		option(&opts)
+	}
+	if opts.preAuthorizedKey != nil && len(opts.preAuthorizedKey) != ed25519.PrivateKeySize {
+		return RegisterAppResponse{}, errors.New("invalid pre-authorized private key")
+	}
+
+	request := RegisterAppRequest{Info: info}
+	if opts.preAuthorizedKey != nil {
+		request.PreAuthorizedKey = opts.preAuthorizedKey.PublicKey()
+		proofHash := preAuthorizationHash(ephemeralKey.PublicKey(), request)
+		request.PreAuthorizationSignature = opts.preAuthorizedKey.SignHash(proofHash)
+	}
+
 	requestBuf, err := json.Marshal(request)
 	if err != nil {
 		return RegisterAppResponse{}, fmt.Errorf("failed to marshal request data: %w", err)

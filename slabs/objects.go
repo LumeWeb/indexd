@@ -40,6 +40,7 @@ type (
 
 	// SlabSlice represents a slice of a slab that is part of an object.
 	SlabSlice struct {
+		Version       uint8          `json:"version"`
 		EncryptionKey EncryptionKey  `json:"encryptionKey"`
 		MinShards     uint           `json:"minShards"`
 		Sectors       []PinnedSector `json:"sectors"`
@@ -282,6 +283,8 @@ func (m *SlabManager) Object(ctx context.Context, account proto.Account, key typ
 }
 
 // DeleteObject deletes the object with the given key for the given account.
+// Slabs that were referenced by the object and are no longer referenced by any
+// of the account's objects are unpinned and queued for deletion.
 func (m *SlabManager) DeleteObject(ctx context.Context, account proto.Account, objectKey types.Hash256) error {
 	return m.store.DeleteObject(account, objectKey)
 }
@@ -337,6 +340,7 @@ func (k *EncryptionKey) UnmarshalJSON(b []byte) error {
 // Pin converts the SlabSlice to SlabPinParams.
 func (s SlabSlice) Pin() SlabPinParams {
 	return SlabPinParams{
+		Version:       s.Version,
 		EncryptionKey: s.EncryptionKey,
 		MinShards:     s.MinShards,
 		Sectors:       slices.Clone(s.Sectors),
@@ -346,6 +350,7 @@ func (s SlabSlice) Pin() SlabPinParams {
 // Slice creates a SlabSlice from the SlabPinParams.
 func (s SlabPinParams) Slice(offset, length uint32) SlabSlice {
 	return SlabSlice{
+		Version:       s.Version,
 		EncryptionKey: s.EncryptionKey,
 		MinShards:     s.MinShards,
 		Sectors:       slices.Clone(s.Sectors),
@@ -357,6 +362,7 @@ func (s SlabPinParams) Slice(offset, length uint32) SlabSlice {
 // Slice creates a SlabSlice from the PinnedSlab.
 func (s PinnedSlab) Slice(offset, length uint32) SlabSlice {
 	return SlabSlice{
+		Version:       s.Version,
 		EncryptionKey: s.EncryptionKey,
 		MinShards:     s.MinShards,
 		Sectors:       slices.Clone(s.Sectors),
