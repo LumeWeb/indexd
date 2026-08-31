@@ -25,6 +25,7 @@ import (
 	"go.sia.tech/indexd/api"
 	"go.sia.tech/indexd/api/admin"
 	"go.sia.tech/indexd/contracts"
+	"go.sia.tech/indexd/hosts"
 	"go.sia.tech/indexd/pins"
 	"go.sia.tech/indexd/slabs"
 	"go.sia.tech/indexd/testutils"
@@ -912,11 +913,11 @@ func TestSyncerAPI(t *testing.T) {
 
 	log := zaptest.NewLogger(t)
 	network, genesis := testutil.V2Network()
-	dbstore, tipState, err := chain.NewDBStore(chain.NewMemDB(), network, genesis, chain.NewZapMigrationLogger(log.Named("chaindb")))
+	dbstore, err := chain.NewDBStore(chain.NewMemDB(), network, genesis, chain.NewZapMigrationLogger(log.Named("chaindb")))
 	if err != nil {
 		t.Fatalf("failed to create chain store: %v", err)
 	}
-	cm := chain.NewManager(dbstore, tipState, chain.WithLog(log.Named("chain")))
+	cm := chain.NewManager(dbstore, chain.WithLog(log.Named("chain")))
 	s := testutils.NewSyncer(t, genesis.ID(), cm)
 	defer s.Close()
 
@@ -936,6 +937,111 @@ func TestTxpoolAPI(t *testing.T) {
 	} else if fee == types.ZeroCurrency {
 		t.Fatal("expected non-zero fee")
 	}
+}
+
+func TestHostManagementAPI(t *testing.T) {
+	cluster := testutils.NewCluster(t, testutils.WithHosts(0))
+	indexer := cluster.Indexer
+	adminClient := indexer.Admin
+
+	// start a host without announcing it on chain, then import it
+	host := cluster.NewHosts(t, 1)[0]
+	cluster.AddHosts(t.Context(), t, host)
+	hostKey := host.PublicKey()
+	addresses := []chain.NetAddress{
+		{Protocol: "siamux", Address: host.Addr()},
+		{Protocol: "quic", Address: host.QUICAddr()},
+	}
+	created, err := adminClient.ImportHost(t.Context(), hostKey, addresses)
+	if err != nil {
+		t.Fatal(err)
+	} else if created.PublicKey != hostKey {
+		t.Fatalf("expected %v, got %v", hostKey, created.PublicKey)
+	}
+
+	imported, err := adminClient.Host(t.Context(), hostKey)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(imported.Addresses) != len(addresses) {
+		t.Fatalf("expected %d addresses, got %d", len(addresses), len(imported.Addresses))
+	}
+	for _, address := range addresses {
+		if !slices.Contains(imported.Addresses, address) {
+			t.Fatal("unexpected", imported.Addresses)
+		}
+	}
+
+	// invalid addresses and an empty public key are rejected with 400 and
+	// nothing is persisted
+	if _, err := adminClient.ImportHost(t.Context(), types.GeneratePrivateKey().PublicKey(), nil); err == nil || !strings.Contains(err.Error(), hosts.ErrInvalidAddress.Error()) {
+		t.Fatalf("expected %v, got %v", hosts.ErrInvalidAddress, err)
+	}
+	if _, err := adminClient.ImportHost(t.Context(), types.GeneratePrivateKey().PublicKey(), []chain.NetAddress{{Protocol: "tcp", Address: "example.com:9983"}}); err == nil || !strings.Contains(err.Error(), hosts.ErrInvalidAddress.Error()) {
+		t.Fatalf("expected %v, got %v", hosts.ErrInvalidAddress, err)
+	}
+	if _, err := adminClient.ImportHost(t.Context(), types.PublicKey{}, addresses); err == nil || !strings.Contains(err.Error(), hosts.ErrInvalidHostKey.Error()) {
+		t.Fatalf("expected %v, got %v", hosts.ErrInvalidHostKey, err)
+	}
+	if importedHosts, err := adminClient.Hosts(t.Context()); err != nil {
+		t.Fatal(err)
+	} else if len(importedHosts) != 1 {
+		t.Fatalf("expected 1 host, got %d", len(importedHosts))
+	}
+
+	scans := func(hk types.PublicKey) (n int64) {
+		t.Helper()
+		if err := indexer.Store().QueryRow(t.Context(), `SELECT scans FROM hosts WHERE public_key = $1`, hk[:]).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	waitForScan := func(hk types.PublicKey, after int64) {
+		t.Helper()
+		for range 100 {
+			if scans(hk) > after {
+				return
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+		t.Fatalf("expected host %v to be scanned more than %d times", hk, scans(hk))
+	}
+
+	// move the next scheduled scan far into the future
+	if _, err := indexer.Store().Exec(t.Context(), `UPDATE hosts SET next_scan = NOW() + INTERVAL '1 day' WHERE public_key = $1`, hostKey[:]); err != nil {
+		t.Fatal(err)
+	}
+
+	// import a second host, it is due for scanning immediately and scans are
+	// processed one batch at a time, so waiting for it to be scanned means every
+	// scan that was already in flight has finished
+	dueHost := cluster.NewHosts(t, 1)[0]
+	cluster.AddHosts(t.Context(), t, dueHost)
+	dueHostKey := dueHost.PublicKey()
+	if _, err := adminClient.ImportHost(t.Context(), dueHostKey, []chain.NetAddress{
+		{Protocol: "siamux", Address: dueHost.Addr()},
+		{Protocol: "quic", Address: dueHost.QUICAddr()},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitForScan(dueHostKey, 0)
+
+	// a scan without force only picks up the hosts that are due
+	scansBefore, dueScansBefore := scans(hostKey), scans(dueHostKey)
+	if _, err := indexer.Store().Exec(t.Context(), `UPDATE hosts SET next_scan = NOW() WHERE public_key = $1`, dueHostKey[:]); err != nil {
+		t.Fatal(err)
+	} else if err := adminClient.ScanHosts(t.Context(), false); err != nil {
+		t.Fatal(err)
+	}
+	waitForScan(dueHostKey, dueScansBefore)
+	if got := scans(hostKey); got != scansBefore {
+		t.Fatalf("expected the host that is not due to be skipped, got %d scans instead of %d", got, scansBefore)
+	}
+
+	// forcing a scan ignores the schedule
+	if err := adminClient.ScanHosts(t.Context(), true); err != nil {
+		t.Fatal(err)
+	}
+	waitForScan(hostKey, scansBefore)
 }
 
 func TestHostsAPI(t *testing.T) {

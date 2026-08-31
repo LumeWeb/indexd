@@ -115,7 +115,8 @@ type (
 		store         Store
 		alerter       AlertsManager
 
-		triggerHostScanningChan chan struct{}
+		triggerHostScanningChan       chan struct{}
+		triggerForcedHostScanningChan chan struct{}
 
 		tg  *threadgroup.ThreadGroup
 		log *zap.Logger
@@ -175,6 +176,7 @@ type (
 		HostsWithUnpinnableSectors() ([]types.PublicKey, error)
 		StuckHosts() ([]StuckHost, error)
 
+		ImportHost(hk types.PublicKey, addresses []chain.NetAddress) error
 		BlockHosts(hostKeys []types.PublicKey, reasons []string) error
 		BlockedHosts(offset, limit int) ([]types.PublicKey, error)
 		UnblockHost(hk types.PublicKey) error
@@ -228,6 +230,35 @@ func (hm *HostManager) Host(ctx context.Context, hostKey types.PublicKey) (Host,
 // Hosts returns a list of hosts filtered by the given query options.
 func (hm *HostManager) Hosts(ctx context.Context, offset, limit int, queryOpts ...HostQueryOpt) ([]Host, error) {
 	return hm.store.Hosts(offset, limit, queryOpts...)
+}
+
+// ImportHost adds a host and its addresses to the set of hosts to be scanned
+// and returns the resulting host. If the host is already known, its addresses
+// are replaced and it is queued for the next scan. Contrary to an announcement,
+// which drops the addresses it can't use, the whole import is rejected if any
+// address is invalid.
+func (hm *HostManager) ImportHost(ctx context.Context, hostKey types.PublicKey, addresses []chain.NetAddress) (Host, error) {
+	if hostKey == (types.PublicKey{}) {
+		return Host{}, fmt.Errorf("%w: public key is required", ErrInvalidHostKey)
+	} else if len(addresses) == 0 {
+		return Host{}, fmt.Errorf("%w: at least one address is required", ErrInvalidAddress)
+	}
+
+	counts := make(map[chain.Protocol]int)
+	for i, address := range addresses {
+		if err := validateAddress(address); err != nil {
+			return Host{}, fmt.Errorf("%w at index %d: %w", ErrInvalidAddress, i, err)
+		}
+		counts[address.Protocol]++
+		if counts[address.Protocol] > announcementMaxAddressesPerProtocol {
+			return Host{}, fmt.Errorf("%w: at most %d %q addresses are allowed", ErrInvalidAddress, announcementMaxAddressesPerProtocol, address.Protocol)
+		}
+	}
+
+	if err := hm.store.ImportHost(hostKey, addresses); err != nil {
+		return Host{}, err
+	}
+	return hm.store.Host(hostKey)
 }
 
 // UsableHosts returns a list of hosts that are not blocked, usable and have an
@@ -301,7 +332,8 @@ func NewManager(syncer Syncer, locator Locator, client HostClient, store Store, 
 		hosts:         client,
 		alerter:       alerter,
 
-		triggerHostScanningChan: make(chan struct{}, 1),
+		triggerHostScanningChan:       make(chan struct{}, 1),
+		triggerForcedHostScanningChan: make(chan struct{}, 1),
 
 		tg:  threadgroup.New(),
 		log: zap.NewNop(),
@@ -333,6 +365,10 @@ func NewManager(syncer Syncer, locator Locator, client HostClient, store Store, 
 			stuckTicker.Stop()
 			scanTicker.Stop()
 		}()
+		resetScanTicker := func() {
+			scanTicker.Stop()
+			scanTicker = time.NewTicker(m.scanFrequency)
+		}
 
 		for {
 			select {
@@ -341,10 +377,12 @@ func NewManager(syncer Syncer, locator Locator, client HostClient, store Store, 
 			case <-stuckTicker.C:
 				m.registerStuckHostsAlert()
 			case <-m.triggerHostScanningChan:
-				// reset ticker
-				scanTicker.Stop()
-				scanTicker = time.NewTicker(m.scanFrequency)
+				resetScanTicker()
 				m.log.Debug("triggered host scanning")
+				m.scanHosts(ctx, m.hostsForScanning(false))
+			case <-m.triggerForcedHostScanningChan:
+				resetScanTicker()
+				m.log.Debug("triggered forced host scanning")
 				m.scanHosts(ctx, m.hostsForScanning(true))
 			case <-scanTicker.C:
 				m.scanHosts(ctx, m.hostsForScanning(false))
@@ -363,10 +401,17 @@ func (m *HostManager) Close() error {
 	return nil
 }
 
-// TriggerHostScanning triggers a scan of all hosts.
-func (m *HostManager) TriggerHostScanning() {
+// TriggerHostScanning triggers a scan of the hosts that are due for scanning.
+// If force is true, every known host is scanned regardless of when its next
+// scan is scheduled. Triggering is best-effort, it is a no-op if a scan of the
+// same kind is already queued.
+func (m *HostManager) TriggerHostScanning(force bool) {
+	ch := m.triggerHostScanningChan
+	if force {
+		ch = m.triggerForcedHostScanningChan
+	}
 	select {
-	case m.triggerHostScanningChan <- struct{}{}:
+	case ch <- struct{}{}:
 	default:
 	}
 }
@@ -555,9 +600,8 @@ func (m *HostManager) hostsForScanning(force bool) []types.PublicKey {
 		return hosts
 	}
 
-	// forcing a rescan of all hosts is only exposed with the debug flag
-	// enabled, therefore it's fine to pay the price here and fetch all hosts
-	// from the database only to get their public keys
+	// forced scans are operator-triggered and infrequent, so it's fine to pay
+	// the price here and fetch all hosts only to get their public keys
 	hosts, err := m.store.Hosts(0, math.MaxInt)
 	if err != nil {
 		m.log.Error("failed to get hosts for scanning", zap.Error(err))
@@ -847,6 +891,18 @@ func validateAddress(na chain.NetAddress) error {
 	}
 	if na.Address == "" {
 		return fmt.Errorf("empty address")
+	}
+	host, portStr, err := net.SplitHostPort(na.Address)
+	if err != nil {
+		return fmt.Errorf("invalid address: %w", err)
+	} else if host == "" {
+		return fmt.Errorf("empty host")
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return fmt.Errorf("invalid port %q", portStr)
+	} else if port < 1 || port > 65535 {
+		return fmt.Errorf("port must be between 1 and 65535")
 	}
 	return nil
 }

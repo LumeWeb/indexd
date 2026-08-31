@@ -35,6 +35,7 @@ import (
 	"go.sia.tech/indexd/hosts"
 	"go.sia.tech/indexd/persist/postgres"
 	"go.sia.tech/indexd/pins"
+	"go.sia.tech/indexd/sharing"
 	"go.sia.tech/indexd/slabs"
 	"go.sia.tech/indexd/stats"
 	"go.sia.tech/indexd/subscriber"
@@ -77,7 +78,6 @@ func runRootCmd(ctx context.Context, cfg config.Config, walletKey types.PrivateK
 	}
 
 	var dbstore *chain.DBStore
-	var tipState consensus.State
 	minPruneTarget := uint64(6 * time.Hour / network.BlockInterval)
 	if instantSync && cfg.Consensus.PruneTarget == 0 {
 		// default to 6 hours of blocks
@@ -138,7 +138,7 @@ func runRootCmd(ctx context.Context, cfg config.Config, walletKey types.PrivateK
 		}
 		defer bdb.Close()
 
-		dbstore, tipState, err = chain.NewDBStoreAtCheckpoint(bdb, cs, b, chain.NewZapMigrationLogger(log.Named("chaindb")))
+		dbstore, err = chain.NewDBStoreAtCheckpoint(bdb, cs, b, chain.NewZapMigrationLogger(log.Named("chaindb")))
 		if err != nil {
 			return fmt.Errorf("failed to create chain store from checkpoint: %w", err)
 		}
@@ -155,12 +155,12 @@ func runRootCmd(ctx context.Context, cfg config.Config, walletKey types.PrivateK
 		}
 		defer bdb.Close()
 
-		dbstore, tipState, err = chain.NewDBStore(bdb, network, genesis, chain.NewZapMigrationLogger(log.Named("chaindb")))
+		dbstore, err = chain.NewDBStore(bdb, network, genesis, chain.NewZapMigrationLogger(log.Named("chaindb")))
 		if err != nil {
 			return fmt.Errorf("failed to create chain store: %w", err)
 		}
 	}
-	cm := chain.NewManager(dbstore, tipState, chain.WithLog(log.Named("chain")))
+	cm := chain.NewManager(dbstore, chain.WithLog(log.Named("chain")))
 
 	syncerListener, err := net.Listen("tcp", cfg.Syncer.Address)
 	if err != nil {
@@ -262,6 +262,12 @@ func runRootCmd(ctx context.Context, cfg config.Config, walletKey types.PrivateK
 	}
 	defer slabs.Close()
 
+	sharing, err := sharing.NewManager(store, sharing.WithLogger(log.Named("sharing")))
+	if err != nil {
+		return fmt.Errorf("failed to create sharing manager: %w", err)
+	}
+	defer sharing.Close()
+
 	subscriber, err := subscriber.New(cm, hm, contracts, wm, store,
 		subscriber.WithLogger(log.Named("subscriber")),
 		subscriber.WithBatchSize(cfg.Consensus.IndexBatchSize),
@@ -336,7 +342,7 @@ func runRootCmd(ctx context.Context, cfg config.Config, walletKey types.PrivateK
 		}
 	}
 
-	appHandler, err := app.NewAPI(advertiseURL, hm, am, contracts, slabs, appAPIOpts...)
+	appHandler, err := app.NewAPI(advertiseURL, hm, am, contracts, slabs, sharing, appAPIOpts...)
 	if err != nil {
 		return fmt.Errorf("failed to create application API: %w", err)
 	}

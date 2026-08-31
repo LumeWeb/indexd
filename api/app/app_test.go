@@ -140,6 +140,14 @@ func uploadRandomSlab(t testing.TB, client *client.Client, sk types.PrivateKey, 
 	}
 }
 
+// awaitEventSecond waits out the current second so events written in it become
+// listable; ListObjects withholds the second still in progress.
+func awaitEventSecond(t testing.TB) {
+	t.Helper()
+	now := time.Now()
+	time.Sleep(now.Truncate(time.Second).Add(time.Second).Sub(now) + 20*time.Millisecond)
+}
+
 func TestApplicationAPI(t *testing.T) {
 	ctx := t.Context()
 	// create cluster with three hosts
@@ -393,6 +401,7 @@ func TestApplicationAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	awaitEventSecond(t)
 	objs, err = client.ListObjects(context.Background(), sk, slabs.Cursor{}, 100)
 	if err != nil {
 		t.Fatal(err)
@@ -430,6 +439,7 @@ func TestApplicationAPI(t *testing.T) {
 		t.Fatalf("expected %v, got %v", slabs.ErrObjectNotFound, err)
 	}
 
+	awaitEventSecond(t)
 	objs, err = client.ListObjects(context.Background(), sk, slabs.Cursor{}, 100)
 	if err != nil {
 		t.Fatal(err)
@@ -586,6 +596,74 @@ func TestPreAuthorizedAppConnect(t *testing.T) {
 		t.Fatalf("expected connect key %q, got %q", connectKey.Key, account.ConnectKey)
 	} else if account.App.ID != appID || account.App.Name != appMeta.Name {
 		t.Fatalf("unexpected app metadata: %+v", account.App)
+	}
+}
+
+func TestAppRegisterConsumesRequest(t *testing.T) {
+	ctx := t.Context()
+	cluster := testutils.NewCluster(t, testutils.WithHosts(0), testutils.WithLogger(zap.NewNop()))
+	indexer := cluster.Indexer
+
+	// the default quota has multiple uses so it doesn't mask request reuse
+	connectKey, err := indexer.Admin.AddAppConnectKey(ctx, accounts.AppConnectKeyRequest{
+		Quota: "default",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	appID := types.Hash256(frand.Entropy256())
+	preAuthorizedPrivateKey := types.GeneratePrivateKey()
+	preAuthorizedKeyRequest := accounts.PreAuthorizedKeyRequest{
+		ConnectKey:   connectKey.Key,
+		Expiration:   time.Now().Add(time.Hour),
+		TotalUses:    1,
+		AllowedAppID: &appID,
+	}
+	preAuthorizedKeyRequest.Sign(preAuthorizedPrivateKey)
+	if _, err := indexer.Admin.AddPreAuthorizedKey(ctx, preAuthorizedKeyRequest); err != nil {
+		t.Fatal(err)
+	}
+
+	ephemeralKey := types.GeneratePrivateKey()
+	appKey := types.GeneratePrivateKey()
+	otherAppKey := types.GeneratePrivateKey()
+	connectResp, err := indexer.App.RequestAppConnection(ctx, ephemeralKey, app.Info{
+		AppID:       appID,
+		Name:        "pre-authorized-app",
+		Description: "A pre-authorized application",
+		ServiceURL:  "https://example.com",
+	}, app.WithPreAuthorizedKey(preAuthorizedPrivateKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := indexer.App.RegisterApp(ctx, connectResp.RegisterURL, ephemeralKey, appKey); err != nil {
+		t.Fatal(err)
+	} else if authenticated, err := indexer.App.CheckAppAuth(ctx, appKey); err != nil {
+		t.Fatal(err)
+	} else if !authenticated {
+		t.Fatal("expected registered app to be authenticated")
+	}
+
+	// registering consumed the request, so a second app key can't use it
+	var httpErr *app.HTTPError
+	if err := indexer.App.RegisterApp(ctx, connectResp.RegisterURL, ephemeralKey, otherAppKey); !errors.As(err, &httpErr) {
+		t.Fatalf("expected HTTP error registering a second app key, got %v", err)
+	} else if httpErr.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d", http.StatusNotFound, httpErr.StatusCode)
+	}
+	if authenticated, err := indexer.App.CheckAppAuth(ctx, otherAppKey); err != nil {
+		t.Fatal(err)
+	} else if authenticated {
+		t.Fatal("expected second app key to not be registered")
+	}
+
+	// the same key can't reuse it either
+	if err := indexer.App.RegisterApp(ctx, connectResp.RegisterURL, ephemeralKey, appKey); !errors.As(err, &httpErr) {
+		t.Fatalf("expected HTTP error re-registering the same app key, got %v", err)
+	} else if httpErr.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d", http.StatusNotFound, httpErr.StatusCode)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"go.sia.tech/core/consensus"
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
+	"go.sia.tech/coreutils/chain"
 	"go.sia.tech/coreutils/wallet"
 	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/alerts"
@@ -285,10 +286,30 @@ func (c *Client) Host(ctx context.Context, hostKey types.PublicKey) (h hosts.Hos
 	return
 }
 
+// ImportHost adds a host and its network addresses to the indexer, replacing
+// the addresses of a host that is already known and queueing it for the next
+// scan.
+func (c *Client) ImportHost(ctx context.Context, hostKey types.PublicKey, addresses []chain.NetAddress) (h hosts.Host, err error) {
+	err = c.c.POST(ctx, "/hosts", HostImportRequest{
+		PublicKey: hostKey,
+		Addresses: addresses,
+	}, &h)
+	return
+}
+
 // ScanHost triggers a manual host scan.
 func (c *Client) ScanHost(ctx context.Context, hostKey types.PublicKey) (resp hosts.Host, err error) {
 	err = c.c.POST(ctx, fmt.Sprintf("/host/%s/scan", hostKey), nil, &resp)
 	return
+}
+
+// ScanHosts triggers a scan of the hosts that are due to be scanned. If force
+// is true, all hosts are scanned regardless of when their next scan is
+// scheduled.
+func (c *Client) ScanHosts(ctx context.Context, force bool) error {
+	values := url.Values{}
+	values.Set("force", fmt.Sprint(force))
+	return c.c.POST(ctx, "/hosts/scan?"+values.Encode(), nil, nil)
 }
 
 // ResetHostLostSectors resets the lost sectors count for the given host.
@@ -329,6 +350,36 @@ func (c *Client) HostsBlocklistAdd(ctx context.Context, hostKeys []types.PublicK
 // HostsBlocklistRemove removes the host with given host key from the blocklist.
 func (c *Client) HostsBlocklistRemove(ctx context.Context, hostKey types.PublicKey) (err error) {
 	err = c.c.DELETE(ctx, fmt.Sprintf("/hosts/blocklist/%s", hostKey))
+	return
+}
+
+// ObjectsBlocklist returns the objects on the blocklist.
+func (c *Client) ObjectsBlocklist(ctx context.Context, opts ...api.URLQueryParameterOption) (blocklist []slabs.BlockedObject, err error) {
+	values := url.Values{}
+	for _, opt := range opts {
+		opt(values)
+	}
+	err = c.c.GET(ctx, "/objects/blocklist?"+values.Encode(), &blocklist)
+	return
+}
+
+// ObjectBlocklistAdd adds the given object key to the blocklist.
+func (c *Client) ObjectBlocklistAdd(ctx context.Context, objectKey types.Hash256, reason string) (err error) {
+	err = c.c.PUT(ctx, fmt.Sprintf("/objects/blocklist/%s", objectKey), ObjectBlocklistRequest{
+		Reason: reason,
+	})
+	return
+}
+
+// ObjectBlocklistEntry returns the blocklist entry for the given object key.
+func (c *Client) ObjectBlocklistEntry(ctx context.Context, objectKey types.Hash256) (blocked slabs.BlockedObject, err error) {
+	err = c.c.GET(ctx, fmt.Sprintf("/objects/blocklist/%s", objectKey), &blocked)
+	return
+}
+
+// ObjectBlocklistRemove removes the object with the given key from the blocklist.
+func (c *Client) ObjectBlocklistRemove(ctx context.Context, objectKey types.Hash256) (err error) {
+	err = c.c.DELETE(ctx, fmt.Sprintf("/objects/blocklist/%s", objectKey))
 	return
 }
 
