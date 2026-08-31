@@ -21,6 +21,7 @@ import (
 	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/api"
 	"go.sia.tech/indexd/hosts"
+	"go.sia.tech/indexd/sharing"
 	"go.sia.tech/indexd/slabs"
 	"go.sia.tech/jape"
 	"go.uber.org/zap"
@@ -46,6 +47,22 @@ type (
 		PinObject(ctx context.Context, account proto.Account, obj slabs.PinObjectRequest) error
 		ListObjects(ctx context.Context, account proto.Account, cursor slabs.Cursor, limit int) ([]slabs.ObjectEvent, error)
 		SharedObject(ctx context.Context, key types.Hash256) (slabs.SharedObject, error)
+	}
+
+	// Sharing defines the sharing key management interface for the application
+	// API.
+	Sharing interface {
+		AddSharingKey(account proto.Account, req sharing.KeyRequest) (sharing.Key, error)
+		DeleteSharingKey(account proto.Account, publicKey types.PublicKey) error
+		SharingKeys(account proto.Account, offset, limit int) ([]sharing.Key, error)
+		SharingKey(publicKey types.PublicKey) (sharing.Key, error)
+		OwnedSharingKey(account proto.Account, publicKey types.PublicKey) (sharing.Key, error)
+		AddSharedObject(account proto.Account, sharingKey types.PublicKey, req sharing.SharedObjectRequest) error
+		DeleteSharedObject(account proto.Account, sharingKey types.PublicKey, objectKey types.Hash256) error
+		OwnedSharedObjects(account proto.Account, sharingKey types.PublicKey, offset, limit int) ([]slabs.SealedObject, error)
+		SharedObjects(sharingKey types.PublicKey, offset, limit int) ([]slabs.SealedObject, error)
+		SharedObject(sharingKey types.PublicKey, objectKey types.Hash256) (slabs.SealedObject, error)
+		AccountTokens(sharingKey types.PublicKey, hostKeys []types.PublicKey) ([]proto.AccountToken, error)
 	}
 
 	// Hosts defines the hosts interface for the application API.
@@ -159,6 +176,7 @@ type (
 		accounts  Accounts
 		contracts Contracts
 		slabs     Slabs
+		sharing   Sharing
 		log       *zap.Logger
 		rl        RateLimiter
 
@@ -227,47 +245,53 @@ func WrapRateLimit(rl RateLimiter, next jape.Handler) jape.Handler {
 }
 
 func (a *app) handleGETHosts(jc jape.Context, _ types.PublicKey) {
+	if h, ok := a.usableHosts(jc); ok {
+		jc.Encode(h)
+	}
+}
+
+func (a *app) usableHosts(jc jape.Context) ([]hosts.HostInfo, bool) {
 	offset, limit, ok := api.ParseOffsetLimit(jc)
 	if !ok {
-		return
+		return nil, false
 	}
 
 	var opts []hosts.UsableHostQueryOpt
 
 	var protocol string
 	if jc.DecodeForm("protocol", &protocol) != nil {
-		return
+		return nil, false
 	} else if protocol != "" && protocol != string(siamux.Protocol) && protocol != string(quic.Protocol) {
 		jc.Error(fmt.Errorf("invalid protocol %q", protocol), http.StatusBadRequest)
-		return
+		return nil, false
 	} else if protocol != "" {
 		opts = append(opts, hosts.WithProtocol(chain.Protocol(protocol)))
 	}
 
 	var countryCode string
 	if jc.DecodeForm("country", &countryCode) != nil {
-		return
+		return nil, false
 	} else if countryCode != "" {
 		opts = append(opts, hosts.WithCountry(countryCode))
 	}
 
 	var locationStr string
 	if jc.DecodeForm("location", &locationStr) != nil {
-		return
+		return nil, false
 	} else if locationStr != "" {
 		var lat, lng float64
 		if _, err := fmt.Sscanf(locationStr, "(%f,%f)", &lat, &lng); err != nil {
 			jc.Error(fmt.Errorf("invalid location %q, must be of the form (lat,lng)", locationStr), http.StatusBadRequest)
-			return
+			return nil, false
 		}
 		opts = append(opts, hosts.SortByDistance(lat, lng))
 	}
 
-	hosts, err := a.hosts.UsableHosts(jc.Request.Context(), offset, limit, opts...)
+	h, err := a.hosts.UsableHosts(jc.Request.Context(), offset, limit, opts...)
 	if jc.Check("failed to get hosts", err) != nil {
-		return
+		return nil, false
 	}
-	jc.Encode(hosts)
+	return h, true
 }
 
 func (a *app) handleGETObject(jc jape.Context, pk types.PublicKey) {
@@ -279,6 +303,9 @@ func (a *app) handleGETObject(jc jape.Context, pk types.PublicKey) {
 	obj, err := a.slabs.Object(jc.Request.Context(), proto.Account(pk), key)
 	if errors.Is(err, slabs.ErrObjectNotFound) {
 		jc.Error(err, http.StatusNotFound)
+		return
+	} else if errors.Is(err, slabs.ErrObjectBlocked) {
+		jc.Error(err, http.StatusUnavailableForLegalReasons)
 		return
 	} else if err != nil {
 		jc.Error(err, http.StatusInternalServerError)
@@ -297,6 +324,9 @@ func (a *app) handleGETObjectShared(jc jape.Context, _ types.PublicKey) {
 	obj, err := a.slabs.SharedObject(jc.Request.Context(), key)
 	if errors.Is(err, slabs.ErrObjectNotFound) {
 		jc.Error(err, http.StatusNotFound)
+		return
+	} else if errors.Is(err, slabs.ErrObjectBlocked) {
+		jc.Error(err, http.StatusUnavailableForLegalReasons)
 		return
 	} else if err != nil {
 		jc.Error(err, http.StatusInternalServerError)
@@ -344,6 +374,9 @@ func (a *app) handlePOSTObjects(jc jape.Context, pk types.PublicKey) {
 	if errors.Is(err, slabs.ErrObjectMetadataLimitExceeded) || errors.Is(err, slabs.ErrObjectMinimumSlabs) || errors.Is(err, slabs.ErrObjectUnpinnedSlab) || errors.Is(err, slabs.ErrInvalidObjectSignature) {
 		jc.Error(err, http.StatusBadRequest)
 		return
+	} else if errors.Is(err, slabs.ErrObjectBlocked) {
+		jc.Error(err, http.StatusUnavailableForLegalReasons)
+		return
 	} else if err != nil {
 		jc.Error(err, http.StatusInternalServerError)
 		return
@@ -359,6 +392,147 @@ func (a *app) handleDELETEObjects(jc jape.Context, pk types.PublicKey) {
 
 	err := a.slabs.DeleteObject(jc.Request.Context(), proto.Account(pk), key)
 	if errors.Is(err, slabs.ErrObjectNotFound) {
+		jc.Error(err, http.StatusNotFound)
+		return
+	} else if err != nil {
+		jc.Error(err, http.StatusInternalServerError)
+		return
+	}
+	jc.Encode(nil)
+}
+
+func (a *app) handlePOSTSharing(jc jape.Context, pk types.PublicKey) {
+	req, ok := decodeRequest[sharing.KeyRequest](jc)
+	if !ok {
+		return
+	}
+
+	key, err := a.sharing.AddSharingKey(proto.Account(pk), req)
+	if errors.Is(err, sharing.ErrInvalidRequest) {
+		jc.Error(err, http.StatusBadRequest)
+		return
+	} else if errors.Is(err, sharing.ErrSharingKeyExists) {
+		jc.Error(err, http.StatusConflict)
+		return
+	} else if err != nil {
+		jc.Error(err, http.StatusInternalServerError)
+		return
+	}
+	jc.Encode(key)
+}
+
+func (a *app) handleGETSharing(jc jape.Context, pk types.PublicKey) {
+	offset, limit, ok := api.ParseOffsetLimit(jc)
+	if !ok {
+		return
+	}
+
+	keys, err := a.sharing.SharingKeys(proto.Account(pk), offset, limit)
+	if jc.Check("failed to list sharing keys", err) != nil {
+		return
+	}
+	jc.Encode(keys)
+}
+
+func (a *app) handleGETSharingKey(jc jape.Context, pk types.PublicKey) {
+	var key types.PublicKey
+	if jc.DecodeParam("key", &key) != nil {
+		return
+	}
+
+	sk, err := a.sharing.OwnedSharingKey(proto.Account(pk), key)
+	if errors.Is(err, sharing.ErrSharingKeyNotFound) {
+		jc.Error(err, http.StatusNotFound)
+		return
+	} else if err != nil {
+		jc.Error(err, http.StatusInternalServerError)
+		return
+	}
+	jc.Encode(sk)
+}
+
+func (a *app) handleDELETESharing(jc jape.Context, pk types.PublicKey) {
+	var key types.PublicKey
+	if jc.DecodeParam("key", &key) != nil {
+		return
+	}
+
+	err := a.sharing.DeleteSharingKey(proto.Account(pk), key)
+	if errors.Is(err, sharing.ErrSharingKeyNotFound) {
+		jc.Error(err, http.StatusNotFound)
+		return
+	} else if err != nil {
+		jc.Error(err, http.StatusInternalServerError)
+		return
+	}
+	jc.Encode(nil)
+}
+
+func (a *app) handlePOSTSharingObject(jc jape.Context, pk types.PublicKey) {
+	var key types.PublicKey
+	if jc.DecodeParam("key", &key) != nil {
+		return
+	}
+
+	req, ok := decodeRequest[sharing.SharedObjectRequest](jc)
+	if !ok {
+		return
+	}
+
+	err := a.sharing.AddSharedObject(proto.Account(pk), key, req)
+	if errors.Is(err, sharing.ErrInvalidRequest) {
+		jc.Error(err, http.StatusBadRequest)
+		return
+	} else if errors.Is(err, sharing.ErrSharedObjectConflict) {
+		jc.Error(err, http.StatusConflict)
+		return
+	} else if errors.Is(err, sharing.ErrSharingKeyNotFound) || errors.Is(err, slabs.ErrObjectNotFound) {
+		jc.Error(err, http.StatusNotFound)
+		return
+	} else if errors.Is(err, slabs.ErrObjectBlocked) {
+		jc.Error(err, http.StatusUnavailableForLegalReasons)
+		return
+	} else if err != nil {
+		jc.Error(err, http.StatusInternalServerError)
+		return
+	}
+	jc.Encode(nil)
+}
+
+func (a *app) handleGETSharingObjects(jc jape.Context, pk types.PublicKey) {
+	var key types.PublicKey
+	if jc.DecodeParam("key", &key) != nil {
+		return
+	}
+
+	offset, limit, ok := api.ParseOffsetLimit(jc)
+	if !ok {
+		return
+	}
+
+	objects, err := a.sharing.OwnedSharedObjects(proto.Account(pk), key, offset, limit)
+	if errors.Is(err, sharing.ErrSharingKeyNotFound) {
+		jc.Error(err, http.StatusNotFound)
+		return
+	} else if err != nil {
+		jc.Error(err, http.StatusInternalServerError)
+		return
+	}
+	jc.Encode(objects)
+}
+
+func (a *app) handleDELETESharingObject(jc jape.Context, pk types.PublicKey) {
+	var key types.PublicKey
+	if jc.DecodeParam("key", &key) != nil {
+		return
+	}
+	var objectKey types.Hash256
+	if jc.DecodeParam("objectkey", &objectKey) != nil {
+		return
+	}
+
+	err := a.sharing.DeleteSharedObject(proto.Account(pk), key, objectKey)
+	if errors.Is(err, sharing.ErrSharedObjectNotFound) {
 		jc.Error(err, http.StatusNotFound)
 		return
 	} else if err != nil {
@@ -694,28 +868,9 @@ func (a *app) handleAuthRegister(jc jape.Context) {
 		return
 	}
 
-	a.mu.Lock()
-	authReq, ok := a.authRequests[requestID]
-	a.mu.Unlock()
-	if !ok {
-		jc.Error(fmt.Errorf("unknown request ID %q", requestID), http.StatusNotFound)
-		return
-	} else if time.Now().After(authReq.Expiration) {
-		jc.Error(fmt.Errorf("request expired"), http.StatusGone)
-		return
-	} else if !authReq.Approved {
-		jc.Error(ErrUserRejected, http.StatusForbidden)
-		return
-	} else if authReq.UserSecret == (types.Hash256{}) {
-		panic("user secret is empty for approved request") // should never happen
-	}
-
 	// check whether the request is signed with the ephemeral key
 	ephemeralKey, ok := ValidateURLSignature(jc.Request, jc.ResponseWriter, a.hostname)
 	if !ok {
-		return
-	} else if authReq.EphemeralKey != ephemeralKey {
-		jc.Error(fmt.Errorf("invalid request signature"), http.StatusUnauthorized)
 		return
 	}
 
@@ -723,13 +878,40 @@ func (a *app) handleAuthRegister(jc jape.Context) {
 	if !ok {
 		return
 	}
-	// verify ownership of the app key
-	if !registerReq.AppKey.VerifyHash(registerAppKeyHash(authReq.EphemeralKey, requestID), registerReq.Signature) {
-		jc.Error(fmt.Errorf("invalid signature"), http.StatusUnauthorized)
+	// verify ownership of the app key. The proof is bound to the key that
+	// signed the URL, which is checked against the request below.
+	if !registerReq.AppKey.VerifyHash(registerAppKeyHash(ephemeralKey, requestID), registerReq.Signature) {
+		jc.Error(errors.New("invalid signature"), http.StatusUnauthorized)
 		return
 	}
 
-	err := a.accounts.RegisterAppKey(authReq.ConnectKey, registerReq.AppKey, accounts.AppMeta{
+	// validate the request and consume it, so that one approval can only ever
+	// register one account.
+	var status int
+	var err error
+	a.mu.Lock()
+	authReq, ok := a.authRequests[requestID]
+	switch {
+	case !ok:
+		status, err = http.StatusNotFound, fmt.Errorf("unknown request ID %q", requestID)
+	case time.Now().After(authReq.Expiration):
+		status, err = http.StatusGone, errors.New("request expired")
+	case !authReq.Approved:
+		status, err = http.StatusForbidden, ErrUserRejected
+	case authReq.EphemeralKey != ephemeralKey:
+		status, err = http.StatusUnauthorized, errors.New("invalid request signature")
+	default:
+		delete(a.authRequests, requestID)
+	}
+	a.mu.Unlock()
+	if err != nil {
+		jc.Error(err, status)
+		return
+	} else if authReq.UserSecret == (types.Hash256{}) {
+		panic("user secret is empty for approved request") // should never happen
+	}
+
+	err = a.accounts.RegisterAppKey(authReq.ConnectKey, registerReq.AppKey, accounts.AppMeta{
 		ID:          authReq.Request.AppID,
 		Name:        authReq.Request.Name,
 		Description: authReq.Request.Description,
@@ -802,7 +984,7 @@ func decodeRequest[T any](jc jape.Context) (T, bool) {
 // users, or rather their applications, to pin slabs to the indexer.
 // Authentication happens through presigned URLs that are signed with a private
 // key that corresponds to a previously registered public key.
-func NewAPI(advertiseURL string, hm Hosts, am Accounts, contracts Contracts, slabs Slabs, opts ...Option) (http.Handler, error) {
+func NewAPI(advertiseURL string, hm Hosts, am Accounts, contracts Contracts, slabs Slabs, sharing Sharing, opts ...Option) (http.Handler, error) {
 	u, err := url.Parse(advertiseURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse advertise URL %q: %w", advertiseURL, err)
@@ -812,6 +994,7 @@ func NewAPI(advertiseURL string, hm Hosts, am Accounts, contracts Contracts, sla
 		accounts:  am,
 		contracts: contracts,
 		slabs:     slabs,
+		sharing:   sharing,
 		log:       zap.NewNop(),
 
 		hostname:     u.Host,
@@ -829,6 +1012,16 @@ func NewAPI(advertiseURL string, hm Hosts, am Accounts, contracts Contracts, sla
 				return
 			}
 			h(jc, pk)
+		}
+	}
+
+	wrapSharedAuth := func(h sharedHandler) jape.Handler {
+		return func(jc jape.Context) {
+			key, ok := validateSharedURLAuth(jc, a.hostname, sharing)
+			if !ok {
+				return
+			}
+			h(jc, key)
 		}
 	}
 
@@ -876,6 +1069,20 @@ func NewAPI(advertiseURL string, hm Hosts, am Accounts, contracts Contracts, sla
 		"GET /objects/:key/shared": wrapSignedAuth(a.handleGETObjectShared),
 		"POST /objects":            wrapSignedAuth(a.handlePOSTObjects),
 		"DELETE /objects/:key":     wrapSignedAuth(a.handleDELETEObjects),
+
+		"POST /sharing":                           wrapSignedAuth(a.handlePOSTSharing),
+		"GET /sharing":                            wrapSignedAuth(a.handleGETSharing),
+		"GET /sharing/:key":                       wrapSignedAuth(a.handleGETSharingKey),
+		"DELETE /sharing/:key":                    wrapSignedAuth(a.handleDELETESharing),
+		"POST /sharing/:key/objects":              wrapSignedAuth(a.handlePOSTSharingObject),
+		"GET /sharing/:key/objects":               wrapSignedAuth(a.handleGETSharingObjects),
+		"DELETE /sharing/:key/objects/:objectkey": wrapSignedAuth(a.handleDELETESharingObject),
+
+		// shared-key endpoints, authenticated with a sharing key
+		"GET /shared":             wrapSharedAuth(a.handleGETShared),
+		"GET /shared/objects":     wrapSharedAuth(a.handleGETSharedObjects),
+		"GET /shared/objects/:id": wrapSharedAuth(a.handleGETSharedObject),
+		"GET /shared/hosts":       wrapSharedAuth(a.handleGETSharedHosts),
 
 		"GET /slabs":            wrapSignedAuth(a.handleGETSlabs),
 		"POST /slabs":           wrapSignedAuth(a.handlePOSTSlabs),

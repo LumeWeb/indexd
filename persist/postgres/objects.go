@@ -13,9 +13,18 @@ import (
 	"go.sia.tech/indexd/slabs"
 )
 
+const sqlObjectsByKey = `
+	SELECT id, object_key, encrypted_data_key, encrypted_meta_key, encrypted_metadata, data_signature, meta_signature, created_at, updated_at
+	FROM objects
+	WHERE account_id = $1 AND object_key = ANY($2::bytea[])`
+
 // SharedObject retrieves the shared object with the given key for the given account.
 func (s *Store) SharedObject(key types.Hash256) (obj slabs.SharedObject, _ error) {
 	err := s.transaction(func(ctx context.Context, tx *txn) error {
+		if err := assertObjectNotBlocked(ctx, tx, key); err != nil {
+			return err
+		}
+
 		var objID int64
 		err := tx.QueryRow(ctx, `SELECT id FROM objects WHERE object_key = $1
 		`, sqlHash256(key)).Scan(&objID)
@@ -92,60 +101,36 @@ func (s *Store) Object(account proto.Account, key types.Hash256) (obj slabs.Seal
 			return err
 		}
 
-		var objID int64
-		var metaKey sql.Null[[]byte]
-		err = tx.QueryRow(ctx, `SELECT id, encrypted_data_key, encrypted_meta_key, encrypted_metadata, data_signature, meta_signature, created_at, updated_at FROM objects WHERE account_id = $1 AND object_key = $2
-		`, accountID, sqlHash256(key)).Scan(&objID, &obj.EncryptedDataKey, &metaKey, &obj.EncryptedMetadata, (*sqlSignature)(&obj.DataSignature), (*sqlSignature)(&obj.MetadataSignature), &obj.CreatedAt, &obj.UpdatedAt)
+		if err := assertObjectNotBlocked(ctx, tx, key); err != nil {
+			return err
+		}
+
+		rows, err := tx.Query(ctx, sqlObjectsByKey, accountID, []sqlHash256{sqlHash256(key)})
+		if err != nil {
+			return fmt.Errorf("failed to query object: %w", err)
+		}
+		objID, err := pgx.CollectExactlyOneRow(rows, func(row pgx.CollectableRow) (int64, error) {
+			id, _, o, err := scanObject(row)
+			obj = o
+			return id, err
+		})
 		if errors.Is(err, sql.ErrNoRows) {
 			return slabs.ErrObjectNotFound
 		} else if err != nil {
 			return fmt.Errorf("failed to query object: %w", err)
 		}
-		if metaKey.Valid {
-			obj.EncryptedMetadataKey = metaKey.V
-		}
 
-		rows, err := tx.Query(ctx, `
-			SELECT slabs.id, slab_offset, slab_length, slabs.encryption_key, slabs.min_shards, slabs.version
-			FROM object_slabs
-			JOIN slabs ON slabs.digest = object_slabs.slab_digest
-			WHERE object_id = $1
-			ORDER BY slab_index ASC
-		`, objID)
-		if err != nil {
-			return fmt.Errorf("failed to query slabs: %w", err)
-		}
-		defer rows.Close()
-
-		var slabIDs []int64
-		for rows.Next() {
-			var slab slabs.SlabSlice
-			var slabID int64
-			err := rows.Scan(&slabID, &slab.Offset, &slab.Length, (*sqlHash256)(&slab.EncryptionKey), &slab.MinShards, &slab.Version)
-			if err != nil {
-				return fmt.Errorf("failed to scan slab: %w", err)
-			}
-			obj.Slabs = append(obj.Slabs, slab)
-			slabIDs = append(slabIDs, slabID)
-		}
-		if err := rows.Err(); err != nil {
-			return err
-		}
-
-		if err := decorateSectors(ctx, tx, &obj, slabIDs); err != nil {
-			return fmt.Errorf("failed to decorate sectors of slab: %w", err)
-		}
-		return nil
+		return loadObjectSlabs(ctx, tx, map[int64]*slabs.SealedObject{objID: &obj})
 	})
 	return obj, err
 }
 
 // ListObjects lists objects for the given account that were updated after the
-// the given 'after' time.
+// the given 'after' time. The in-progress second is withheld: updated_at has
+// second precision, so a cursor resting inside a second that can still receive
+// writes would lose any later event in it with a smaller object_key.
 func (s *Store) ListObjects(account proto.Account, cursor slabs.Cursor, limit int) (events []slabs.ObjectEvent, err error) {
 	err = s.transaction(func(ctx context.Context, tx *txn) error {
-		events = events[:0] // reuse same slice if transaction retries
-
 		accountID, _, err := accountID(ctx, tx, account)
 		if err != nil {
 			return err
@@ -153,94 +138,58 @@ func (s *Store) ListObjects(account proto.Account, cursor slabs.Cursor, limit in
 
 		rows, err := tx.Query(ctx, `
 			SELECT object_key, was_deleted, updated_at
-			FROM object_events
-			WHERE (updated_at > $1 OR (updated_at = $1 AND object_key > $2)) AND account_id = $3
-			ORDER BY updated_at ASC, object_key ASC
+			FROM object_events oe
+			WHERE oe.account_id = $1 AND (oe.updated_at, oe.object_key) > ($2, $3)
+			  AND oe.updated_at < date_trunc('second', NOW())
+			  AND NOT EXISTS (SELECT 1 FROM blocked_objects b WHERE b.object_key = oe.object_key)
+			ORDER BY oe.updated_at ASC, oe.object_key ASC
 			LIMIT $4
-		`, cursor.After, sqlHash256(cursor.Key), accountID, limit)
+		`, accountID, cursor.After, sqlHash256(cursor.Key), limit)
+		if err != nil {
+			return fmt.Errorf("failed to query object events: %w", err)
+		}
+		events, err = pgx.AppendRows(events[:0], rows, scanObjectEvent)
+		if err != nil {
+			return fmt.Errorf("failed to scan object events: %w", err)
+		}
+
+		objectKeys := make([]sqlHash256, 0, len(events))
+		eventByKey := make(map[types.Hash256]int, len(events))
+		for i := range events {
+			if events[i].Deleted {
+				continue
+			}
+			objectKeys = append(objectKeys, sqlHash256(events[i].Key))
+			eventByKey[events[i].Key] = i
+		}
+		if len(objectKeys) == 0 {
+			return nil
+		}
+
+		rows, err = tx.Query(ctx, sqlObjectsByKey, accountID, objectKeys)
 		if err != nil {
 			return fmt.Errorf("failed to query objects: %w", err)
 		}
-
-		for rows.Next() {
-			var event slabs.ObjectEvent
-			err := rows.Scan((*sqlHash256)(&event.Key), &event.Deleted, &event.UpdatedAt)
+		objectsByID := make(map[int64]*slabs.SealedObject, len(objectKeys))
+		err = forEachRow(rows, func(row pgx.CollectableRow) error {
+			id, key, obj, err := scanObject(row)
 			if err != nil {
-				return fmt.Errorf("failed to scan object event: %w", err)
-			}
-			events = append(events, event)
-		}
-		if err := rows.Err(); err != nil {
-			return err
-		}
-
-		objectIDs := make(map[types.Hash256]int64)
-		for i := range events {
-			if events[i].Deleted {
-				continue
-			}
-
-			var obj slabs.SealedObject
-			var objID int64
-			var metaKey sql.Null[[]byte]
-			err := tx.QueryRow(ctx, `SELECT id, encrypted_data_key, encrypted_meta_key, encrypted_metadata, data_signature, meta_signature, created_at, updated_at
-				FROM objects
-				WHERE account_id = $1 AND object_key = $2`,
-				accountID,
-				sqlHash256(events[i].Key),
-			).Scan(&objID, &obj.EncryptedDataKey, &metaKey, &obj.EncryptedMetadata, (*sqlSignature)(&obj.DataSignature), (*sqlSignature)(&obj.MetadataSignature), &obj.CreatedAt, &obj.UpdatedAt)
-			if err != nil {
-				return fmt.Errorf("failed to query objects: %w", err)
-			}
-			if metaKey.Valid {
-				obj.EncryptedMetadataKey = metaKey.V
-			}
-			events[i].Object = &obj
-			objectIDs[events[i].Key] = objID
-		}
-		if err := rows.Err(); err != nil {
-			return err
-		}
-
-		// populate slabs
-		for i := range events {
-			if events[i].Deleted {
-				continue
-			}
-
-			rows, err = tx.Query(ctx, `
-				SELECT slabs.id, slab_offset, slab_length, slabs.encryption_key, slabs.min_shards, slabs.version
-				FROM object_slabs
-				JOIN slabs ON slabs.digest = object_slabs.slab_digest
-				WHERE object_id = $1
-				ORDER BY slab_index ASC
-			`, objectIDs[events[i].Key])
-			if err != nil {
-				return fmt.Errorf("failed to query slabs: %w", err)
-			}
-
-			var slabIDs []int64
-			for rows.Next() {
-				var slab slabs.SlabSlice
-				var slabID int64
-				err := rows.Scan(&slabID, &slab.Offset, &slab.Length, (*sqlHash256)(&slab.EncryptionKey), &slab.MinShards, &slab.Version)
-				if err != nil {
-					rows.Close()
-					return fmt.Errorf("failed to scan slab: %w", err)
-				}
-				events[i].Object.Slabs = append(events[i].Object.Slabs, slab)
-				slabIDs = append(slabIDs, slabID)
-			}
-			if err := rows.Err(); err != nil {
 				return err
 			}
-			rows.Close()
-
-			if err := decorateSectors(ctx, tx, events[i].Object, slabIDs); err != nil {
-				return fmt.Errorf("failed to decorate sectors of slab: %w", err)
+			eventIndex, ok := eventByKey[key]
+			if !ok {
+				return fmt.Errorf("queried object not present in event page (developer error): %v", key)
 			}
+			events[eventIndex].Object = &obj
+			objectsByID[id] = &obj
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("failed to scan objects: %w", err)
+		} else if len(objectsByID) != len(objectKeys) {
+			return fmt.Errorf("failed to query objects: expected %d objects, got %d", len(objectKeys), len(objectsByID))
 		}
-		return nil
+		return loadObjectSlabs(ctx, tx, objectsByID)
 	})
 	return
 }
@@ -340,6 +289,10 @@ func (s *Store) PinObject(account proto.Account, obj slabs.PinObjectRequest) err
 			return accounts.ErrNotFound
 		}
 
+		if err := assertObjectNotBlocked(ctx, tx, obj.ID); err != nil {
+			return err
+		}
+
 		// ensure empty slices are passed as nil
 		var encryptedMetaKey []byte
 		if len(obj.EncryptedMetadataKey) > 0 {
@@ -435,41 +388,125 @@ func accountID(ctx context.Context, tx *txn, account proto.Account) (int64, bool
 	return accountID, deleted, nil
 }
 
-func decorateSectors(ctx context.Context, tx *txn, so *slabs.SealedObject, slabIDs []int64) error {
-	if len(so.Slabs) != len(slabIDs) {
-		return fmt.Errorf("mismatched slab count (developer error): have %d, want %d", len(so.Slabs), len(slabIDs))
+func scanObject(row pgx.CollectableRow) (id int64, key types.Hash256, obj slabs.SealedObject, err error) {
+	var metaKey sql.Null[[]byte]
+	if err = row.Scan(&id, (*sqlHash256)(&key), &obj.EncryptedDataKey, &metaKey, &obj.EncryptedMetadata, (*sqlSignature)(&obj.DataSignature), (*sqlSignature)(&obj.MetadataSignature), &obj.CreatedAt, &obj.UpdatedAt); err != nil {
+		return
 	}
-	batch := &pgx.Batch{}
-	for i := range so.Slabs {
-		batch.Queue(`
-			SELECT s.sector_root, h.public_key
-			FROM slabs
-			JOIN slab_sectors ss ON ss.slab_id = slabs.id
-			JOIN sectors s ON s.id = ss.sector_id
-			LEFT JOIN hosts h ON h.id = s.host_id
-			WHERE slabs.id = $1
-			ORDER BY ss.slab_index ASC
-		`, slabIDs[i]).Query(func(rows pgx.Rows) error {
-			defer rows.Close()
+	if metaKey.Valid {
+		obj.EncryptedMetadataKey = metaKey.V
+	}
+	return
+}
 
-			for rows.Next() {
-				var sector slabs.PinnedSector
-				var hostKey sql.Null[sqlPublicKey]
-				err := rows.Scan((*sqlHash256)(&sector.Root), &hostKey)
-				if err != nil {
-					rows.Close()
-					return fmt.Errorf("failed to scan slab sector: %w", err)
-				}
-				if hostKey.Valid {
-					sector.HostKey = (types.PublicKey)(hostKey.V)
-				}
-				so.Slabs[i].Sectors = append(so.Slabs[i].Sectors, sector)
-			}
-			return rows.Err()
-		})
+func scanObjectEvent(row pgx.CollectableRow) (event slabs.ObjectEvent, _ error) {
+	err := row.Scan((*sqlHash256)(&event.Key), &event.Deleted, &event.UpdatedAt)
+	return event, err
+}
+
+func scanObjectSlab(row pgx.CollectableRow) (objectID, slabID int64, slab slabs.SlabSlice, err error) {
+	err = row.Scan(&objectID, &slabID, &slab.Offset, &slab.Length, (*sqlHash256)(&slab.EncryptionKey), &slab.MinShards, &slab.Version)
+	return
+}
+
+func scanSlabSector(row pgx.CollectableRow) (slabID int64, sector slabs.PinnedSector, err error) {
+	var hostKey sql.Null[sqlPublicKey]
+	if err = row.Scan(&slabID, (*sqlHash256)(&sector.Root), &hostKey); err != nil {
+		return
 	}
-	if err := tx.Tx.SendBatch(ctx, batch).Close(); err != nil {
+	if hostKey.Valid {
+		sector.HostKey = types.PublicKey(hostKey.V)
+	}
+	return
+}
+
+// forEachRow calls `scan` for every row
+//
+// rows is automatically closed before returning
+func forEachRow(rows pgx.Rows, scan func(pgx.CollectableRow) error) error {
+	defer rows.Close()
+	for rows.Next() {
+		if err := scan(rows); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+// loadObjectSlabs loads each object's slab slices in order and decorates them
+// with their sectors.
+func loadObjectSlabs(ctx context.Context, tx *txn, objects map[int64]*slabs.SealedObject) error {
+	if len(objects) == 0 {
+		return nil
+	}
+
+	objectIDs := make([]int64, 0, len(objects))
+	for objectID := range objects {
+		objectIDs = append(objectIDs, objectID)
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT object_slabs.object_id, slabs.id, slab_offset, slab_length, slabs.encryption_key, slabs.min_shards, slabs.version
+		FROM object_slabs
+		JOIN slabs ON slabs.digest = object_slabs.slab_digest
+		WHERE object_slabs.object_id = ANY($1)
+		ORDER BY object_slabs.object_id, slab_index ASC
+	`, objectIDs)
+	if err != nil {
+		return fmt.Errorf("failed to query slabs: %w", err)
+	}
+
+	type slabLocation struct {
+		objectID int64
+		slab     int
+	}
+	slabLocations := make(map[int64][]slabLocation)
+	var slabIDs []int64
+	err = forEachRow(rows, func(row pgx.CollectableRow) error {
+		objectID, slabID, slab, err := scanObjectSlab(row)
+		if err != nil {
+			return err
+		}
+		obj, ok := objects[objectID]
+		if !ok {
+			return fmt.Errorf("queried slab for unknown object (developer error): %d", objectID)
+		}
+		if len(slabLocations[slabID]) == 0 {
+			slabIDs = append(slabIDs, slabID)
+		}
+		slabLocations[slabID] = append(slabLocations[slabID], slabLocation{objectID, len(obj.Slabs)})
+		obj.Slabs = append(obj.Slabs, slab)
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to scan slabs: %w", err)
+	} else if len(slabIDs) == 0 {
+		return nil
+	}
+
+	rows, err = tx.Query(ctx, `
+		SELECT ss.slab_id, s.sector_root, h.public_key
+		FROM slab_sectors ss
+		JOIN sectors s ON s.id = ss.sector_id
+		LEFT JOIN hosts h ON h.id = s.host_id
+		WHERE ss.slab_id = ANY($1)
+		ORDER BY ss.slab_id, ss.slab_index ASC
+	`, slabIDs)
+	if err != nil {
 		return fmt.Errorf("failed to query slab sectors: %w", err)
+	}
+	err = forEachRow(rows, func(row pgx.CollectableRow) error {
+		slabID, sector, err := scanSlabSector(row)
+		if err != nil {
+			return err
+		}
+		for _, loc := range slabLocations[slabID] {
+			objects[loc.objectID].Slabs[loc.slab].Sectors = append(objects[loc.objectID].Slabs[loc.slab].Sectors, sector)
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to scan slab sectors: %w", err)
 	}
 	return nil
 }

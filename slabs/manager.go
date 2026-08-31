@@ -72,6 +72,7 @@ type (
 	// the SlabManager requires.
 	HostClient interface {
 		AddFailedRPC(hostKey types.PublicKey)
+		AddTimedOutRPC(hostKey types.PublicKey, write bool, bytes uint64, elapsed time.Duration)
 		Prices(context.Context, types.PublicKey) (proto.HostPrices, error)
 		WriteSector(ctx context.Context, accountKey types.PrivateKey, hostKey types.PublicKey, data []byte) (rhp.RPCWriteSectorResult, error)
 		ReadSector(ctx context.Context, accountKey types.PrivateKey, hostKey types.PublicKey, root types.Hash256, w io.Writer, offset, length uint64) (rhp.RPCReadSectorResult, error)
@@ -138,6 +139,12 @@ type (
 		PinObject(account proto.Account, obj PinObjectRequest) error
 		ListObjects(account proto.Account, cursor Cursor, limit int) ([]ObjectEvent, error)
 		SharedObject(key types.Hash256) (SharedObject, error)
+
+		// Blocklist methods
+		BlockObject(objectKey types.Hash256, reason string) error
+		UnblockObject(objectKey types.Hash256) error
+		BlockedObject(objectKey types.Hash256) (BlockedObject, error)
+		BlockedObjects(offset, limit int) ([]BlockedObject, error)
 
 		ObjectsForSlab(slabID SlabID) ([]SlabObject, error)
 		SectorStats() (SectorsStats, error)

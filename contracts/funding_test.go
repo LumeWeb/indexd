@@ -71,7 +71,7 @@ func TestFundingLegacy(t *testing.T) {
 	defer am.Close()
 
 	network, genesis := testutil.V2Network()
-	dbstore, tipState, err := chain.NewDBStore(chain.NewMemDB(), network, genesis, chain.NewZapMigrationLogger(log.Named("chaindb")))
+	dbstore, err := chain.NewDBStore(chain.NewMemDB(), network, genesis, chain.NewZapMigrationLogger(log.Named("chaindb")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestFundingLegacy(t *testing.T) {
 	}
 	defer hm.Close()
 
-	cm, err := contracts.NewManager(types.GeneratePrivateKey(), am, f, chain.NewManager(dbstore, tipState), s, nil, nil, nil, contracts.NewContractLocker(), hm, nil, nil, contracts.WithLogger(log.Named("contracts")))
+	cm, err := contracts.NewManager(types.GeneratePrivateKey(), am, f, chain.NewManager(dbstore), s, nil, nil, nil, contracts.NewContractLocker(), hm, nil, nil, contracts.WithLogger(log.Named("contracts")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +241,7 @@ func TestFundingPools(t *testing.T) {
 	defer am.Close()
 
 	network, genesis := testutil.V2Network()
-	dbstore, tipState, err := chain.NewDBStore(chain.NewMemDB(), network, genesis, chain.NewZapMigrationLogger(log.Named("chaindb")))
+	dbstore, err := chain.NewDBStore(chain.NewMemDB(), network, genesis, chain.NewZapMigrationLogger(log.Named("chaindb")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +252,7 @@ func TestFundingPools(t *testing.T) {
 	}
 	defer hm.Close()
 
-	cm, err := contracts.NewManager(types.GeneratePrivateKey(), am, f, chain.NewManager(dbstore, tipState), s, nil, nil, nil, contracts.NewContractLocker(), hm, nil, nil, contracts.WithLogger(log.Named("contracts")))
+	cm, err := contracts.NewManager(types.GeneratePrivateKey(), am, f, chain.NewManager(dbstore), s, nil, nil, nil, contracts.NewContractLocker(), hm, nil, nil, contracts.WithLogger(log.Named("contracts")))
 	if err != nil {
 		t.Fatal(err)
 	}

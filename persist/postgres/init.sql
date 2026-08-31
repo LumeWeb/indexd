@@ -388,15 +388,141 @@ CREATE TABLE object_events (
     object_key BYTEA NOT NULL CHECK(LENGTH(object_key) = 32), -- not a FK since deletions need to hang around
     account_id BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     was_deleted BOOLEAN NOT NULL, -- true if deleted, false otherwise
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), -- last time the object was created/updated/deleted truncated to second precision
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT date_trunc('second', NOW()), -- last time the object was created/updated/deleted, truncated to second precision so a client cursor can express it exactly
     PRIMARY KEY (account_id, object_key)
 );
 
--- fast sorting by update time and key
-CREATE INDEX object_events_updated_at_object_key_idx ON object_events(updated_at ASC, object_key ASC);
+-- fast per-account events cursor pagination sorted by update time and object key
+CREATE INDEX object_events_account_id_updated_at_object_key_idx ON object_events(account_id, updated_at ASC, object_key ASC);
 
 -- probe by object_key alone since the PK leads with account_id
 CREATE INDEX object_events_object_key_idx ON object_events(object_key);
+
+-- object keys that may not be pinned, listed, fetched or shared
+CREATE TABLE blocked_objects (
+    object_key BYTEA PRIMARY KEY CHECK(LENGTH(object_key) = 32),
+    reason TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+-- fast sorting of the blocklist, most recently blocked first
+CREATE INDEX blocked_objects_created_at_idx ON blocked_objects(created_at DESC, object_key ASC);
+
+CREATE TABLE sharing_keys (
+    id BIGSERIAL PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    public_key BYTEA UNIQUE NOT NULL CHECK(LENGTH(public_key) = 32),
+    nonce BYTEA UNIQUE NOT NULL CHECK(LENGTH(nonce) = 32), -- share_key = HKDF(app_key, nonce, "share key")
+    use_description TEXT NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE, -- optional automatic expiration
+    object_count BIGINT NOT NULL CHECK(object_count >= 0), -- number of attached objects, maintained by trigger
+    size BIGINT NOT NULL CHECK(size >= 0), -- total logical size of attached objects (sum of object.Size()), maintained by trigger
+    pinned_data BIGINT NOT NULL CHECK(pinned_data >= 0), -- total data size of attached objects before redundancy, maintained by trigger
+    pinned_size BIGINT NOT NULL CHECK(pinned_size >= 0), -- total size of attached objects including redundancy, maintained by trigger
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW() -- allow sorting by update time
+);
+CREATE INDEX sharing_keys_account_id_idx ON sharing_keys(account_id);
+CREATE INDEX sharing_keys_expires_at_idx ON sharing_keys(expires_at);
+
+CREATE TABLE shared_objects (
+    object_id BIGINT NOT NULL REFERENCES objects(id) ON DELETE CASCADE,
+    sharing_key_id BIGINT NOT NULL REFERENCES sharing_keys(id) ON DELETE CASCADE,
+    encrypted_data_key BYTEA UNIQUE NOT NULL CHECK(LENGTH(encrypted_data_key) = 72), -- user provided, data encryption key (xchacha20 nonce + key + tag)
+    encrypted_meta_key BYTEA UNIQUE CHECK(LENGTH(encrypted_meta_key) = 72), -- user provided, metadata encryption key (xchacha20 nonce + key + tag)
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(), -- allow sorting by update time
+    encrypted_metadata BYTEA, -- user provided, encrypted metadata
+    data_signature BYTEA UNIQUE NOT NULL CHECK(LENGTH(data_signature) = 64), -- signature of blake2b(object_key || encrypted_data_key)
+    meta_signature BYTEA UNIQUE NOT NULL CHECK(LENGTH(meta_signature) = 64), -- signature of blake2b(object ID || metadata key || encrypted_metadata)
+    size BIGINT NOT NULL, -- logical size of the object (object.Size()), captured at attach time for trigger
+    pinned_data BIGINT NOT NULL, -- data size of the object before redundancy, captured at attach time for trigger
+    pinned_size BIGINT NOT NULL, -- size of the object including redundancy, captured at attach time for trigger
+    PRIMARY KEY (object_id, sharing_key_id)
+);
+CREATE INDEX shared_objects_sharing_key_id_idx ON shared_objects(sharing_key_id);
+
+-- serve a sharing key's object listing in created_at order without a sort
+CREATE INDEX shared_objects_sharing_key_id_created_at_idx ON shared_objects(sharing_key_id, created_at DESC);
+
+-- maintain sharing_keys.{object_count, pinned_data, pinned_size} as objects are
+-- attached and detached.
+CREATE FUNCTION shared_objects_maintain_totals() RETURNS TRIGGER AS $$
+BEGIN
+    IF (TG_OP = 'INSERT') THEN
+        UPDATE sharing_keys SET
+            object_count = sharing_keys.object_count + agg.object_count,
+            size = sharing_keys.size + agg.size,
+            pinned_data = sharing_keys.pinned_data + agg.pinned_data,
+            pinned_size = sharing_keys.pinned_size + agg.pinned_size,
+            updated_at = NOW()
+        FROM (
+            SELECT sharing_key_id,
+                COUNT(*) AS object_count,
+                SUM(size) AS size,
+                SUM(pinned_data) AS pinned_data,
+                SUM(pinned_size) AS pinned_size
+            FROM new_rows
+            GROUP BY sharing_key_id
+        ) agg
+        WHERE sharing_keys.id = agg.sharing_key_id;
+    ELSIF (TG_OP = 'UPDATE') THEN
+        UPDATE sharing_keys SET
+            object_count = sharing_keys.object_count + agg.object_count,
+            size = sharing_keys.size + agg.size,
+            pinned_data = sharing_keys.pinned_data + agg.pinned_data,
+            pinned_size = sharing_keys.pinned_size + agg.pinned_size,
+            updated_at = NOW()
+        FROM (
+            SELECT sharing_key_id,
+                SUM(object_count) AS object_count,
+                SUM(size) AS size,
+                SUM(pinned_data) AS pinned_data,
+                SUM(pinned_size) AS pinned_size
+            FROM (
+                SELECT sharing_key_id, 1 AS object_count, size, pinned_data, pinned_size FROM new_rows
+                UNION ALL
+                SELECT sharing_key_id, -1, -size, -pinned_data, -pinned_size FROM old_rows
+            ) deltas
+            GROUP BY sharing_key_id
+        ) agg
+        WHERE sharing_keys.id = agg.sharing_key_id;
+    ELSIF (TG_OP = 'DELETE') THEN
+        UPDATE sharing_keys SET
+            object_count = sharing_keys.object_count - agg.object_count,
+            size = sharing_keys.size - agg.size,
+            pinned_data = sharing_keys.pinned_data - agg.pinned_data,
+            pinned_size = sharing_keys.pinned_size - agg.pinned_size,
+            updated_at = NOW()
+        FROM (
+            SELECT sharing_key_id,
+                COUNT(*) AS object_count,
+                SUM(size) AS size,
+                SUM(pinned_data) AS pinned_data,
+                SUM(pinned_size) AS pinned_size
+            FROM old_rows
+            GROUP BY sharing_key_id
+        ) agg
+        WHERE sharing_keys.id = agg.sharing_key_id;
+    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER shared_objects_maintain_totals_insert
+AFTER INSERT ON shared_objects
+REFERENCING NEW TABLE AS new_rows
+FOR EACH STATEMENT EXECUTE FUNCTION shared_objects_maintain_totals();
+
+CREATE TRIGGER shared_objects_maintain_totals_update
+AFTER UPDATE ON shared_objects
+REFERENCING OLD TABLE AS old_rows NEW TABLE AS new_rows
+FOR EACH STATEMENT EXECUTE FUNCTION shared_objects_maintain_totals();
+
+CREATE TRIGGER shared_objects_maintain_totals_delete
+AFTER DELETE ON shared_objects
+REFERENCING OLD TABLE AS old_rows
+FOR EACH STATEMENT EXECUTE FUNCTION shared_objects_maintain_totals();
 
 CREATE TABLE account_slabs (
     account_id INTEGER REFERENCES accounts(id) NOT NULL, -- account that owns slab
