@@ -76,7 +76,7 @@ func TestFundingLegacy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	hm, err := hosts.NewManager(nil, nil, nil, s, alerts.NewManager(), hosts.WithLogger(log.Named("hosts")))
+	hm, err := hosts.NewManager(nil, nil, s, alerts.NewManager(), hosts.WithLogger(log.Named("hosts")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func TestFundingPools(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	hm, err := hosts.NewManager(nil, nil, nil, s, alerts.NewManager(), hosts.WithLogger(log.Named("hosts")))
+	hm, err := hosts.NewManager(nil, nil, s, alerts.NewManager(), hosts.WithLogger(log.Named("hosts")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +367,7 @@ func TestFundAccountsRecordsFundingEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hm, _ := hosts.NewManager(nil, nil, nil, s, alerts.NewManager(), hosts.WithLogger(log.Named("hosts")))
+	hm, _ := hosts.NewManager(nil, nil, s, alerts.NewManager(), hosts.WithLogger(log.Named("hosts")))
 	defer hm.Close()
 	cm, _ := contracts.NewManager(types.GeneratePrivateKey(), am, f, chain.NewManager(dbstore), s, nil, nil, nil, contracts.NewContractLocker(), hm, nil, nil, contracts.WithLogger(log.Named("contracts")))
 	defer cm.Close()
@@ -490,7 +490,7 @@ func TestFundAccountsRecordsFundingEventsFullStorage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hm, _ := hosts.NewManager(nil, nil, nil, s, alerts.NewManager(), hosts.WithLogger(log.Named("hosts")))
+	hm, _ := hosts.NewManager(nil, nil, s, alerts.NewManager(), hosts.WithLogger(log.Named("hosts")))
 	defer hm.Close()
 	cm, _ := contracts.NewManager(types.GeneratePrivateKey(), am, f, chain.NewManager(dbstore), s, nil, nil, nil, contracts.NewContractLocker(), hm, nil, nil, contracts.WithLogger(log.Named("contracts")))
 	defer cm.Close()

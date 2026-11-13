@@ -262,6 +262,62 @@ func TestBlockHosts(t *testing.T) {
 	}
 }
 
+func TestBlockUnknownHostNoReasons(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	store := initPostgres(t, log.Named("postgres"))
+
+	// assert blocking a host that is not in the database without any reasons
+	// works and doesn't error
+	for i, test := range []struct {
+		name    string
+		reasons []string
+	}{
+		{"nil", nil},
+		{"empty", []string{}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			hk := types.PublicKey{byte(i + 1)}
+			if err := store.BlockHosts([]types.PublicKey{hk}, test.reasons); err != nil {
+				t.Fatal(err)
+			}
+
+			var reasons []string
+			if err := store.pool.QueryRow(t.Context(), `SELECT reasons FROM hosts_blocklist WHERE public_key = $1`, sqlPublicKey(hk)).Scan(&reasons); err != nil {
+				t.Fatal(err)
+			} else if len(reasons) != 0 {
+				t.Fatal("expected no reasons, got", reasons)
+			}
+		})
+	}
+
+	if hks, err := store.BlockedHosts(0, 10); err != nil {
+		t.Fatal(err)
+	} else if len(hks) != 2 {
+		t.Fatal("expected 2 blocked hosts, got", len(hks))
+	}
+}
+
+func TestBlockUnknownHostMergeReasons(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	store := initPostgres(t, log.Named("postgres"))
+
+	// assert blocking a host that is not in the database again merges the
+	// reasons with the existing ones
+	hk := types.PublicKey{1}
+	if err := store.BlockHosts([]types.PublicKey{hk}, []string{"a"}); err != nil {
+		t.Fatal(err)
+	} else if err := store.BlockHosts([]types.PublicKey{hk}, []string{"b"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var reasons []string
+	if err := store.pool.QueryRow(t.Context(), `SELECT reasons FROM hosts_blocklist WHERE public_key = $1`, sqlPublicKey(hk)).Scan(&reasons); err != nil {
+		t.Fatal(err)
+	} else if !reflect.DeepEqual(reasons, []string{"a", "b"}) {
+		t.Fatal("expected reasons to be merged, got", reasons)
+	}
+}
+
 func TestRemoveBlocklistReasons(t *testing.T) {
 	log := zaptest.NewLogger(t)
 	store := initPostgres(t, log.Named("postgres"))
@@ -1954,6 +2010,124 @@ func TestHostsRecentUptime(t *testing.T) {
 	simulateScans(false, uptimeHalfLife/60/60/24)
 	if math.Round(uptime()*10)/10 != .5 {
 		t.Fatal("unexpected", uptime())
+	}
+}
+
+// TestUpdateHostScanConcurrent asserts that concurrent scan updates for the
+// same host are serialized, so the time elapsed since the previous scan only
+// decays the host's recent uptime once.
+func TestUpdateHostScanConcurrent(t *testing.T) {
+	tests := []struct {
+		name          string
+		scanSucceeded bool
+		failedScans   int
+	}{
+		{name: "failed", scanSucceeded: false, failedScans: 2},
+		{name: "successful", scanSucceeded: true, failedScans: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log := zaptest.NewLogger(t)
+			db := initPostgres(t, log.Named("postgres"))
+
+			// add a host that was last scanned 24 hours ago
+			hk := db.addTestHost(t)
+			const initialUptime = 0.5
+			var prevScan time.Time
+			if err := db.pool.QueryRow(t.Context(), `
+				UPDATE hosts
+				SET recent_uptime = $1, last_failed_scan = NOW() - INTERVAL '24 hours'
+				WHERE public_key = $2
+				RETURNING last_failed_scan`, initialUptime, sqlPublicKey(hk)).Scan(&prevScan); err != nil {
+				t.Fatal(err)
+			}
+
+			// hold the host's row lock so both updates see the same previous
+			// scan time unless they are serialized
+			lockTx, err := db.pool.Begin(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = lockTx.Rollback(t.Context()) }()
+			if _, err := lockTx.Exec(t.Context(), `SELECT id FROM hosts WHERE public_key = $1 FOR UPDATE`, sqlPublicKey(hk)); err != nil {
+				t.Fatal(err)
+			}
+
+			// both updates block on the locked row
+			settings := proto4.HostSettings{}
+			if tt.scanSucceeded {
+				settings = newTestHostSettings(hk)
+			}
+			updateErrs := make(chan error, 2)
+			for range 2 {
+				go func() {
+					updateErrs <- db.UpdateHostScan(hk, settings, geoip.Location{}, tt.scanSucceeded, time.Now().Add(time.Hour))
+				}()
+			}
+			var blocked bool
+			for range 100 {
+				var waiting int
+				if err := db.pool.QueryRow(t.Context(), `
+					SELECT COUNT(*) FROM pg_locks l
+					JOIN pg_stat_activity a ON a.pid = l.pid
+					WHERE NOT l.granted AND a.datname = current_database()`).Scan(&waiting); err != nil {
+					t.Fatal(err)
+				} else if waiting == 2 {
+					blocked = true
+					break
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+			if !blocked {
+				t.Fatal("expected both updates to block on the locked host")
+			}
+
+			// release the row lock, the updates must record their scan times
+			// after this point
+			var releasedAt time.Time
+			if err := lockTx.QueryRow(t.Context(), `SELECT CLOCK_TIMESTAMP()`).Scan(&releasedAt); err != nil {
+				t.Fatal(err)
+			} else if err := lockTx.Rollback(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				if err := <-updateErrs; err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			// assert the elapsed time was only counted once
+			h, err := db.Host(hk)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lastScan := h.LastFailedScan
+			if tt.scanSucceeded {
+				lastScan = h.LastSuccessfulScan
+			}
+			decayFactor := math.Exp(-math.Ln2 * lastScan.Sub(prevScan).Seconds() / uptimeHalfLife)
+			want := initialUptime * decayFactor
+			if tt.scanSucceeded {
+				want += 1 - decayFactor
+			}
+			if math.Abs(h.RecentUptime-want) > 1e-12 {
+				t.Fatalf("expected recent uptime %v, got %v", want, h.RecentUptime)
+			} else if lastScan.Before(releasedAt) {
+				t.Fatalf("expected scan time after %v, got %v", releasedAt, lastScan)
+			} else if h.ConsecutiveFailedScans != tt.failedScans {
+				t.Fatalf("expected %d consecutive failed scans, got %d", tt.failedScans, h.ConsecutiveFailedScans)
+			}
+
+			// assert both scans were counted
+			var scans, scansFailed int
+			if err := db.pool.QueryRow(t.Context(), `SELECT scans, scans_failed FROM hosts WHERE public_key = $1`, sqlPublicKey(hk)).Scan(&scans, &scansFailed); err != nil {
+				t.Fatal(err)
+			} else if scans != 2 {
+				t.Fatalf("expected 2 scans, got %d", scans)
+			} else if scansFailed != tt.failedScans {
+				t.Fatalf("expected %d failed scans, got %d", tt.failedScans, scansFailed)
+			}
+		})
 	}
 }
 

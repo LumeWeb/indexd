@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 	"go.uber.org/zap"
 )
@@ -389,6 +390,394 @@ DROP INDEX IF EXISTS object_events_updated_at_object_key_idx;`)
 	func(ctx context.Context, tx *txn, log *zap.Logger) error {
 		_, err := tx.Exec(ctx, `
 CREATE INDEX IF NOT EXISTS shared_objects_sharing_key_id_created_at_idx ON shared_objects(sharing_key_id, created_at DESC);`)
+		return err
+	},
+	func(ctx context.Context, tx *txn, log *zap.Logger) error {
+		_, err := tx.Exec(ctx, `
+ALTER TABLE slabs
+	ADD COLUMN unrecoverable BOOLEAN NOT NULL DEFAULT FALSE,
+	ADD COLUMN unrecoverable_reason TEXT,
+	ADD CONSTRAINT slabs_unrecoverable_reason_check CHECK (unrecoverable = (unrecoverable_reason IS NOT NULL));
+
+-- maintain the slab repair-state counters; stuck means more than one
+-- consecutive failed repair
+CREATE FUNCTION slab_is_stuck(failures SMALLINT, unrecoverable BOOLEAN) RETURNS BOOLEAN
+    LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$ SELECT failures > 1 AND NOT unrecoverable $$;
+
+CREATE FUNCTION slabs_maintain_repair_stats() RETURNS TRIGGER AS $$
+DECLARE
+    old_unrecoverable INT := 0;
+    old_stuck INT := 0;
+    new_unrecoverable INT := 0;
+    new_stuck INT := 0;
+BEGIN
+    IF (TG_OP <> 'INSERT') THEN
+        old_unrecoverable := OLD.unrecoverable::int;
+        old_stuck := slab_is_stuck(OLD.consecutive_failed_repairs, OLD.unrecoverable)::int;
+    END IF;
+    IF (TG_OP <> 'DELETE') THEN
+        new_unrecoverable := NEW.unrecoverable::int;
+        new_stuck := slab_is_stuck(NEW.consecutive_failed_repairs, NEW.unrecoverable)::int;
+    END IF;
+
+    INSERT INTO stats_deltas (stat_name, stat_delta)
+    SELECT * FROM (
+        SELECT 'num_unrecoverable_slabs', new_unrecoverable - old_unrecoverable
+        UNION ALL
+        SELECT 'num_stuck_slabs', new_stuck - old_stuck
+    ) v(stat_name, stat_delta) WHERE stat_delta <> 0;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+-- the WHEN clauses keep the repair loop's next_repair_attempt bumps and the
+-- pin upsert from reaching the function at all
+CREATE TRIGGER slabs_maintain_repair_stats_insert
+AFTER INSERT ON slabs FOR EACH ROW
+WHEN (NEW.unrecoverable OR slab_is_stuck(NEW.consecutive_failed_repairs, NEW.unrecoverable))
+EXECUTE FUNCTION slabs_maintain_repair_stats();
+
+CREATE TRIGGER slabs_maintain_repair_stats_update
+AFTER UPDATE OF unrecoverable, consecutive_failed_repairs ON slabs FOR EACH ROW
+WHEN (OLD.unrecoverable IS DISTINCT FROM NEW.unrecoverable
+   OR slab_is_stuck(OLD.consecutive_failed_repairs, OLD.unrecoverable)
+      IS DISTINCT FROM slab_is_stuck(NEW.consecutive_failed_repairs, NEW.unrecoverable))
+EXECUTE FUNCTION slabs_maintain_repair_stats();
+
+CREATE TRIGGER slabs_maintain_repair_stats_delete
+AFTER DELETE ON slabs FOR EACH ROW
+WHEN (OLD.unrecoverable OR slab_is_stuck(OLD.consecutive_failed_repairs, OLD.unrecoverable))
+EXECUTE FUNCTION slabs_maintain_repair_stats();
+
+INSERT INTO stats (stat_name, stat_value) VALUES
+	('num_unrecoverable_slabs', 0),
+	('num_stuck_slabs', (SELECT COUNT(*) FROM slabs WHERE slab_is_stuck(consecutive_failed_repairs, unrecoverable)))
+ON CONFLICT (stat_name) DO NOTHING;`)
+		return err
+	},
+	func(ctx context.Context, tx *txn, log *zap.Logger) error {
+		_, err := tx.Exec(ctx, `
+ALTER TABLE object_events ALTER COLUMN updated_at DROP DEFAULT;
+CREATE INDEX object_events_unpublished_idx ON object_events(account_id, object_key) WHERE updated_at IS NULL;
+ALTER TABLE global_settings ADD COLUMN object_events_last_published TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT '-infinity';
+UPDATE global_settings SET object_events_last_published = COALESCE((SELECT date_trunc('second', MAX(updated_at)) FROM object_events), '-infinity');`)
+		return err
+	},
+	func(ctx context.Context, tx *txn, log *zap.Logger) error {
+		if _, err := tx.Exec(ctx, `
+ALTER TABLE stats ALTER COLUMN stat_value TYPE NUMERIC(50,0);
+ALTER TABLE stats_deltas ALTER COLUMN stat_delta TYPE NUMERIC(50,0);`); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, `SELECT event_data FROM wallet_events`)
+		if err != nil {
+			return err
+		}
+		tax, err := walletEventsContractTax(rows)
+		if err != nil {
+			return fmt.Errorf("failed to backfill contract tax: %w", err)
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO stats (stat_name, stat_value) VALUES ('contract_tax', $1) ON CONFLICT (stat_name) DO NOTHING`, sqlCurrency(tax))
+		return err
+	},
+	func(ctx context.Context, tx *txn, log *zap.Logger) error {
+		_, err := tx.Exec(ctx, `
+DROP TRIGGER slabs_maintain_repair_stats_insert ON slabs;
+DROP TRIGGER slabs_maintain_repair_stats_update ON slabs;
+DROP TRIGGER slabs_maintain_repair_stats_delete ON slabs;
+ALTER TABLE slabs
+	DROP CONSTRAINT slabs_unrecoverable_reason_check,
+	ADD COLUMN unrecoverable_since TIMESTAMP WITH TIME ZONE;
+
+-- existing unrecoverable slabs can never be fully repaired
+UPDATE slabs SET unrecoverable_since = 'epoch' WHERE unrecoverable;
+ALTER TABLE slabs
+	DROP COLUMN unrecoverable,
+	ADD CONSTRAINT slabs_unrecoverable_reason_check CHECK (unrecoverable_reason IS NULL OR unrecoverable_since IS NOT NULL);
+
+CREATE OR REPLACE FUNCTION slabs_maintain_repair_stats() RETURNS TRIGGER AS $$
+DECLARE
+    old_unrecoverable INT := 0;
+    old_stuck INT := 0;
+    new_unrecoverable INT := 0;
+    new_stuck INT := 0;
+BEGIN
+    IF (TG_OP <> 'INSERT') THEN
+        old_unrecoverable := (OLD.unrecoverable_reason IS NOT NULL)::int;
+        old_stuck := slab_is_stuck(OLD.consecutive_failed_repairs, OLD.unrecoverable_reason IS NOT NULL)::int;
+    END IF;
+    IF (TG_OP <> 'DELETE') THEN
+        new_unrecoverable := (NEW.unrecoverable_reason IS NOT NULL)::int;
+        new_stuck := slab_is_stuck(NEW.consecutive_failed_repairs, NEW.unrecoverable_reason IS NOT NULL)::int;
+    END IF;
+
+    INSERT INTO stats_deltas (stat_name, stat_delta)
+    SELECT * FROM (
+        SELECT 'num_unrecoverable_slabs', new_unrecoverable - old_unrecoverable
+        UNION ALL
+        SELECT 'num_stuck_slabs', new_stuck - old_stuck
+    ) v(stat_name, stat_delta) WHERE stat_delta <> 0;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+-- the WHEN clauses keep the repair loop's next_repair_attempt bumps and the
+-- pin upsert from reaching the function at all
+CREATE TRIGGER slabs_maintain_repair_stats_insert
+AFTER INSERT ON slabs FOR EACH ROW
+WHEN (NEW.unrecoverable_reason IS NOT NULL OR slab_is_stuck(NEW.consecutive_failed_repairs, NEW.unrecoverable_reason IS NOT NULL))
+EXECUTE FUNCTION slabs_maintain_repair_stats();
+
+CREATE TRIGGER slabs_maintain_repair_stats_update
+AFTER UPDATE OF unrecoverable_reason, consecutive_failed_repairs ON slabs FOR EACH ROW
+WHEN ((OLD.unrecoverable_reason IS NULL) IS DISTINCT FROM (NEW.unrecoverable_reason IS NULL)
+   OR slab_is_stuck(OLD.consecutive_failed_repairs, OLD.unrecoverable_reason IS NOT NULL)
+      IS DISTINCT FROM slab_is_stuck(NEW.consecutive_failed_repairs, NEW.unrecoverable_reason IS NOT NULL))
+EXECUTE FUNCTION slabs_maintain_repair_stats();
+
+CREATE TRIGGER slabs_maintain_repair_stats_delete
+AFTER DELETE ON slabs FOR EACH ROW
+WHEN (OLD.unrecoverable_reason IS NOT NULL OR slab_is_stuck(OLD.consecutive_failed_repairs, OLD.unrecoverable_reason IS NOT NULL))
+EXECUTE FUNCTION slabs_maintain_repair_stats();`)
+		return err
+	},
+	func(ctx context.Context, tx *txn, log *zap.Logger) error {
+		_, err := tx.Exec(ctx, `
+ALTER TABLE pools ADD COLUMN accounts_seq BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE pool_hosts ADD COLUMN attached_seq BIGINT NOT NULL DEFAULT 0;`)
+		return err
+	},
+	func(ctx context.Context, tx *txn, log *zap.Logger) error {
+		_, err := tx.Exec(ctx, `
+ALTER TABLE objects ADD COLUMN size BIGINT CHECK(size >= 0) DEFAULT 0;
+UPDATE objects o SET size = s.size FROM (SELECT object_id, SUM(slab_length)::bigint AS size FROM object_slabs GROUP BY object_id) s WHERE s.object_id = o.id;
+ALTER TABLE objects ALTER COLUMN size DROP DEFAULT;
+ALTER TABLE objects ALTER COLUMN size SET NOT NULL;`)
+		return err
+	},
+	func(ctx context.Context, tx *txn, log *zap.Logger) error {
+		_, err := tx.Exec(ctx, `CREATE INDEX objects_object_key_idx ON objects(object_key)`)
+		return err
+	},
+	func(ctx context.Context, tx *txn, log *zap.Logger) error {
+		_, err := tx.Exec(ctx, `
+CREATE TABLE spaces (
+    id BIGSERIAL PRIMARY KEY,
+    space_key BYTEA UNIQUE NOT NULL CHECK(LENGTH(space_key) = 32),
+    owner_account_id INTEGER NOT NULL REFERENCES accounts(id),
+    signature BYTEA NOT NULL CHECK(LENGTH(signature) = 64),
+    encrypted_name BYTEA,
+    encrypted_metadata BYTEA,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+CREATE INDEX spaces_owner_account_id_idx ON spaces(owner_account_id);
+
+CREATE TABLE space_slabs (
+    space_id BIGINT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+    account_id INTEGER NOT NULL,
+    slab_id BIGINT NOT NULL,
+    uploader_account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+    PRIMARY KEY (space_id, slab_id),
+    FOREIGN KEY (account_id, slab_id) REFERENCES account_slabs(account_id, slab_id) ON DELETE CASCADE
+);
+CREATE INDEX space_slabs_account_id_slab_id_idx ON space_slabs(account_id, slab_id);
+CREATE INDEX space_slabs_uploader_account_id_slab_id_idx ON space_slabs(uploader_account_id, slab_id);
+
+CREATE TABLE space_invitations (
+    space_id BIGINT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    inviter_account_id INTEGER NOT NULL REFERENCES accounts(id),
+    permission_level SMALLINT NOT NULL DEFAULT 1 CHECK(permission_level BETWEEN 1 AND 4),
+    encrypted_key BYTEA NOT NULL CHECK(LENGTH(encrypted_key) = 72),
+    signature BYTEA NOT NULL CHECK(LENGTH(signature) = 64),
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    PRIMARY KEY (space_id, account_id)
+);
+CREATE INDEX space_invitations_account_id_idx ON space_invitations(account_id);
+CREATE INDEX space_invitations_inviter_account_id_idx ON space_invitations(inviter_account_id);
+
+CREATE TABLE space_members (
+    space_id BIGINT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    invited_by BYTEA NOT NULL CHECK(LENGTH(invited_by) = 32),
+    invited_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    permission_level SMALLINT NOT NULL DEFAULT 1 CHECK(permission_level BETWEEN 1 AND 5),
+    encrypted_key BYTEA NOT NULL CHECK(LENGTH(encrypted_key) = 72),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (space_id, account_id)
+);
+CREATE INDEX space_members_account_id_idx ON space_members(account_id);
+
+CREATE TABLE space_objects (
+    id BIGSERIAL PRIMARY KEY,
+    space_id BIGINT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+    object_key BYTEA NOT NULL CHECK(LENGTH(object_key) = 32),
+    encrypted_data_key BYTEA NOT NULL CHECK(LENGTH(encrypted_data_key) = 72),
+    encrypted_meta_key BYTEA CHECK(LENGTH(encrypted_meta_key) = 72),
+    encrypted_metadata BYTEA,
+    data_signature BYTEA NOT NULL CHECK(LENGTH(data_signature) = 64),
+    meta_signature BYTEA NOT NULL CHECK(LENGTH(meta_signature) = 64),
+    account_key BYTEA NOT NULL CHECK(LENGTH(account_key) = 32),
+    size BIGINT NOT NULL CHECK(size >= 0),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    UNIQUE (space_id, object_key)
+);
+CREATE INDEX space_objects_object_key_idx ON space_objects(object_key);
+
+CREATE TABLE space_object_events (
+    space_id BIGINT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+    object_key BYTEA NOT NULL CHECK(LENGTH(object_key) = 32),
+    was_deleted BOOLEAN NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE,
+    PRIMARY KEY (space_id, object_key)
+);
+CREATE INDEX space_object_events_cursor_idx ON space_object_events(space_id, updated_at, object_key);
+CREATE INDEX space_object_events_unpublished_idx ON space_object_events(space_id, object_key) WHERE updated_at IS NULL;
+CREATE INDEX space_object_events_object_key_idx ON space_object_events(object_key);
+
+CREATE TABLE space_object_slabs (
+    object_id BIGINT NOT NULL REFERENCES space_objects(id) ON DELETE CASCADE,
+    slab_digest BYTEA NOT NULL REFERENCES slabs(digest) ON DELETE RESTRICT,
+    slab_index INTEGER NOT NULL,
+    slab_offset INTEGER NOT NULL,
+    slab_length INTEGER NOT NULL,
+    PRIMARY KEY (object_id, slab_digest, slab_index)
+);
+CREATE INDEX space_object_slabs_slab_digest_idx ON space_object_slabs(slab_digest);
+CREATE INDEX space_object_slabs_object_id_slab_index_idx ON space_object_slabs(object_id, slab_index ASC);`)
+		return err
+	},
+	func(ctx context.Context, tx *txn, log *zap.Logger) error {
+		if _, err := tx.Exec(ctx, `
+ALTER TABLE spaces
+    ADD COLUMN object_count BIGINT NOT NULL DEFAULT 0 CHECK(object_count >= 0),
+    ADD COLUMN size BIGINT NOT NULL DEFAULT 0 CHECK(size >= 0),
+    ADD COLUMN pinned_data BIGINT NOT NULL DEFAULT 0 CHECK(pinned_data >= 0),
+    ADD COLUMN pinned_size BIGINT NOT NULL DEFAULT 0 CHECK(pinned_size >= 0);
+ALTER TABLE space_objects
+    ADD COLUMN pinned_data BIGINT NOT NULL DEFAULT 0 CHECK(pinned_data >= 0),
+    ADD COLUMN pinned_size BIGINT NOT NULL DEFAULT 0 CHECK(pinned_size >= 0);`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+WITH object_slabs AS (
+    SELECT DISTINCT os.object_id, s.id AS slab_id, s.min_shards
+    FROM space_object_slabs os
+    JOIN slabs s ON s.digest = os.slab_digest
+), totals AS (
+    SELECT object_id,
+        SUM(min_shards::bigint) * $1::bigint AS pinned_data,
+        SUM((SELECT COUNT(*) FROM slab_sectors ss WHERE ss.slab_id = object_slabs.slab_id)) * $1::bigint AS pinned_size
+    FROM object_slabs
+    GROUP BY object_id
+)
+UPDATE space_objects o SET pinned_data = totals.pinned_data, pinned_size = totals.pinned_size
+FROM totals WHERE o.id = totals.object_id`, proto.SectorSize); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `
+UPDATE spaces SET
+    object_count = totals.object_count,
+    size = totals.size,
+    pinned_data = totals.pinned_data,
+    pinned_size = totals.pinned_size
+FROM (
+    SELECT space_id, COUNT(*) AS object_count, SUM(size) AS size,
+        SUM(pinned_data) AS pinned_data, SUM(pinned_size) AS pinned_size
+    FROM space_objects
+    GROUP BY space_id
+) totals
+WHERE spaces.id = totals.space_id;
+ALTER TABLE space_objects
+    ALTER COLUMN pinned_data DROP DEFAULT,
+    ALTER COLUMN pinned_size DROP DEFAULT;
+
+CREATE FUNCTION space_objects_maintain_totals() RETURNS TRIGGER AS $$
+BEGIN
+    IF (TG_OP = 'INSERT') THEN
+        UPDATE spaces SET
+            object_count = spaces.object_count + agg.object_count,
+            size = spaces.size + agg.size,
+            pinned_data = spaces.pinned_data + agg.pinned_data,
+            pinned_size = spaces.pinned_size + agg.pinned_size,
+            updated_at = NOW()
+        FROM (
+            SELECT space_id,
+                COUNT(*) AS object_count,
+                SUM(size) AS size,
+                SUM(pinned_data) AS pinned_data,
+                SUM(pinned_size) AS pinned_size
+            FROM new_rows
+            GROUP BY space_id
+        ) agg
+        WHERE spaces.id = agg.space_id;
+    ELSIF (TG_OP = 'UPDATE') THEN
+        UPDATE spaces SET
+            object_count = spaces.object_count + agg.object_count,
+            size = spaces.size + agg.size,
+            pinned_data = spaces.pinned_data + agg.pinned_data,
+            pinned_size = spaces.pinned_size + agg.pinned_size,
+            updated_at = NOW()
+        FROM (
+            SELECT space_id,
+                SUM(object_count) AS object_count,
+                SUM(size) AS size,
+                SUM(pinned_data) AS pinned_data,
+                SUM(pinned_size) AS pinned_size
+            FROM (
+                SELECT space_id, 1 AS object_count, size, pinned_data, pinned_size FROM new_rows
+                UNION ALL
+                SELECT space_id, -1, -size, -pinned_data, -pinned_size FROM old_rows
+            ) deltas
+            GROUP BY space_id
+        ) agg
+        WHERE spaces.id = agg.space_id;
+    ELSIF (TG_OP = 'DELETE') THEN
+        UPDATE spaces SET
+            object_count = spaces.object_count - agg.object_count,
+            size = spaces.size - agg.size,
+            pinned_data = spaces.pinned_data - agg.pinned_data,
+            pinned_size = spaces.pinned_size - agg.pinned_size,
+            updated_at = NOW()
+        FROM (
+            SELECT space_id,
+                COUNT(*) AS object_count,
+                SUM(size) AS size,
+                SUM(pinned_data) AS pinned_data,
+                SUM(pinned_size) AS pinned_size
+            FROM old_rows
+            GROUP BY space_id
+        ) agg
+        WHERE spaces.id = agg.space_id;
+    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER space_objects_maintain_totals_insert
+AFTER INSERT ON space_objects
+REFERENCING NEW TABLE AS new_rows
+FOR EACH STATEMENT EXECUTE FUNCTION space_objects_maintain_totals();
+
+CREATE TRIGGER space_objects_maintain_totals_update
+AFTER UPDATE ON space_objects
+REFERENCING OLD TABLE AS old_rows NEW TABLE AS new_rows
+FOR EACH STATEMENT EXECUTE FUNCTION space_objects_maintain_totals();
+
+CREATE TRIGGER space_objects_maintain_totals_delete
+AFTER DELETE ON space_objects
+REFERENCING OLD TABLE AS old_rows
+FOR EACH STATEMENT EXECUTE FUNCTION space_objects_maintain_totals();`)
+		return err
+	},
+	func(ctx context.Context, tx *txn, log *zap.Logger) error {
+		// Existing space objects are broken with this migration. Since we
+		// haven't released shared spaces yet, this shouldn't affect anything.
+		_, err := tx.Exec(ctx, `ALTER TABLE space_objects DROP COLUMN account_key`)
 		return err
 	},
 }

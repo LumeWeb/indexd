@@ -149,7 +149,15 @@ top:
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.tc == nil {
-		return nil, fmt.Errorf("failed to connect to host %s (%w)", hostKey.String(), errors.Join(connectErrs...))
+		err := errors.Join(connectErrs...)
+		if err == nil {
+			// no dial produced an error, e.g. the context expired before dialing
+			err = dialCtx.Err()
+		}
+		if err == nil {
+			err = errors.New("no supported addresses")
+		}
+		return nil, fmt.Errorf("failed to connect to host %s (%w)", hostKey.String(), err)
 	}
 	return t.tc, nil
 }
@@ -493,8 +501,6 @@ func (c *Client) refreshSettings(ctx context.Context, hostKey types.PublicKey, t
 	settings, err := rhp.RPCSettings(ctx, transport)
 	if err != nil {
 		return proto.HostSettings{}, err
-	} else if err := settings.Prices.Validate(hostKey); err != nil {
-		return proto.HostSettings{}, fmt.Errorf("host returned invalid prices: %w", err)
 	}
 
 	c.mu.Lock()

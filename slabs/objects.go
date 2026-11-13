@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -15,9 +16,9 @@ import (
 )
 
 type (
-	// A SealedObject is an object that has been locked with an app key.
+	// A SealedObject is an object that has been locked with an app or space key.
 	// It can be safely serialized and shared, but cannot be used to access
-	// the underlying data until it has been unlocked with the app key.
+	// the underlying data until it has been unlocked with the corresponding key.
 	SealedObject struct {
 		EncryptedDataKey []byte      `json:"encryptedDataKey"`
 		Slabs            []SlabSlice `json:"slabs"`
@@ -58,11 +59,42 @@ type (
 	// updated, or deleted.  The object itself is included if it has not been
 	// deleted.
 	ObjectEvent struct {
-		Key       types.Hash256 `json:"key"`
-		Deleted   bool          `json:"deleted"`
-		UpdatedAt time.Time     `json:"updatedAt"`
+		Key     types.Hash256 `json:"key"`
+		Deleted bool          `json:"deleted"`
+		// UpdatedAt is the event's position in the stream rather than the time
+		// the object was last modified, which the object itself carries.
+		UpdatedAt time.Time `json:"updatedAt"`
 
 		Object *SealedObject `json:"object,omitempty"`
+	}
+
+	// An ObjectEventWithoutSlabs is an object event whose object is returned
+	// without its slabs. The slabs are paginated separately with ObjectSlabs.
+	ObjectEventWithoutSlabs struct {
+		Key     types.Hash256 `json:"key"`
+		Deleted bool          `json:"deleted"`
+		// UpdatedAt is the event's position in the stream. The nested object's
+		// UpdatedAt records when the object was last modified.
+		UpdatedAt time.Time `json:"updatedAt"`
+
+		Object *SealedObjectWithoutSlabs `json:"object,omitempty"`
+	}
+
+	// A SealedObjectWithoutSlabs is a sealed object without its slabs.
+	SealedObjectWithoutSlabs struct {
+		EncryptedDataKey []byte          `json:"encryptedDataKey"`
+		DataSignature    types.Signature `json:"dataSignature"`
+
+		// Size is the logical size of the object in bytes, the sum of its
+		// slab slices' lengths.
+		Size uint64 `json:"size"`
+
+		EncryptedMetadataKey []byte          `json:"encryptedMetadataKey,omitempty"`
+		EncryptedMetadata    []byte          `json:"encryptedMetadata,omitempty"`
+		MetadataSignature    types.Signature `json:"metadataSignature"`
+
+		CreatedAt time.Time `json:"createdAt"`
+		UpdatedAt time.Time `json:"updatedAt"`
 	}
 
 	// Cursor describes a cursor for paginating through objects. During
@@ -80,7 +112,9 @@ type (
 		Key   types.Hash256
 	}
 
-	// ObjectSlab represents a slab that should be associated with an object. It should already be pinned to the indexer.
+	// ObjectSlab references a slab that is part of an object by its ID, offset,
+	// and length. A slab must already be pinned to the indexer before an object
+	// can reference it.
 	ObjectSlab struct {
 		ID     SlabID `json:"id"`
 		Offset uint32 `json:"offset"`
@@ -105,7 +139,46 @@ type (
 		// tampered with.
 		MetadataSignature types.Signature `json:"metadataSignature"`
 	}
+
+	// An ObjectAccount is an account that has pinned an object, along with
+	// the connect key associated with the account. For space pins, it identifies
+	// the space and its owner.
+	ObjectAccount struct {
+		AccountKey proto.Account   `json:"accountKey"`
+		ConnectKey string          `json:"connectKey"`
+		SpaceKey   types.PublicKey `json:"spaceKey,omitzero"`
+	}
 )
+
+// Validate checks the object's fields and that its ID matches its slab slices.
+func (pr *PinObjectRequest) Validate() error {
+	switch {
+	case len(pr.Slabs) == 0:
+		return ErrObjectMinimumSlabs
+	case len(pr.EncryptedMetadata) > MaxMetadataSize:
+		return fmt.Errorf("%w: got %d bytes", ErrObjectMetadataLimitExceeded, len(pr.EncryptedMetadata))
+	case pinnedObjectID(pr.Slabs) != pr.ID:
+		return fmt.Errorf("%w: object ID does not match slabs", ErrInvalidObjectSignature)
+	case len(pr.EncryptedDataKey) != EncryptionKeySize:
+		return fmt.Errorf("%w: encrypted data key must be %d bytes", ErrInvalidObjectRequest, EncryptionKeySize)
+	case len(pr.EncryptedMetadataKey) != 0 && len(pr.EncryptedMetadataKey) != EncryptionKeySize:
+		return fmt.Errorf("%w: encrypted metadata key must be %d bytes", ErrInvalidObjectRequest, EncryptionKeySize)
+	}
+	seen := make(map[SlabID]struct{}, len(pr.Slabs))
+	for i, slab := range pr.Slabs {
+		if _, ok := seen[slab.ID]; ok {
+			return fmt.Errorf("%w: slab %d: %v", ErrObjectDuplicateSlab, i, slab.ID)
+		}
+		seen[slab.ID] = struct{}{}
+		switch {
+		case slab.ID == (SlabID{}):
+			return fmt.Errorf("%w: slab %d: ID is empty", ErrInvalidObjectRequest, i)
+		case slab.Offset > math.MaxInt32 || slab.Length > math.MaxInt32:
+			return fmt.Errorf("%w: slab %d: offset or length exceeds the maximum value", ErrInvalidObjectRequest, i)
+		}
+	}
+	return nil
+}
 
 // DataSigHash returns the hash used for signing/verifying the data signature.
 // It covers the slabs through the object ID and the encrypted data key.
@@ -151,25 +224,45 @@ func (pr *PinObjectRequest) VerifySignatures(pk types.PublicKey) error {
 	return errors.Join(pr.VerifyDataSignature(pk), pr.VerifyMetadataSignature(pk))
 }
 
-// Size returns the total size of the object in bytes.
+// Size returns the logical size of the object in bytes, the sum of its slab
+// slices' lengths.
 func (o *SharedObject) Size() uint64 {
 	var size uint64
-	for _, ss := range o.Slabs {
-		size += uint64(ss.Length)
+	for _, slab := range o.Slabs {
+		size += uint64(slab.Length)
 	}
 	return size
 }
+
+// Size returns the logical size of the object in bytes, the sum of its slab
+// slices' lengths.
+func (pr *PinObjectRequest) Size() uint64 {
+	var size uint64
+	for _, slab := range pr.Slabs {
+		size += uint64(slab.Length)
+	}
+	return size
+}
+
+// EncryptionKeySize is the length of a sealed encryption key (xchacha20
+// nonce + key + tag).
+const EncryptionKeySize = 72
 
 // MaxMetadataSize is the maximum size of object metadata that may be stored.
 const MaxMetadataSize = 1024
 
 var (
+	// ErrInvalidObjectRequest is returned when an object's fields fail validation.
+	ErrInvalidObjectRequest = errors.New("invalid object request")
 	// ErrInvalidObjectSignature is returned when an object's signature is invalid.
 	ErrInvalidObjectSignature = errors.New("invalid object signature")
 	// ErrObjectNotFound is returned when an object is not found in the database.
 	ErrObjectNotFound = errors.New("object not found")
 	// ErrObjectMinimumSlabs is returned when the object has no slabs.
 	ErrObjectMinimumSlabs = errors.New("object must have at least one slab")
+	// ErrObjectDuplicateSlab is returned when the object references the same
+	// slab more than once.
+	ErrObjectDuplicateSlab = errors.New("object contains duplicate slab")
 	// ErrObjectMetadataLimitExceeded is returned when the provided metadata is too large.
 	ErrObjectMetadataLimitExceeded = fmt.Errorf("object metadata size limit (%d) exceeded", MaxMetadataSize)
 	// ErrObjectUnpinnedSlab is returned when an user attempts to save an
@@ -200,6 +293,46 @@ func (so *SealedObject) PinRequest() PinObjectRequest {
 		EncryptedMetadataKey: so.EncryptedMetadataKey,
 		EncryptedMetadata:    so.EncryptedMetadata,
 		MetadataSignature:    so.MetadataSignature,
+	}
+}
+
+// Size returns the logical size of the object in bytes, the sum of its slab
+// slices' lengths.
+func (so *SealedObject) Size() uint64 {
+	var size uint64
+	for _, slab := range so.Slabs {
+		size += uint64(slab.Length)
+	}
+	return size
+}
+
+// WithoutSlabs returns the sealed object without its slab slices. The size is
+// derived from the slabs, so they must all be present.
+func (so *SealedObject) WithoutSlabs() *SealedObjectWithoutSlabs {
+	return &SealedObjectWithoutSlabs{
+		EncryptedDataKey:     so.EncryptedDataKey,
+		DataSignature:        so.DataSignature,
+		Size:                 so.Size(),
+		EncryptedMetadataKey: so.EncryptedMetadataKey,
+		EncryptedMetadata:    so.EncryptedMetadata,
+		MetadataSignature:    so.MetadataSignature,
+		CreatedAt:            so.CreatedAt,
+		UpdatedAt:            so.UpdatedAt,
+	}
+}
+
+// WithSlabs returns the sealed object with the given slab slices, which must
+// include every slice in object order.
+func (so *SealedObjectWithoutSlabs) WithSlabs(slabs []SlabSlice) *SealedObject {
+	return &SealedObject{
+		EncryptedDataKey:     so.EncryptedDataKey,
+		Slabs:                slabs,
+		DataSignature:        so.DataSignature,
+		EncryptedMetadataKey: so.EncryptedMetadataKey,
+		EncryptedMetadata:    so.EncryptedMetadata,
+		MetadataSignature:    so.MetadataSignature,
+		CreatedAt:            so.CreatedAt,
+		UpdatedAt:            so.UpdatedAt,
 	}
 }
 
@@ -288,15 +421,17 @@ func (m *SlabManager) DeleteObject(ctx context.Context, account proto.Account, o
 	return m.store.DeleteObject(account, objectKey)
 }
 
+// DeleteSlabObject administratively deletes a personal or space object returned
+// by ObjectsForSlab, including objects belonging to deleted accounts.
+func (m *SlabManager) DeleteSlabObject(ctx context.Context, obj SlabObject) error {
+	return m.store.DeleteSlabObject(obj)
+}
+
 // PinObject pin the given object for the given account. If an object with
 // the same ID already exists for the account, it is overwritten.
 func (m *SlabManager) PinObject(ctx context.Context, account proto.Account, obj PinObjectRequest) error {
-	if len(obj.Slabs) == 0 {
-		return ErrObjectMinimumSlabs
-	} else if len(obj.EncryptedMetadata) > MaxMetadataSize {
-		return fmt.Errorf("%w: got %d bytes", ErrObjectMetadataLimitExceeded, len(obj.EncryptedMetadata))
-	} else if pinnedObjectID(obj.Slabs) != obj.ID {
-		return fmt.Errorf("%w: object ID does not match slabs", ErrInvalidObjectSignature)
+	if err := obj.Validate(); err != nil {
+		return err
 	} else if err := obj.VerifySignatures(types.PublicKey(account)); err != nil {
 		return err
 	}
@@ -309,9 +444,29 @@ func (m *SlabManager) ListObjects(ctx context.Context, account proto.Account, cu
 	return m.store.ListObjects(account, cursor, limit)
 }
 
+// ListObjectsWithoutSlabs lists object events without their slabs.
+func (m *SlabManager) ListObjectsWithoutSlabs(ctx context.Context, account proto.Account, cursor Cursor, limit int) ([]ObjectEventWithoutSlabs, error) {
+	return m.store.ListObjectsWithoutSlabs(account, cursor, limit)
+}
+
+// ObjectSlabs returns a page of the object's slab slices, starting at slice
+// index cursor. The object ID commits to the ordered slab IDs, offsets, and
+// lengths. Sector host keys may change as sectors are migrated or lost.
+func (m *SlabManager) ObjectSlabs(ctx context.Context, account proto.Account, key types.Hash256, cursor int64, limit int) ([]SlabSlice, error) {
+	return m.store.ObjectSlabs(account, key, cursor, limit)
+}
+
 // SharedObject retrieves the shared object with the given key for the given account.
 func (m *SlabManager) SharedObject(ctx context.Context, key types.Hash256) (SharedObject, error) {
 	return m.store.SharedObject(key)
+}
+
+// ObjectAccounts returns a paginated list of the accounts that have pinned an
+// object with the given key, along with their connect keys. Space pins include
+// the space key and its owner's account. It returns ErrObjectNotFound if no
+// account or space has pinned an object with the key.
+func (m *SlabManager) ObjectAccounts(ctx context.Context, objectKey types.Hash256, offset, limit int) ([]ObjectAccount, error) {
+	return m.store.ObjectAccounts(objectKey, offset, limit)
 }
 
 // EncryptionKey is a helper type for JSON marshalling of 32-byte encryption

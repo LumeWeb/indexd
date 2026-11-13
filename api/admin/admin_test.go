@@ -28,6 +28,7 @@ import (
 	"go.sia.tech/indexd/hosts"
 	"go.sia.tech/indexd/pins"
 	"go.sia.tech/indexd/slabs"
+	"go.sia.tech/indexd/spaces"
 	"go.sia.tech/indexd/testutils"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -156,6 +157,14 @@ func TestAppConnectKeys(t *testing.T) {
 		t.Fatal(err)
 	} else if !reflect.DeepEqual(keys[0], key) {
 		t.Fatal("unexpected key", keys[0], key)
+	}
+
+	// no key exceeds its quota
+	keys, err = adminClient.AppConnectKeys(context.Background(), 0, 10, api.WithExceedsQuota())
+	if err != nil {
+		t.Fatal(err)
+	} else if len(keys) != 0 {
+		t.Fatalf("expected no keys exceeding their quota, got %d", len(keys))
 	}
 }
 
@@ -1572,6 +1581,79 @@ func TestSectorStatsAPI(t *testing.T) {
 	}
 }
 
+func TestObjectStatsAPI(t *testing.T) {
+	cluster := testutils.NewCluster(t, testutils.WithHosts(1))
+	indexer := cluster.Indexer
+	adminClient := indexer.Admin
+	store := indexer.Store()
+
+	cluster.WaitForContracts(t)
+
+	// assert no events are waiting for a position
+	stats, err := adminClient.StatsObjects(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	} else if stats.UnpublishedEvents != 0 {
+		t.Fatalf("expected no unpublished events, got %d", stats.UnpublishedEvents)
+	}
+
+	// stall the publisher, otherwise the background loop drains the event
+	// before it can be observed
+	if _, err := store.Exec(t.Context(), `
+		UPDATE global_settings
+		SET object_events_last_published = date_trunc('second', NOW()) + INTERVAL '1 hour'`); err != nil {
+		t.Fatal(err)
+	}
+
+	// pin an object
+	account := types.GeneratePrivateKey().PublicKey()
+	store.AddTestAccount(t, account)
+	acc := proto.Account(account)
+	slab := slabs.SlabPinParams{
+		EncryptionKey: frand.Entropy256(),
+		MinShards:     1,
+		Sectors: []slabs.PinnedSector{{
+			Root:    frand.Entropy256(),
+			HostKey: cluster.Hosts[0].PublicKey(),
+		}},
+	}
+	if _, err := store.PinSlabs(acc, time.Time{}, slab); err != nil {
+		t.Fatal(err)
+	}
+	obj := slabs.SealedObject{
+		EncryptedDataKey:     frand.Bytes(72),
+		EncryptedMetadataKey: frand.Bytes(72),
+		Slabs:                []slabs.SlabSlice{slab.Slice(0, 100)},
+		DataSignature:        types.Signature(frand.Bytes(64)),
+		MetadataSignature:    types.Signature(frand.Bytes(64)),
+	}
+	if err := store.PinObject(acc, obj.PinRequest()); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err = adminClient.StatsObjects(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	} else if stats.UnpublishedEvents != 1 {
+		t.Fatalf("expected 1 unpublished event, got %d", stats.UnpublishedEvents)
+	}
+
+	// let the publisher give the event its position
+	if _, err := store.Exec(t.Context(), `UPDATE global_settings SET object_events_last_published = '-infinity'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PublishObjectEvents(); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err = adminClient.StatsObjects(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	} else if stats.UnpublishedEvents != 0 {
+		t.Fatalf("expected no unpublished events after publishing, got %d", stats.UnpublishedEvents)
+	}
+}
+
 func TestAccountStatsAPI(t *testing.T) {
 	// create cluster with three hosts
 	logger := newTestLogger(false)
@@ -1835,6 +1917,25 @@ func TestDeleteSlab(t *testing.T) {
 	sharedObj2 := pinObject(acc2, []slabs.SlabSlice{sharedSlab.Slice(0, 100)})
 	unrelatedObj := pinObject(acc1, []slabs.SlabSlice{slab2.Slice(0, 100)})
 
+	spaceKey := types.GeneratePrivateKey()
+	spaceReq := spaces.AddSpaceRequest{Key: spaceKey.PublicKey(), EncryptedKey: frand.Bytes(72)}
+	spaceReq.Sign(spaceKey, acc1)
+	if err := store.AddSpace(acc1, spaceReq); err != nil {
+		t.Fatal(err)
+	}
+	spaceOnlyObj := sharedObj1
+	spaceOnlyObj.Slabs = []slabs.SlabSlice{sharedSlab.Slice(100, 100)}
+	for _, obj := range []slabs.SealedObject{sharedObj1, spaceOnlyObj, unrelatedObj} {
+		if err := store.PinSpaceObject(acc1, spaceKey.PublicKey(), obj.PinRequest()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if objectAccounts, err := adminClient.ObjectAccounts(t.Context(), spaceOnlyObj.ID()); err != nil {
+		t.Fatal(err)
+	} else if len(objectAccounts) != 1 || objectAccounts[0].AccountKey != acc1 || objectAccounts[0].SpaceKey != spaceKey.PublicKey() {
+		t.Fatalf("unexpected space object accounts: %+v", objectAccounts)
+	}
+
 	// delete the shared slab's objects via debug endpoint
 	if err := adminClient.DeleteSlab(t.Context(), sharedSlab.Digest()); err != nil {
 		t.Fatal(err)
@@ -1847,10 +1948,64 @@ func TestDeleteSlab(t *testing.T) {
 	if _, err := store.Object(acc2, sharedObj2.ID()); !errors.Is(err, slabs.ErrObjectNotFound) {
 		t.Fatalf("expected ErrObjectNotFound, got %v", err)
 	}
+	for _, obj := range []slabs.SealedObject{sharedObj1, spaceOnlyObj} {
+		if _, err := store.SpaceObject(acc1, spaceKey.PublicKey(), obj.ID()); !errors.Is(err, slabs.ErrObjectNotFound) {
+			t.Fatalf("expected space object to be deleted, got %v", err)
+		}
+	}
 
 	// verify the unrelated object on acc1 still exists
 	if _, err := store.Object(acc1, unrelatedObj.ID()); err != nil {
 		t.Fatalf("expected unrelated object to still exist: %v", err)
+	}
+	if _, err := store.SpaceObject(acc1, spaceKey.PublicKey(), unrelatedObj.ID()); err != nil {
+		t.Fatalf("expected unrelated space object to still exist: %v", err)
+	}
+}
+
+func TestDeleteSlabDeletedSpaceOwner(t *testing.T) {
+	cluster := testutils.NewCluster(t, testutils.WithHosts(1))
+	store := cluster.Indexer.Store()
+	cluster.WaitForContracts(t)
+	owner, other := proto.Account(types.GeneratePrivateKey().PublicKey()), proto.Account(types.GeneratePrivateKey().PublicKey())
+	store.AddTestAccount(t, types.PublicKey(owner))
+	store.AddTestAccount(t, types.PublicKey(other))
+	params := slabs.SlabPinParams{
+		EncryptionKey: frand.Entropy256(),
+		MinShards:     1,
+		Sectors:       []slabs.PinnedSector{{Root: frand.Entropy256(), HostKey: cluster.Hosts[0].PublicKey()}},
+	}
+	for _, account := range []proto.Account{owner, other} {
+		if _, err := store.PinSlabs(account, time.Time{}, params); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spaceKey := types.GeneratePrivateKey()
+	req := spaces.AddSpaceRequest{Key: spaceKey.PublicKey(), EncryptedKey: frand.Bytes(72)}
+	req.Sign(spaceKey, owner)
+	if err := store.AddSpace(owner, req); err != nil {
+		t.Fatal(err)
+	}
+	obj := slabs.SealedObject{
+		EncryptedDataKey:  frand.Bytes(72),
+		Slabs:             []slabs.SlabSlice{params.Slice(0, 100)},
+		DataSignature:     types.Signature(frand.Bytes(64)),
+		MetadataSignature: types.Signature(frand.Bytes(64)),
+	}
+	if err := store.PinSpaceObject(owner, spaceKey.PublicKey(), obj.PinRequest()); err != nil {
+		t.Fatal(err)
+	} else if err := store.PinObject(other, obj.PinRequest()); err != nil {
+		t.Fatal(err)
+	} else if err := store.DeleteAccount(owner); err != nil {
+		t.Fatal(err)
+	} else if err := store.DeleteSpaceObject(owner, spaceKey.PublicKey(), obj.ID()); !errors.Is(err, accounts.ErrNotFound) {
+		t.Fatalf("expected member deletion to reject deleted owner, got %v", err)
+	} else if err := cluster.Indexer.Admin.DeleteSlab(t.Context(), params.Digest()); err != nil {
+		t.Fatal(err)
+	} else if objects, err := store.ObjectsForSlab(params.Digest()); err != nil || len(objects) != 0 {
+		t.Fatalf("expected all slab objects to be deleted, got %+v, %v", objects, err)
+	} else if _, err := store.ObjectAccounts(obj.ID(), 0, 10); !errors.Is(err, slabs.ErrObjectNotFound) {
+		t.Fatalf("expected object pins to be deleted, got %v", err)
 	}
 }
 

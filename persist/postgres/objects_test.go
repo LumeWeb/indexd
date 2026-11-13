@@ -14,6 +14,7 @@ import (
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/slabs"
+	"go.sia.tech/indexd/spaces"
 	"go.uber.org/zap"
 	"lukechampine.com/frand"
 )
@@ -55,6 +56,18 @@ func (s *Store) assertStoreCleanedUp(t testing.TB) {
 	if slabCount != 0 || sectorCount != 0 || accountSlabs != 0 || queued != 0 || pinned != 0 {
 		t.Fatalf("expected everything cleaned up, got %d slabs, %d sectors, %d pins, %d queued, %d pinned data", slabCount, sectorCount, accountSlabs, queued, pinned)
 	}
+}
+
+// listEvents publishes pending events and lists them from the cursor.
+func (s *Store) listEvents(t testing.TB, acc proto.Account, cursor slabs.Cursor) []slabs.ObjectEvent {
+	t.Helper()
+
+	s.publishEvents(t)
+	events, err := s.ListObjects(acc, cursor, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return events
 }
 
 func (s *Store) pinRandomObject(t testing.TB, acc proto.Account, ss []slabs.SlabSlice) slabs.SealedObject {
@@ -152,6 +165,69 @@ func TestObject(t *testing.T) {
 	}
 }
 
+// TestObjectSize asserts every object read reports the sum of the object's
+// slab slice lengths, including listings without slabs, which read the size
+// stored when the object was pinned.
+func TestObjectSize(t *testing.T) {
+	store := initPostgres(t, zap.NewNop())
+	acc := proto.Account{1}
+	store.addTestAccount(t, types.PublicKey(acc))
+	hk := store.addTestHost(t)
+	store.addTestContract(t, hk)
+	params := newTestPinParams(2, hk)
+	store.pinTestSlabs(t, acc, params...)
+
+	// a slab referenced by more than one slice counts once per slice
+	obj := store.pinRandomObject(t, acc, []slabs.SlabSlice{
+		params[0].Slice(0, 100),
+		params[1].Slice(10, 50),
+		params[0].Slice(100, 25),
+	})
+	const size = 175
+
+	store.publishEvents(t)
+	sharingKey := store.addTestSharingKey(t, acc, "size")
+	attachTestObject(t, store, acc, sharingKey, obj.ID())
+
+	var stored uint64
+	if err := store.pool.QueryRow(t.Context(), `SELECT size FROM objects WHERE object_key = $1`, sqlHash256(obj.ID())).Scan(&stored); err != nil {
+		t.Fatal(err)
+	} else if stored != size {
+		t.Fatalf("expected stored size %d, got %d", size, stored)
+	}
+
+	if got, err := store.Object(acc, obj.ID()); err != nil {
+		t.Fatal(err)
+	} else if got.Size() != size {
+		t.Fatalf("expected object size %d, got %d", size, got.Size())
+	}
+	if events, err := store.ListObjects(acc, slabs.Cursor{}, 10); err != nil {
+		t.Fatal(err)
+	} else if len(events) != 1 || events[0].Object == nil || events[0].Object.Size() != size {
+		t.Fatalf("expected one listed object of size %d, got %+v", size, events)
+	}
+	if events, err := store.ListObjectsWithoutSlabs(acc, slabs.Cursor{}, 10); err != nil {
+		t.Fatal(err)
+	} else if len(events) != 1 || events[0].Object == nil || events[0].Object.Size != size {
+		t.Fatalf("expected one listed object without slabs of size %d, got %+v", size, events)
+	}
+	if got, err := store.SharingKeyObject(sharingKey, obj.ID()); err != nil {
+		t.Fatal(err)
+	} else if got.Size() != size {
+		t.Fatalf("expected sharing key object size %d, got %d", size, got.Size())
+	}
+	if objects, err := store.SharedObjects(sharingKey, 0, 10); err != nil {
+		t.Fatal(err)
+	} else if len(objects) != 1 || objects[0].Size() != size {
+		t.Fatalf("expected one sharing key object of size %d, got %+v", size, objects)
+	}
+	if objects, err := store.SharedObjectsWithoutSlabs(sharingKey, 0, 10); err != nil {
+		t.Fatal(err)
+	} else if len(objects) != 1 || objects[0].Size != size {
+		t.Fatalf("expected one sharing key object without slabs of size %d, got %+v", size, objects)
+	}
+}
+
 func TestObjectSlabVersion(t *testing.T) {
 	store := initPostgres(t, zap.NewNop())
 	acc := proto.Account{1}
@@ -230,11 +306,7 @@ func TestObjects(t *testing.T) {
 
 	assertObjects := func(acc proto.Account, expectedDeleted, expectedExist int) []slabs.ObjectEvent {
 		t.Helper()
-		awaitEventSecond(t)
-		objects, err := store.ListObjects(acc, slabs.Cursor{}, 10)
-		if err != nil {
-			t.Fatal(err)
-		}
+		objects := store.listEvents(t, acc, slabs.Cursor{})
 
 		var exist, deleted int
 		for _, obj := range objects {
@@ -452,26 +524,13 @@ func TestListObjectsRegression(t *testing.T) {
 		obj := store.pinRandomObject(t, acc, randomSlabs())
 		objectIDs = append(objectIDs, obj.ID())
 	}
-	// list objects returns objects in updated_at ASC then lexicographical order of ID
+	// the objects are published in one batch, so they are ordered by ID
 	sort.Slice(objectIDs, func(i, j int) bool {
 		return bytes.Compare(objectIDs[i][:], objectIDs[j][:]) < 0
 	})
 
-	// backdate the events; the current second is withheld
-	ts := time.Now().Add(-time.Minute).Truncate(time.Second)
-	_, err := store.pool.Exec(t.Context(), "UPDATE objects SET updated_at = $1", ts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = store.pool.Exec(t.Context(), "UPDATE object_events SET updated_at = $1", ts)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	objs, err := store.ListObjects(acc, slabs.Cursor{After: ts}, 10)
-	if err != nil {
-		t.Fatal(err)
-	} else if len(objs) != len(objectIDs) {
+	objs := store.listEvents(t, acc, slabs.Cursor{})
+	if len(objs) != len(objectIDs) {
 		t.Fatal("expected 3 objects, got", len(objs))
 	}
 	for i, obj := range objs {
@@ -481,16 +540,147 @@ func TestListObjectsRegression(t *testing.T) {
 	}
 }
 
-// TestObjectEventTimestampPrecision asserts that object_events.updated_at is
-// truncated to second precision on every write path. Freshly inserted rows used
-// to take the column default, which kept microseconds, while the update paths
-// truncated. A client cursor that carries less precision than that, e.g.
-// milliseconds, could therefore never advance past a newly pinned object and
-// would be handed the same event over and over again.
-// TestListObjectsWithholdsCurrentSecond checks that events from the second still
-// in progress are withheld, so a cursor cannot come to rest inside a second that
-// may still receive writes with smaller keys.
-func TestListObjectsWithholdsCurrentSecond(t *testing.T) {
+func TestListObjectsWithoutSlabs(t *testing.T) {
+	store := initPostgres(t, zap.NewNop())
+	acc := proto.Account{1}
+	store.addTestAccount(t, types.PublicKey(acc))
+	hk := store.addTestHost(t)
+	store.addTestContract(t, hk)
+
+	params := newTestPinParams(2, hk)
+	params[0].Version = 1
+	store.pinTestSlabs(t, acc, params...)
+	obj := store.pinRandomObject(t, acc, []slabs.SlabSlice{
+		params[0].Slice(10, 100),
+		params[1].Slice(20, 200),
+	})
+
+	store.publishEvents(t)
+
+	events, err := store.ListObjectsWithoutSlabs(acc, slabs.Cursor{}, 10)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(events) != 1 {
+		t.Fatalf("expected 1 object event, got %d", len(events))
+	} else if events[0].Key != obj.ID() || events[0].Deleted || events[0].UpdatedAt.IsZero() {
+		t.Fatalf("unexpected event: %+v", events[0])
+	} else if events[0].Object == nil {
+		t.Fatal("expected an object without slabs")
+	}
+
+	withoutSlabs := events[0].Object
+	if withoutSlabs.UpdatedAt.IsZero() || withoutSlabs.CreatedAt.IsZero() {
+		t.Fatalf("expected the object's timestamps, got %+v", withoutSlabs)
+	} else if !bytes.Equal(withoutSlabs.EncryptedDataKey, obj.EncryptedDataKey) ||
+		!bytes.Equal(withoutSlabs.EncryptedMetadataKey, obj.EncryptedMetadataKey) ||
+		!bytes.Equal(withoutSlabs.EncryptedMetadata, obj.EncryptedMetadata) ||
+		withoutSlabs.DataSignature != obj.DataSignature || withoutSlabs.MetadataSignature != obj.MetadataSignature {
+		t.Fatal("expected the object without slabs to preserve keys, signatures, and metadata")
+	} else if withoutSlabs.Size != obj.Size() {
+		t.Fatalf("expected size %d, got %d", obj.Size(), withoutSlabs.Size)
+	}
+
+	if err := store.DeleteObject(acc, obj.ID()); err != nil {
+		t.Fatal(err)
+	}
+	store.publishEvents(t)
+
+	events, err = store.ListObjectsWithoutSlabs(acc, slabs.Cursor{}, 10)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(events) != 1 || !events[0].Deleted || events[0].Object != nil {
+		t.Fatalf("expected a deletion event, got %+v", events)
+	}
+}
+
+func TestObjectSlabs(t *testing.T) {
+	store := initPostgres(t, zap.NewNop())
+	acc := proto.Account{1}
+	store.addTestAccount(t, types.PublicKey(acc))
+	other := proto.Account{2}
+	store.addTestAccount(t, types.PublicKey(other))
+	hk := store.addTestHost(t)
+	store.addTestContract(t, hk)
+
+	params := newTestPinParams(2, hk)
+	params[0].Version = 1
+	store.pinTestSlabs(t, acc, params...)
+
+	// the first slab is referenced twice in a row, which the cursor must
+	// distinguish by position rather than by slab ID
+	expected := []slabs.SlabSlice{
+		params[0].Slice(0, 10),
+		params[0].Slice(10, 20),
+		params[1].Slice(20, 30),
+	}
+	obj := store.pinRandomObject(t, acc, expected)
+
+	// signed URL reads use the same loader and must decorate every slice,
+	// including multiple slices of the same slab, with its sectors
+	if shared, err := store.SharedObject(obj.ID()); err != nil {
+		t.Fatal(err)
+	} else if !reflect.DeepEqual(shared.Slabs, expected) {
+		t.Fatalf("expected shared slabs %+v, got %+v", expected, shared.Slabs)
+	}
+
+	// the whole object in one page
+	page, err := store.ObjectSlabs(acc, obj.ID(), 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	} else if !reflect.DeepEqual(page, expected) {
+		t.Fatalf("expected slabs %+v, got %+v", expected, page)
+	}
+
+	// page through the object, asserting the cursor picks up where the last
+	// page left off
+	var paged []slabs.SlabSlice
+	for {
+		page, err = store.ObjectSlabs(acc, obj.ID(), int64(len(paged)), 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		paged = append(paged, page...)
+		if len(page) < 2 {
+			break
+		}
+	}
+	if !reflect.DeepEqual(paged, expected) {
+		t.Fatalf("expected slabs %+v, got %+v", expected, paged)
+	}
+
+	// a cursor past the end returns nothing
+	if page, err := store.ObjectSlabs(acc, obj.ID(), int64(len(expected)), 10); err != nil {
+		t.Fatal(err)
+	} else if len(page) != 0 {
+		t.Fatalf("expected no slabs, got %+v", page)
+	}
+
+	// another account's object is not visible
+	if _, err := store.ObjectSlabs(other, obj.ID(), 0, 10); !errors.Is(err, slabs.ErrObjectNotFound) {
+		t.Fatalf("expected ErrObjectNotFound, got %v", err)
+	}
+
+	// dropping only the slab rows reproduces the torn view left by a concurrent
+	// delete, which must read as deleted rather than as an exhausted cursor
+	if _, err := store.pool.Exec(t.Context(),
+		`DELETE FROM object_slabs WHERE object_id = (SELECT id FROM objects WHERE object_key = $1)`,
+		sqlHash256(obj.ID())); err != nil {
+		t.Fatal(err)
+	} else if _, err := store.ObjectSlabs(acc, obj.ID(), 0, 10); !errors.Is(err, slabs.ErrObjectNotFound) {
+		t.Fatalf("expected ErrObjectNotFound, got %v", err)
+	}
+
+	if err := store.DeleteObject(acc, obj.ID()); err != nil {
+		t.Fatal(err)
+	} else if _, err := store.ObjectSlabs(acc, obj.ID(), 0, 10); !errors.Is(err, slabs.ErrObjectNotFound) {
+		t.Fatalf("expected ErrObjectNotFound, got %v", err)
+	}
+}
+
+// TestListObjectsWithholdsUnpublished checks that an event is only listed once
+// it has been published, so a cursor cannot come to rest on a position that is
+// still going to be filled.
+func TestListObjectsWithholdsUnpublished(t *testing.T) {
 	store := initPostgres(t, zap.NewNop())
 
 	acc := proto.Account(types.GeneratePrivateKey().PublicKey())
@@ -498,28 +688,285 @@ func TestListObjectsWithholdsCurrentSecond(t *testing.T) {
 	hk := store.addTestHost(t)
 	store.addTestContract(t, hk)
 
-	// start at the top of a second so the pin and the listing below share it
-	awaitEventSecond(t)
 	obj := store.pinTestObject(t, acc, hk)
 
 	events, err := store.ListObjects(acc, slabs.Cursor{}, 10)
 	if err != nil {
 		t.Fatal(err)
 	} else if len(events) != 0 {
-		t.Fatalf("expected the in-progress second to be withheld, got %d events", len(events))
+		t.Fatalf("expected the unpublished event to be withheld, got %d events", len(events))
 	}
 
-	awaitEventSecond(t)
-	events, err = store.ListObjects(acc, slabs.Cursor{}, 10)
-	if err != nil {
-		t.Fatal(err)
-	} else if len(events) != 1 {
-		t.Fatalf("expected 1 event once the second elapsed, got %d", len(events))
+	events = store.listEvents(t, acc, slabs.Cursor{})
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event once published, got %d", len(events))
 	} else if events[0].Key != obj.ID() {
 		t.Fatalf("expected object %v, got %v", obj.ID(), events[0].Key)
 	}
 }
 
+// TestListObjectsLatePinCommit asserts that a pin's event is still delivered
+// when its transaction commits after a listing already drained the stream.
+func TestListObjectsLatePinCommit(t *testing.T) {
+	store := initPostgres(t, zap.NewNop())
+
+	acc := proto.Account(types.GeneratePrivateKey().PublicKey())
+	store.addTestAccount(t, types.PublicKey(acc))
+	hk := store.addTestHost(t)
+	store.addTestContract(t, hk)
+
+	// build the objects by hand so a slab can be locked and the keys ordered
+	newObject := func() (slabs.SlabPinParams, slabs.SealedObject) {
+		params := slabs.SlabPinParams{
+			EncryptionKey: frand.Entropy256(),
+			MinShards:     1,
+			Sectors:       []slabs.PinnedSector{{Root: frand.Entropy256(), HostKey: hk}},
+		}
+		return params, slabs.SealedObject{
+			EncryptedDataKey:     frand.Bytes(72),
+			EncryptedMetadataKey: frand.Bytes(72),
+			EncryptedMetadata:    frand.Bytes(50),
+			DataSignature:        types.Signature(frand.Bytes(64)),
+			MetadataSignature:    types.Signature(frand.Bytes(64)),
+			Slabs:                []slabs.SlabSlice{params.Slice(0, 100)},
+		}
+	}
+
+	// the stalled pin has to sort below the other one, since events sharing a
+	// batch are ordered by key and only a lower key can land behind the cursor
+	slowParams, slow := newObject()
+	fastParams, fast := newObject()
+	for slowKey, fastKey := slow.ID(), fast.ID(); bytes.Compare(slowKey[:], fastKey[:]) >= 0; slowKey, fastKey = slow.ID(), fast.ID() {
+		fastParams, fast = newObject()
+	}
+	if _, err := store.PinSlabs(acc, time.Time{}, slowParams, fastParams); err != nil {
+		t.Fatal(err)
+	}
+
+	// hold a row lock the pin blocks on after inserting its event
+	lockTx, err := store.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lockTx.Rollback(t.Context()) }()
+	if _, err := lockTx.Exec(t.Context(), `SELECT digest FROM slabs WHERE digest = $1 FOR UPDATE`, sqlHash256(slowParams.Digest())); err != nil {
+		t.Fatal(err)
+	}
+
+	// the pin writes its event, then blocks on the slab
+	pinErr := make(chan error, 1)
+	go func() {
+		pinErr <- store.PinObject(acc, slow.PinRequest())
+	}()
+	var blocked bool
+	for range 100 {
+		var waiting int
+		if err := store.pool.QueryRow(t.Context(), `
+			SELECT COUNT(*) FROM pg_locks l
+			JOIN pg_stat_activity a ON a.pid = l.pid
+			WHERE NOT l.granted AND a.datname = current_database()`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		} else if waiting > 0 {
+			blocked = true
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !blocked {
+		t.Fatal("expected the pin to block on the locked slab")
+	}
+
+	// pin the other object while the slow one is uncommitted, then publish and
+	// read everything on offer, advancing the cursor
+	if err := store.PinObject(acc, fast.PinRequest()); err != nil {
+		t.Fatal(err)
+	}
+
+	var cursor slabs.Cursor
+	for events := store.listEvents(t, acc, cursor); len(events) > 0; events = store.listEvents(t, acc, cursor) {
+		last := events[len(events)-1]
+		cursor = slabs.Cursor{After: last.UpdatedAt, Key: last.Key}
+	}
+
+	// release the slow pin, its event commits after the cursor already passed
+	// the position it would have been given had it been published on time
+	if err := lockTx.Rollback(t.Context()); err != nil {
+		t.Fatal(err)
+	} else if err := <-pinErr; err != nil {
+		t.Fatal(err)
+	}
+
+	events := store.listEvents(t, acc, cursor)
+	if len(events) != 1 {
+		t.Fatalf("expected the late pin to be delivered, got %d events", len(events))
+	} else if events[0].Key != slow.ID() {
+		t.Fatal("mismatch", events[0].Key)
+	}
+}
+
+// eventPosition returns the position of the given object's event, or nil if it
+// has not been published yet.
+func (s *Store) eventPosition(t testing.TB, obj types.Hash256) *time.Time {
+	t.Helper()
+
+	var position *time.Time
+	if err := s.pool.QueryRow(t.Context(), `SELECT updated_at FROM object_events WHERE object_key = $1`, sqlHash256(obj)).Scan(&position); err != nil {
+		t.Fatal(err)
+	}
+	return position
+}
+
+// assertUnpublishedEvents asserts how many events are waiting for a position.
+func (s *Store) assertUnpublishedEvents(t testing.TB, expected int64) {
+	t.Helper()
+
+	stats, err := s.ObjectStats()
+	if err != nil {
+		t.Fatal(err)
+	} else if stats.UnpublishedEvents != expected {
+		t.Fatalf("expected %d unpublished events, got %d", expected, stats.UnpublishedEvents)
+	}
+}
+
+// TestPublishObjectEventsOncePerSecond asserts that an event never takes a
+// position in a second that was already published, since a cursor may have come
+// to rest on that second, and that it takes a later one instead.
+func TestPublishObjectEventsOncePerSecond(t *testing.T) {
+	store := initPostgres(t, zap.NewNop())
+
+	acc := proto.Account(types.GeneratePrivateKey().PublicKey())
+	store.addTestAccount(t, types.PublicKey(acc))
+	hk := store.addTestHost(t)
+	store.addTestContract(t, hk)
+
+	store.pinTestObject(t, acc, hk)
+	store.assertUnpublishedEvents(t, 1)
+	store.publishEvents(t)
+	store.assertUnpublishedEvents(t, 0)
+
+	obj := store.pinTestObject(t, acc, hk)
+
+	// claim the current second the way a preceding publish would have
+	var published time.Time
+	if err := store.pool.QueryRow(t.Context(), `
+		UPDATE global_settings SET object_events_last_published = date_trunc('second', NOW())
+		RETURNING object_events_last_published`).Scan(&published); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.PublishObjectEvents(); err != nil {
+		t.Fatal(err)
+	} else if position := store.eventPosition(t, obj.ID()); position != nil {
+		t.Fatal("expected the event to stay unpublished, got", *position)
+	}
+	store.assertUnpublishedEvents(t, 1)
+
+	store.publishEvents(t)
+	store.assertUnpublishedEvents(t, 0)
+	position := store.eventPosition(t, obj.ID())
+	if position == nil {
+		t.Fatal("expected the event to be published")
+	} else if !position.After(published) {
+		t.Fatalf("expected a position after %v, got %v", published, *position)
+	}
+}
+
+// TestPublishObjectEventsSkipsLockedEvents asserts that an unpublished event
+// locked by an in-flight writer does not hold up the rest of the batch and
+// takes a position of its own once that writer is done.
+func TestPublishObjectEventsSkipsLockedEvents(t *testing.T) {
+	store := initPostgres(t, zap.NewNop())
+
+	acc := proto.Account(types.GeneratePrivateKey().PublicKey())
+	store.addTestAccount(t, types.PublicKey(acc))
+	hk := store.addTestHost(t)
+	store.addTestContract(t, hk)
+
+	locked := store.pinTestObject(t, acc, hk)
+
+	// hold the row lock on the committed, still unpublished event
+	lockTx, err := store.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lockTx.Rollback(t.Context()) }()
+	if _, err := lockTx.Exec(t.Context(), `SELECT object_key FROM object_events WHERE object_key = $1 FOR UPDATE`, sqlHash256(locked.ID())); err != nil {
+		t.Fatal(err)
+	}
+
+	other := store.pinTestObject(t, acc, hk)
+
+	// nothing has been published yet, so this batch needs no boundary wait
+	published := make(chan error, 1)
+	go func() { published <- store.PublishObjectEvents() }()
+	select {
+	case err := <-published:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("expected publishing to skip the locked event")
+	}
+
+	events, err := store.ListObjects(acc, slabs.Cursor{}, 10)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(events) != 1 {
+		t.Fatalf("expected only the unlocked event, got %d events", len(events))
+	} else if events[0].Key != other.ID() {
+		t.Fatal("mismatch", events[0].Key)
+	}
+	cursor := slabs.Cursor{After: events[0].UpdatedAt, Key: events[0].Key}
+
+	if err := lockTx.Rollback(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	events = store.listEvents(t, acc, cursor)
+	if len(events) != 1 {
+		t.Fatalf("expected the skipped event to be delivered, got %d events", len(events))
+	} else if events[0].Key != locked.ID() {
+		t.Fatal("mismatch", events[0].Key)
+	}
+}
+
+// TestPublishObjectEventsClockAhead asserts that events are withheld rather
+// than given a position that is already behind a cursor when the last published
+// second is ahead of the database clock.
+func TestPublishObjectEventsClockAhead(t *testing.T) {
+	store := initPostgres(t, zap.NewNop())
+
+	acc := proto.Account(types.GeneratePrivateKey().PublicKey())
+	store.addTestAccount(t, types.PublicKey(acc))
+	hk := store.addTestHost(t)
+	store.addTestContract(t, hk)
+
+	obj := store.pinTestObject(t, acc, hk)
+
+	if _, err := store.pool.Exec(t.Context(), `
+		UPDATE global_settings
+		SET object_events_last_published = date_trunc('second', NOW()) + INTERVAL '1 hour'`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.PublishObjectEvents(); err != nil {
+		t.Fatal(err)
+	} else if position := store.eventPosition(t, obj.ID()); position != nil {
+		t.Fatal("expected the event to stay unpublished, got", *position)
+	}
+
+	events, err := store.ListObjects(acc, slabs.Cursor{}, 10)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(events) != 0 {
+		t.Fatalf("expected no events, got %d", len(events))
+	}
+}
+
+// TestObjectEventTimestampPrecision asserts that a published event's position
+// is truncated to second precision, so a cursor that carries less precision
+// than that, e.g. milliseconds, can still advance past it instead of being
+// handed the same event over and over again.
 func TestObjectEventTimestampPrecision(t *testing.T) {
 	store := initPostgres(t, zap.NewNop())
 
@@ -543,8 +990,9 @@ func TestObjectEventTimestampPrecision(t *testing.T) {
 
 	// read updated_at straight from the db to make sure nothing rounds it on
 	// the way out
-	assertTruncated := func(context string) time.Time {
+	assertPublished := func(context string) time.Time {
 		t.Helper()
+		store.publishEvents(t)
 
 		var updatedAt time.Time
 		if err := store.pool.QueryRow(t.Context(), `SELECT updated_at FROM object_events`).Scan(&updatedAt); err != nil {
@@ -552,32 +1000,25 @@ func TestObjectEventTimestampPrecision(t *testing.T) {
 		} else if updatedAt.Nanosecond() != 0 {
 			t.Fatalf("expected %s to truncate updated_at to second precision, got %v", context, updatedAt.Format(time.RFC3339Nano))
 		}
-		return updatedAt
-	}
 
-	// a cursor built from a listed event, with the precision a client is able
-	// to express, must not return that same event again
-	assertCursorAdvances := func(context string) {
-		t.Helper()
-		awaitEventSecond(t)
-
+		// a cursor built from a listed event, with the precision a client is
+		// able to express, must not return that same event again
 		events, err := store.ListObjects(acc, slabs.Cursor{}, 10)
 		if err != nil {
 			t.Fatal(err)
 		} else if len(events) != 1 {
 			t.Fatalf("expected 1 event, got %d", len(events))
 		}
-
 		cursor := slabs.Cursor{
 			After: events[0].UpdatedAt.Truncate(time.Millisecond),
 			Key:   events[0].Key,
 		}
-		events, err = store.ListObjects(acc, cursor, 10)
-		if err != nil {
+		if events, err := store.ListObjects(acc, cursor, 10); err != nil {
 			t.Fatal(err)
 		} else if len(events) != 0 {
 			t.Fatalf("expected cursor to advance past the %s event, got %d events", context, len(events))
 		}
+		return updatedAt
 	}
 
 	// pin the object, inserting the event
@@ -592,32 +1033,26 @@ func TestObjectEventTimestampPrecision(t *testing.T) {
 	if err := store.PinObject(acc, obj.PinRequest()); err != nil {
 		t.Fatal(err)
 	}
-	inserted := assertTruncated("insert")
-	assertCursorAdvances("insert")
+	inserted := assertPublished("insert")
 
-	// pin it again, updating the event. updated_at has second precision, so
-	// sleep past the next second boundary for the timestamp to move.
-	time.Sleep(time.Second)
+	// pin it again, updating the event
 	obj.EncryptedMetadata = frand.Bytes(50)
 	if err := store.PinObject(acc, obj.PinRequest()); err != nil {
 		t.Fatal(err)
 	}
-	updated := assertTruncated("update")
+	updated := assertPublished("update")
 	if !updated.After(inserted) {
 		t.Fatalf("expected updated_at to advance, got %v after %v", updated, inserted)
 	}
-	assertCursorAdvances("update")
 
 	// delete the object, updating the event once more
-	time.Sleep(time.Second)
 	if err := store.DeleteObject(acc, obj.ID()); err != nil {
 		t.Fatal(err)
 	}
-	deleted := assertTruncated("delete")
+	deleted := assertPublished("delete")
 	if !deleted.After(updated) {
 		t.Fatalf("expected updated_at to advance, got %v after %v", deleted, updated)
 	}
-	assertCursorAdvances("delete")
 }
 
 func TestSaveObject(t *testing.T) {
@@ -872,6 +1307,192 @@ func TestObjectsForSlab(t *testing.T) {
 		t.Fatal(err)
 	} else if len(objects) != 0 {
 		t.Fatalf("expected 0 objects, got %d", len(objects))
+	}
+}
+
+// TestObjectAccounts asserts that ObjectAccounts returns every account that
+// pinned an object with the given key, along with its connect key, and that
+// blocking the object does not hide them.
+func TestObjectAccounts(t *testing.T) {
+	store := initPostgres(t, zap.NewNop())
+
+	// create 3 accounts, acc1 and acc3 share a connect key
+	ck1, _ := store.addTestAppConnectKey(t)
+	ck2, _ := store.addTestAppConnectKey(t)
+	acc1, acc2, acc3 := proto.Account{1}, proto.Account{2}, proto.Account{3}
+	connectKeys := map[proto.Account]string{
+		acc1: ck1,
+		acc2: ck2,
+		acc3: ck1,
+	}
+	for _, acc := range []proto.Account{acc1, acc2, acc3} {
+		store.addTestAccountForKey(t, connectKeys[acc], types.PublicKey(acc))
+	}
+
+	hk := store.addTestHost(t)
+	store.addTestContract(t, hk)
+
+	// create a shared slab pinned to acc1 and acc2
+	sharedSlab := slabs.SlabPinParams{
+		EncryptionKey: frand.Entropy256(),
+		MinShards:     1,
+		Sectors: []slabs.PinnedSector{{
+			Root:    frand.Entropy256(),
+			HostKey: hk,
+		}},
+	}
+	for _, acc := range []proto.Account{acc1, acc2} {
+		if _, err := store.PinSlabs(acc, time.Time{}, sharedSlab); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// create a second slab only pinned to acc3
+	slab2 := slabs.SlabPinParams{
+		EncryptionKey: frand.Entropy256(),
+		MinShards:     1,
+		Sectors: []slabs.PinnedSector{{
+			Root:    frand.Entropy256(),
+			HostKey: hk,
+		}},
+	}
+	if _, err := store.PinSlabs(acc3, time.Time{}, slab2); err != nil {
+		t.Fatal(err)
+	}
+
+	// the object key is derived from its slabs, so pinning an object with
+	// the same slabs on acc1 and acc2 gives both the same key
+	obj1 := store.pinRandomObject(t, acc1, []slabs.SlabSlice{sharedSlab.Slice(0, 100)})
+	store.pinRandomObject(t, acc2, []slabs.SlabSlice{sharedSlab.Slice(0, 100)})
+
+	// create an object on acc3 referencing only slab2
+	obj2 := store.pinRandomObject(t, acc3, []slabs.SlabSlice{slab2.Slice(0, 100)})
+
+	assertObjectAccounts := func(objectKey types.Hash256, offset, limit int, expected []proto.Account) {
+		t.Helper()
+		objectAccounts, err := store.ObjectAccounts(objectKey, offset, limit)
+		if err != nil {
+			t.Fatal(err)
+		} else if len(objectAccounts) != len(expected) {
+			t.Fatalf("expected %d accounts, got %d", len(expected), len(objectAccounts))
+		}
+		for i, oa := range objectAccounts {
+			if oa.AccountKey != expected[i] {
+				t.Fatalf("expected account %v, got %v", expected[i], oa.AccountKey)
+			} else if oa.ConnectKey != connectKeys[oa.AccountKey] {
+				t.Fatalf("expected connect key %q, got %q", connectKeys[oa.AccountKey], oa.ConnectKey)
+			}
+		}
+	}
+
+	assertObjectAccounts(obj1.ID(), 0, 10, []proto.Account{acc1, acc2})
+	assertObjectAccounts(obj1.ID(), 0, 1, []proto.Account{acc1})
+	assertObjectAccounts(obj1.ID(), 1, 1, []proto.Account{acc2})
+	assertObjectAccounts(obj1.ID(), 2, 1, nil)
+	assertObjectAccounts(obj2.ID(), 0, 10, []proto.Account{acc3})
+
+	if _, err := store.ObjectAccounts(frand.Entropy256(), 0, 10); !errors.Is(err, slabs.ErrObjectNotFound) {
+		t.Fatalf("expected %v, got %v", slabs.ErrObjectNotFound, err)
+	}
+
+	// blocked objects stay pinned, so their accounts are still returned
+	if err := store.BlockObject(obj1.ID(), "tos violation"); err != nil {
+		t.Fatal(err)
+	}
+	assertObjectAccounts(obj1.ID(), 0, 10, []proto.Account{acc1, acc2})
+}
+
+func TestSpaceObjectLookups(t *testing.T) {
+	store := initPostgres(t, zap.NewNop())
+	owner, writer := proto.Account{1}, proto.Account{2}
+	ownerConnectKey, _ := store.addTestAppConnectKey(t)
+	writerConnectKey, _ := store.addTestAppConnectKey(t)
+	store.addTestAccountForKey(t, ownerConnectKey, types.PublicKey(owner))
+	store.addTestAccountForKey(t, writerConnectKey, types.PublicKey(writer))
+	spaceKeys := []types.PublicKey{
+		store.addTestSpace(t, owner).PublicKey(),
+		store.addTestSpace(t, owner).PublicKey(),
+	}
+	for _, key := range spaceKeys {
+		if err := store.InviteSpaceMember(testSpaceInvitation(owner, writer, key, spaces.Write)); err != nil {
+			t.Fatal(err)
+		} else if err := store.AcceptSpaceInvitation(writer, key, frand.Bytes(72)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hk := store.addTestHost(t)
+	store.addTestContract(t, hk)
+	params := slabs.SlabPinParams{
+		EncryptionKey: frand.Entropy256(),
+		MinShards:     1,
+		Sectors:       []slabs.PinnedSector{{Root: frand.Entropy256(), HostKey: hk}},
+	}
+	if _, err := store.PinSlabs(writer, time.Time{}, params); err != nil {
+		t.Fatal(err)
+	}
+	obj := store.pinRandomObject(t, writer, []slabs.SlabSlice{params.Slice(0, 100), params.Slice(100, 100)})
+	for _, key := range spaceKeys {
+		if err := store.PinSpaceObject(writer, key, obj.PinRequest()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	assertLookups := func(expected []slabs.ObjectAccount) {
+		t.Helper()
+		if got, err := store.ObjectAccounts(obj.ID(), 0, 10); err != nil {
+			t.Fatal(err)
+		} else if !slices.Equal(got, expected) {
+			t.Fatalf("object accounts: got %+v, want %+v", got, expected)
+		}
+		objects, err := store.ObjectsForSlab(params.Digest())
+		if err != nil {
+			t.Fatal(err)
+		} else if len(objects) != len(expected) {
+			t.Fatalf("expected %d slab objects, got %+v", len(expected), objects)
+		}
+		want := make(map[slabs.SlabObject]bool)
+		for _, account := range expected {
+			want[slabs.SlabObject{Account: account.AccountKey, ObjectID: obj.ID(), SpaceKey: account.SpaceKey}] = true
+		}
+		for _, object := range objects {
+			if !want[object] {
+				t.Fatalf("unexpected or duplicate slab object: %+v", object)
+			}
+			delete(want, object)
+		}
+	}
+	expected := []slabs.ObjectAccount{
+		{AccountKey: writer, ConnectKey: writerConnectKey},
+		{AccountKey: owner, ConnectKey: ownerConnectKey, SpaceKey: spaceKeys[0]},
+		{AccountKey: owner, ConnectKey: ownerConnectKey, SpaceKey: spaceKeys[1]},
+	}
+	assertLookups(expected)
+	for _, page := range []struct{ offset, limit int }{{0, 1}, {0, 2}, {1, 2}, {3, 1}} {
+		got, err := store.ObjectAccounts(obj.ID(), page.offset, page.limit)
+		if err != nil {
+			t.Fatal(err)
+		} else if want := expected[page.offset:min(page.offset+page.limit, len(expected))]; !slices.Equal(got, want) {
+			t.Fatalf("object accounts at offset %d, limit %d: got %+v, want %+v", page.offset, page.limit, got, want)
+		}
+	}
+	if err := store.BlockObject(obj.ID(), "tos violation"); err != nil {
+		t.Fatal(err)
+	}
+	assertLookups(expected)
+	if err := store.DeleteObject(writer, obj.ID()); err != nil {
+		t.Fatal(err)
+	}
+	assertLookups(expected[1:])
+	if err := store.DeleteSpaceObject(owner, spaceKeys[0], obj.ID()); err != nil {
+		t.Fatal(err)
+	}
+	assertLookups(expected[2:])
+	if err := store.DeleteSpaceObject(owner, spaceKeys[1], obj.ID()); err != nil {
+		t.Fatal(err)
+	} else if _, err := store.ObjectAccounts(obj.ID(), 0, 10); !errors.Is(err, slabs.ErrObjectNotFound) {
+		t.Fatalf("expected %v, got %v", slabs.ErrObjectNotFound, err)
+	} else if objects, err := store.ObjectsForSlab(params.Digest()); err != nil || len(objects) != 0 {
+		t.Fatalf("expected no slab objects, got %+v, %v", objects, err)
 	}
 }
 
@@ -1249,6 +1870,64 @@ func TestParallelObjectDeletion(t *testing.T) {
 			t.Fatalf("expected slab to be deleted, got %v", err)
 		}
 		store.assertStoreCleanedUp(t)
+	}
+}
+
+// BenchmarkPublishObjectEvents reports how long one publish holds the settings
+// row at a range of batch sizes.
+func BenchmarkPublishObjectEvents(b *testing.B) {
+	const backlog = 1_000_000
+
+	for _, limit := range []int{500, 1000, 2500, 5000, 10000, 25000, 50000, 100000} {
+		b.Run(fmt.Sprintf("batch_%d", limit), func(b *testing.B) {
+			store := initPostgres(b, zap.NewNop())
+			exec := func(query string, args ...any) {
+				if _, err := store.pool.Exec(b.Context(), query, args...); err != nil {
+					b.Fatal(err)
+				}
+			}
+
+			for range 10 {
+				store.addTestAccount(b, types.PublicKey(frand.Entropy256()))
+			}
+			exec(`
+INSERT INTO object_events (account_id, object_key, was_deleted, updated_at)
+SELECT ids[1 + i % array_length(ids, 1)], sha256(int8send(i)), false, NULL
+FROM generate_series(1, $1::BIGINT) AS i,
+	(SELECT array_agg(id ORDER BY id) AS ids FROM accounts) AS a`, backlog)
+			exec(`ANALYZE object_events`)
+
+			b.ResetTimer()
+			for b.Loop() {
+				b.StopTimer()
+				// a publisher takes one batch per second, rewinding the cursor
+				// lets the next batch run without waiting it out
+				exec(`UPDATE global_settings SET object_events_last_published = '-infinity'`)
+				b.StartTimer()
+
+				if err := store.publishObjectEvents(limit); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+
+			// a drained backlog turns publishes into no-ops and understates the cost
+			if stats, err := store.ObjectStats(); err != nil {
+				b.Fatal(err)
+			} else if stats.UnpublishedEvents == 0 {
+				b.Fatal("backlog drained, raise it for this benchtime")
+			}
+
+			// the publisher takes one batch per objectEventPublishInterval, or
+			// runs back to back once a batch outlasts one, so this is the rate
+			// indexd can sustain at this batch size
+			publish := b.Elapsed() / time.Duration(b.N)
+			b.ReportMetric(float64(limit)/max(publish, time.Second).Seconds(), "events/s")
+
+			// what that rate costs, the share of the tick a publish spends
+			// holding the settings row against the chain subscriber
+			b.ReportMetric(100*min(publish, time.Second).Seconds(), "tick%")
+		})
 	}
 }
 

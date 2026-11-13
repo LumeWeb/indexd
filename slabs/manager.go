@@ -20,6 +20,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const objectEventPublishInterval = time.Second
+
 type (
 	// SlabManager is responsible for managing slabs, including pinning them,
 	// checking their integrity on the network and migrating their sectors if
@@ -118,8 +120,10 @@ type (
 		MarkFailingSectorsLost(hostKey types.PublicKey, maxFailedIntegrityChecks uint) error
 		MarkSectorsLost(hostKey types.PublicKey, roots []types.Hash256) error
 		MarkSlabRepaired(slabID SlabID, success bool) error
+		MarkSlabUnrecoverable(slabID SlabID, reason string) error
 		MigrateSector(root types.Hash256, hostKey types.PublicKey) (bool, error)
 		RecordSlabMigrated(slabID SlabID) error
+		RecordFailedSlabRecovery(slabID SlabID, reason string) (bool, error)
 		PinSlabs(account proto.Account, nextIntegrityCheck time.Time, toPin ...SlabPinParams) ([]SlabID, error)
 		UnpinSlab(proto.Account, SlabID) error
 		RecordIntegrityCheck(success bool, nextCheck time.Time, hostKey types.PublicKey, roots []types.Hash256) error
@@ -138,6 +142,10 @@ type (
 		DeleteObject(account proto.Account, objectKey types.Hash256) error
 		PinObject(account proto.Account, obj PinObjectRequest) error
 		ListObjects(account proto.Account, cursor Cursor, limit int) ([]ObjectEvent, error)
+		ListObjectsWithoutSlabs(account proto.Account, cursor Cursor, limit int) ([]ObjectEventWithoutSlabs, error)
+		ObjectSlabs(account proto.Account, key types.Hash256, cursor int64, limit int) ([]SlabSlice, error)
+		ObjectStats() (ObjectStats, error)
+		PublishObjectEvents() error
 		SharedObject(key types.Hash256) (SharedObject, error)
 
 		// Blocklist methods
@@ -147,6 +155,8 @@ type (
 		BlockedObjects(offset, limit int) ([]BlockedObject, error)
 
 		ObjectsForSlab(slabID SlabID) ([]SlabObject, error)
+		DeleteSlabObject(obj SlabObject) error
+		ObjectAccounts(objectKey types.Hash256, offset, limit int) ([]ObjectAccount, error)
 		SectorStats() (SectorsStats, error)
 	}
 
@@ -327,8 +337,8 @@ func (m *SlabManager) Close() error {
 	return nil
 }
 
-// ObjectsForSlab returns all (account, object key) pairs for objects that
-// reference the given slab.
+// ObjectsForSlab returns all personal and space objects that reference the given
+// slab. Space objects include the space key and its owner's account.
 func (m *SlabManager) ObjectsForSlab(slabID SlabID) ([]SlabObject, error) {
 	return m.store.ObjectsForSlab(slabID)
 }
@@ -372,10 +382,17 @@ func (m *SlabManager) maintenanceLoop(ctx context.Context) {
 	m.registerLostSectorsAlert()
 	launch("integrity checks", m.healthCheckInterval, m.performIntegrityChecks)
 	launch("prune deleted slabs", m.pruneDeletedSlabsInterval, m.performPruneDeletedSlabs)
+	launch("object event publishing", objectEventPublishInterval, m.performObjectEventPublish)
 	if m.runMigrations {
 		launch("slab migrations", m.healthCheckInterval, m.performSlabMigrations)
 	}
 	wg.Wait()
+}
+
+// performObjectEventPublish gives object events written since the last run
+// their position in the event stream.
+func (m *SlabManager) performObjectEventPublish(context.Context) error {
+	return m.store.PublishObjectEvents()
 }
 
 // performPruneDeletedSlabs prunes deleted slabs, removing those no longer pinned

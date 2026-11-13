@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"sync"
 	"time"
 
@@ -55,7 +54,7 @@ type (
 		UpdateAppConnectKey(AppConnectKeyRequest) (ConnectKey, error)
 		DeleteAppConnectKey(string) error
 		AppConnectKey(key string) (ConnectKey, error)
-		AppConnectKeys(offset, limit int) ([]ConnectKey, error)
+		AppConnectKeys(offset, limit int, opts ...QueryConnectKeysOpt) ([]ConnectKey, error)
 		AddPreAuthorizedKey(PreAuthorizedKeyRequest) (PreAuthorizedKey, error)
 		DeletePreAuthorizedKey(types.PublicKey) error
 		PreAuthorizedKey(types.PublicKey) (PreAuthorizedKey, error)
@@ -220,6 +219,16 @@ func (m *AccountManager) ServiceAccounts(hk types.PublicKey) []HostAccount {
 	return result
 }
 
+// fundingBackoff returns 2^n minutes capped at maxBackoff.
+func fundingBackoff(n int, maxBackoff time.Duration) time.Duration {
+	// 2^27 minutes is the largest power of two that fits in a time.Duration,
+	// n < 0 means the counter itself overflowed
+	if n < 0 || n > 27 {
+		return maxBackoff
+	}
+	return min(time.Minute<<n, maxBackoff)
+}
+
 // UpdateFundedAccounts marks in-place the first `n` accounts as having a
 // successful funding and applies the exponential backoff penalty to the
 // accounts after the first `n`.
@@ -233,7 +242,7 @@ func UpdateFundedAccounts(accounts []HostAccount, n int, maxBackoff time.Duratio
 	}
 	for i := n; i < len(accounts); i++ {
 		accounts[i].ConsecutiveFailedFunds++
-		accounts[i].NextFund = time.Now().Add(min(time.Duration(math.Pow(2, float64(accounts[i].ConsecutiveFailedFunds)))*time.Minute, maxBackoff))
+		accounts[i].NextFund = time.Now().Add(fundingBackoff(accounts[i].ConsecutiveFailedFunds, maxBackoff))
 	}
 }
 
@@ -250,32 +259,31 @@ func UpdateFundedPools(pools []HostPool, n int, maxBackoff time.Duration) {
 	}
 	for i := n; i < len(pools); i++ {
 		pools[i].ConsecutiveFailedFunds++
-		pools[i].NextFund = time.Now().Add(min(time.Duration(math.Pow(2, float64(pools[i].ConsecutiveFailedFunds)))*time.Minute, maxBackoff))
+		pools[i].NextFund = time.Now().Add(fundingBackoff(pools[i].ConsecutiveFailedFunds, maxBackoff))
 	}
 }
 
 // HostFundTarget calculates the fund target for the given host. We fund
-// accounts to cover the given amount of read and write usage.
+// accounts to cover the given amount of both read and write usage.
 func HostFundTarget(host hosts.Host, fundTargetBytes uint64) types.Currency {
 	if fundTargetBytes == 0 {
 		return types.ZeroCurrency
 	}
 	sectors := (fundTargetBytes + proto.SectorSize - 1) / proto.SectorSize // ceil div for at least 1 sector if fundTargetBytes > 0
-	u1 := host.Settings.Prices.RPCWriteSectorCost(proto.SectorSize).RenterCost().Mul64(sectors).Div64(2)
-	u2 := host.Settings.Prices.RPCReadSectorCost(proto.SectorSize).RenterCost().Mul64(sectors).Div64(2)
+	u1 := host.Settings.Prices.RPCWriteSectorCost(proto.SectorSize).RenterCost().Mul64(sectors)
+	u2 := host.Settings.Prices.RPCReadSectorCost(proto.SectorSize).RenterCost().Mul64(sectors)
 	return u1.Add(u2)
 }
 
 // HostReadFundTarget calculates the fund target for accounts that have no
-// remaining storage. `fundTargetBytes` is interpreted the same way as in
-// HostFundTarget: as a combined read+write target. Since these accounts can
-// only download, we fund only the read portion of that target.
+// remaining storage. Since these accounts can only download, we only fund the
+// read portion of HostFundTarget.
 func HostReadFundTarget(host hosts.Host, fundTargetBytes uint64) types.Currency {
 	if fundTargetBytes == 0 {
 		return types.ZeroCurrency
 	}
 	sectors := (fundTargetBytes + proto.SectorSize - 1) / proto.SectorSize
-	return host.Settings.Prices.RPCReadSectorCost(proto.SectorSize).RenterCost().Mul64(sectors).Div64(2)
+	return host.Settings.Prices.RPCReadSectorCost(proto.SectorSize).RenterCost().Mul64(sectors)
 }
 
 // NewManager creates a new AccountManager.

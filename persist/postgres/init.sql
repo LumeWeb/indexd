@@ -128,7 +128,8 @@ CREATE INDEX account_hosts_account_id_consecutive_failed_funds_idx ON account_ho
 CREATE TABLE pools (
     id SERIAL PRIMARY KEY,
     connect_key_id INTEGER UNIQUE NOT NULL REFERENCES app_connect_keys(id) ON DELETE CASCADE,
-    pool_key BYTEA UNIQUE NOT NULL CHECK (LENGTH(pool_key) = 64)
+    pool_key BYTEA UNIQUE NOT NULL CHECK (LENGTH(pool_key) = 64),
+    accounts_seq BIGINT NOT NULL DEFAULT 1 -- bumped on every new account for the pool
 );
 
 CREATE TABLE pool_hosts (
@@ -137,6 +138,7 @@ CREATE TABLE pool_hosts (
     next_fund TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     consecutive_failed_funds INTEGER NOT NULL DEFAULT 0,
     sharing_attached BOOLEAN NOT NULL DEFAULT FALSE, -- whether the pool's derived sharing account has been attached on this host
+    attached_seq BIGINT NOT NULL DEFAULT 0, -- sequence of latest attached account
     CONSTRAINT pool_hosts_pk PRIMARY KEY (pool_id, host_id)
 );
 CREATE INDEX pool_hosts_host_id_next_fund_idx ON pool_hosts (host_id, next_fund);
@@ -244,7 +246,9 @@ CREATE TABLE global_settings (
     pins_min_collateral DOUBLE PRECISION NOT NULL DEFAULT 0 CHECK (pins_min_collateral >= 0),
     pins_max_storage_price DOUBLE PRECISION NOT NULL DEFAULT 0 CHECK (pins_max_storage_price >= 0),
     pins_max_ingress_price DOUBLE PRECISION NOT NULL DEFAULT 0 CHECK (pins_max_ingress_price >= 0),
-    pins_max_egress_price DOUBLE PRECISION NOT NULL DEFAULT 0 CHECK (pins_max_egress_price >= 0)
+    pins_max_egress_price DOUBLE PRECISION NOT NULL DEFAULT 0 CHECK (pins_max_egress_price >= 0),
+
+    object_events_last_published TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT '-infinity' -- last second claimed by a publisher
 );
 
 CREATE TABLE contracts (
@@ -347,8 +351,10 @@ CREATE TABLE slabs (
     version SMALLINT NOT NULL DEFAULT 0 CHECK(version >= 0), -- slab encoding version, folded into digest for version > 0
 
     consecutive_failed_repairs SMALLINT NOT NULL DEFAULT 0 CHECK (consecutive_failed_repairs >= 0),
-    next_repair_attempt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
-
+    next_repair_attempt TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    unrecoverable_since TIMESTAMP WITH TIME ZONE, -- start of the recovery window, the Unix epoch if the slab can never be fully repaired
+    unrecoverable_reason TEXT, -- set once the slab is taken out of the repair rotation
+    CONSTRAINT slabs_unrecoverable_reason_check CHECK (unrecoverable_reason IS NULL OR unrecoverable_since IS NOT NULL)
 );
 CREATE INDEX slabs_pinned_at_idx ON slabs(pinned_at ASC);
 
@@ -362,11 +368,14 @@ CREATE TABLE objects (
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(), -- allow sorting by update time
     encrypted_metadata BYTEA, -- user provided, encrypted metadata
     data_signature BYTEA UNIQUE NOT NULL CHECK(LENGTH(data_signature) = 64), -- signature of blake2b(object_key || encrypted_data_key)
-    meta_signature BYTEA UNIQUE NOT NULL CHECK(LENGTH(meta_signature) = 64) -- signature of blake2b(object ID || metadata key || encrypted_metadata)
+    meta_signature BYTEA UNIQUE NOT NULL CHECK(LENGTH(meta_signature) = 64), -- signature of blake2b(object ID || metadata key || encrypted_metadata)
+    size BIGINT NOT NULL CHECK(size >= 0) -- logical size of the object (object.Size())
 );
 
 -- object_key is unique per account
 CREATE UNIQUE INDEX objects_account_id_object_key_idx ON objects(account_id, object_key);
+-- speed up looking up which accounts pinned an object
+CREATE INDEX objects_object_key_idx ON objects(object_key);
 
 CREATE TABLE object_slabs (
     object_id BIGINT REFERENCES objects(id) ON DELETE CASCADE,
@@ -388,12 +397,15 @@ CREATE TABLE object_events (
     object_key BYTEA NOT NULL CHECK(LENGTH(object_key) = 32), -- not a FK since deletions need to hang around
     account_id BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     was_deleted BOOLEAN NOT NULL, -- true if deleted, false otherwise
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT date_trunc('second', NOW()), -- last time the object was created/updated/deleted, truncated to second precision so a client cursor can express it exactly
+    updated_at TIMESTAMP WITH TIME ZONE, -- the event's position in the stream rather than the time the object changed, NULL until a publisher stamps it, truncated to second precision so a client cursor can express it exactly
     PRIMARY KEY (account_id, object_key)
 );
 
 -- fast per-account events cursor pagination sorted by update time and object key
 CREATE INDEX object_events_account_id_updated_at_object_key_idx ON object_events(account_id, updated_at ASC, object_key ASC);
+
+-- fast lookup of events awaiting publication
+CREATE INDEX object_events_unpublished_idx ON object_events(account_id, object_key) WHERE updated_at IS NULL;
 
 -- probe by object_key alone since the PK leads with account_id
 CREATE INDEX object_events_object_key_idx ON object_events(object_key);
@@ -524,6 +536,168 @@ AFTER DELETE ON shared_objects
 REFERENCING OLD TABLE AS old_rows
 FOR EACH STATEMENT EXECUTE FUNCTION shared_objects_maintain_totals();
 
+CREATE TABLE spaces (
+    id BIGSERIAL PRIMARY KEY,
+    space_key BYTEA UNIQUE NOT NULL CHECK(LENGTH(space_key) = 32), -- public identifier, not the encryption key
+    owner_account_id INTEGER NOT NULL REFERENCES accounts(id), -- pins count against this account's quota
+    signature BYTEA NOT NULL CHECK(LENGTH(signature) = 64),
+    encrypted_name BYTEA,
+    encrypted_metadata BYTEA, -- user provided, encrypted space metadata
+    object_count BIGINT NOT NULL DEFAULT 0 CHECK(object_count >= 0),
+    size BIGINT NOT NULL DEFAULT 0 CHECK(size >= 0),
+    pinned_data BIGINT NOT NULL DEFAULT 0 CHECK(pinned_data >= 0),
+    pinned_size BIGINT NOT NULL DEFAULT 0 CHECK(pinned_size >= 0),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+CREATE INDEX spaces_owner_account_id_idx ON spaces(owner_account_id);
+
+-- Permissions are additive: 1 = read, 2 = read + write,
+-- 3 = read + write + delete, 4 = read + write + delete + admin.
+CREATE TABLE space_invitations (
+    space_id BIGINT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    inviter_account_id INTEGER NOT NULL REFERENCES accounts(id),
+    permission_level SMALLINT NOT NULL DEFAULT 1 CHECK(permission_level BETWEEN 1 AND 4),
+    encrypted_key BYTEA NOT NULL CHECK(LENGTH(encrypted_key) = 72), -- space encryption key wrapped with HKDF(inviter/recipient DH secret, space_key, "invitationKey")
+    signature BYTEA NOT NULL CHECK(LENGTH(signature) = 64),
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    PRIMARY KEY (space_id, account_id)
+);
+CREATE INDEX space_invitations_account_id_idx ON space_invitations(account_id);
+CREATE INDEX space_invitations_inviter_account_id_idx ON space_invitations(inviter_account_id);
+
+CREATE TABLE space_members (
+    space_id BIGINT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    invited_by BYTEA NOT NULL CHECK(LENGTH(invited_by) = 32),
+    invited_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    permission_level SMALLINT NOT NULL DEFAULT 1 CHECK(permission_level BETWEEN 1 AND 5),
+    encrypted_key BYTEA NOT NULL CHECK(LENGTH(encrypted_key) = 72), -- space encryption key wrapped with HKDF(member app key, space_key, "memberKey")
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (space_id, account_id)
+);
+CREATE INDEX space_members_account_id_idx ON space_members(account_id);
+
+CREATE TABLE space_objects (
+    id BIGSERIAL PRIMARY KEY,
+    space_id BIGINT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+    object_key BYTEA NOT NULL CHECK(LENGTH(object_key) = 32),
+    encrypted_data_key BYTEA NOT NULL CHECK(LENGTH(encrypted_data_key) = 72), -- data encryption key wrapped with the space encryption key
+    encrypted_meta_key BYTEA CHECK(LENGTH(encrypted_meta_key) = 72), -- metadata encryption key wrapped with the space encryption key
+    encrypted_metadata BYTEA,
+    data_signature BYTEA NOT NULL CHECK(LENGTH(data_signature) = 64),
+    meta_signature BYTEA NOT NULL CHECK(LENGTH(meta_signature) = 64),
+    size BIGINT NOT NULL CHECK(size >= 0), -- logical size of the object (object.Size())
+    pinned_data BIGINT NOT NULL CHECK(pinned_data >= 0),
+    pinned_size BIGINT NOT NULL CHECK(pinned_size >= 0),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    UNIQUE (space_id, object_key)
+);
+CREATE INDEX space_objects_object_key_idx ON space_objects(object_key);
+
+CREATE FUNCTION space_objects_maintain_totals() RETURNS TRIGGER AS $$
+BEGIN
+    IF (TG_OP = 'INSERT') THEN
+        UPDATE spaces SET
+            object_count = spaces.object_count + agg.object_count,
+            size = spaces.size + agg.size,
+            pinned_data = spaces.pinned_data + agg.pinned_data,
+            pinned_size = spaces.pinned_size + agg.pinned_size,
+            updated_at = NOW()
+        FROM (
+            SELECT space_id,
+                COUNT(*) AS object_count,
+                SUM(size) AS size,
+                SUM(pinned_data) AS pinned_data,
+                SUM(pinned_size) AS pinned_size
+            FROM new_rows
+            GROUP BY space_id
+        ) agg
+        WHERE spaces.id = agg.space_id;
+    ELSIF (TG_OP = 'UPDATE') THEN
+        UPDATE spaces SET
+            object_count = spaces.object_count + agg.object_count,
+            size = spaces.size + agg.size,
+            pinned_data = spaces.pinned_data + agg.pinned_data,
+            pinned_size = spaces.pinned_size + agg.pinned_size,
+            updated_at = NOW()
+        FROM (
+            SELECT space_id,
+                SUM(object_count) AS object_count,
+                SUM(size) AS size,
+                SUM(pinned_data) AS pinned_data,
+                SUM(pinned_size) AS pinned_size
+            FROM (
+                SELECT space_id, 1 AS object_count, size, pinned_data, pinned_size FROM new_rows
+                UNION ALL
+                SELECT space_id, -1, -size, -pinned_data, -pinned_size FROM old_rows
+            ) deltas
+            GROUP BY space_id
+        ) agg
+        WHERE spaces.id = agg.space_id;
+    ELSIF (TG_OP = 'DELETE') THEN
+        UPDATE spaces SET
+            object_count = spaces.object_count - agg.object_count,
+            size = spaces.size - agg.size,
+            pinned_data = spaces.pinned_data - agg.pinned_data,
+            pinned_size = spaces.pinned_size - agg.pinned_size,
+            updated_at = NOW()
+        FROM (
+            SELECT space_id,
+                COUNT(*) AS object_count,
+                SUM(size) AS size,
+                SUM(pinned_data) AS pinned_data,
+                SUM(pinned_size) AS pinned_size
+            FROM old_rows
+            GROUP BY space_id
+        ) agg
+        WHERE spaces.id = agg.space_id;
+    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER space_objects_maintain_totals_insert
+AFTER INSERT ON space_objects
+REFERENCING NEW TABLE AS new_rows
+FOR EACH STATEMENT EXECUTE FUNCTION space_objects_maintain_totals();
+
+CREATE TRIGGER space_objects_maintain_totals_update
+AFTER UPDATE ON space_objects
+REFERENCING OLD TABLE AS old_rows NEW TABLE AS new_rows
+FOR EACH STATEMENT EXECUTE FUNCTION space_objects_maintain_totals();
+
+CREATE TRIGGER space_objects_maintain_totals_delete
+AFTER DELETE ON space_objects
+REFERENCING OLD TABLE AS old_rows
+FOR EACH STATEMENT EXECUTE FUNCTION space_objects_maintain_totals();
+
+CREATE TABLE space_object_events (
+    space_id BIGINT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+    object_key BYTEA NOT NULL CHECK(LENGTH(object_key) = 32),
+    was_deleted BOOLEAN NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE,
+    PRIMARY KEY (space_id, object_key)
+);
+CREATE INDEX space_object_events_cursor_idx ON space_object_events(space_id, updated_at, object_key);
+CREATE INDEX space_object_events_unpublished_idx ON space_object_events(space_id, object_key) WHERE updated_at IS NULL;
+CREATE INDEX space_object_events_object_key_idx ON space_object_events(object_key);
+
+CREATE TABLE space_object_slabs (
+    object_id BIGINT NOT NULL REFERENCES space_objects(id) ON DELETE CASCADE,
+    slab_digest BYTEA NOT NULL REFERENCES slabs(digest) ON DELETE RESTRICT,
+    slab_index INTEGER NOT NULL, -- index within corresponding object to retrieve slabs in right order
+    slab_offset INTEGER NOT NULL, -- offset within slab
+    slab_length INTEGER NOT NULL, -- length of object data within slab
+    PRIMARY KEY (object_id, slab_digest, slab_index)
+);
+CREATE INDEX space_object_slabs_slab_digest_idx ON space_object_slabs(slab_digest);
+CREATE INDEX space_object_slabs_object_id_slab_index_idx ON space_object_slabs(object_id, slab_index ASC);
+
 CREATE TABLE account_slabs (
     account_id INTEGER REFERENCES accounts(id) NOT NULL, -- account that owns slab
     slab_id BIGSERIAL REFERENCES slabs(id) NOT NULL,
@@ -532,6 +706,17 @@ CREATE TABLE account_slabs (
 
 -- speed up query used when unpinning slabs
 CREATE INDEX account_slabs_slab_id_idx ON account_slabs(slab_id);
+
+CREATE TABLE space_slabs (
+    space_id BIGINT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+    account_id INTEGER NOT NULL,
+    slab_id BIGINT NOT NULL,
+    uploader_account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+    PRIMARY KEY (space_id, slab_id),
+    FOREIGN KEY (account_id, slab_id) REFERENCES account_slabs(account_id, slab_id) ON DELETE CASCADE
+);
+CREATE INDEX space_slabs_account_id_slab_id_idx ON space_slabs(account_id, slab_id);
+CREATE INDEX space_slabs_uploader_account_id_slab_id_idx ON space_slabs(uploader_account_id, slab_id);
 
 CREATE TABLE slab_deletion_queue (
     id BIGSERIAL PRIMARY KEY,
@@ -558,17 +743,67 @@ CREATE TABLE sectors (
 
 CREATE TABLE stats (
     stat_name TEXT PRIMARY KEY NOT NULL,
-    stat_value BIGINT NOT NULL DEFAULT 0 CHECK (stat_value >= 0)
+    stat_value NUMERIC(50,0) NOT NULL DEFAULT 0 CHECK (stat_value >= 0)
 );
 
 CREATE TABLE stats_deltas (
     id BIGSERIAL PRIMARY KEY,
     stat_name TEXT NOT NULL REFERENCES stats(stat_name),
-    stat_delta BIGINT NOT NULL
+    stat_delta NUMERIC(50,0) NOT NULL
 );
 
 -- speed up summing pending stats deltas for a particular stat
 CREATE INDEX stats_deltas_stat_name_idx ON stats_deltas(stat_name);
+
+-- maintain the slab repair-state counters; stuck means more than one
+-- consecutive failed repair
+CREATE FUNCTION slab_is_stuck(failures SMALLINT, unrecoverable BOOLEAN) RETURNS BOOLEAN
+    LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$ SELECT failures > 1 AND NOT unrecoverable $$;
+
+CREATE FUNCTION slabs_maintain_repair_stats() RETURNS TRIGGER AS $$
+DECLARE
+    old_unrecoverable INT := 0;
+    old_stuck INT := 0;
+    new_unrecoverable INT := 0;
+    new_stuck INT := 0;
+BEGIN
+    IF (TG_OP <> 'INSERT') THEN
+        old_unrecoverable := (OLD.unrecoverable_reason IS NOT NULL)::int;
+        old_stuck := slab_is_stuck(OLD.consecutive_failed_repairs, OLD.unrecoverable_reason IS NOT NULL)::int;
+    END IF;
+    IF (TG_OP <> 'DELETE') THEN
+        new_unrecoverable := (NEW.unrecoverable_reason IS NOT NULL)::int;
+        new_stuck := slab_is_stuck(NEW.consecutive_failed_repairs, NEW.unrecoverable_reason IS NOT NULL)::int;
+    END IF;
+
+    INSERT INTO stats_deltas (stat_name, stat_delta)
+    SELECT * FROM (
+        SELECT 'num_unrecoverable_slabs', new_unrecoverable - old_unrecoverable
+        UNION ALL
+        SELECT 'num_stuck_slabs', new_stuck - old_stuck
+    ) v(stat_name, stat_delta) WHERE stat_delta <> 0;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+-- the WHEN clauses keep the repair loop's next_repair_attempt bumps and pin
+-- upserts that leave both counters alone from reaching the function
+CREATE TRIGGER slabs_maintain_repair_stats_insert
+AFTER INSERT ON slabs FOR EACH ROW
+WHEN (NEW.unrecoverable_reason IS NOT NULL OR slab_is_stuck(NEW.consecutive_failed_repairs, NEW.unrecoverable_reason IS NOT NULL))
+EXECUTE FUNCTION slabs_maintain_repair_stats();
+
+CREATE TRIGGER slabs_maintain_repair_stats_update
+AFTER UPDATE OF unrecoverable_reason, consecutive_failed_repairs ON slabs FOR EACH ROW
+WHEN ((OLD.unrecoverable_reason IS NULL) IS DISTINCT FROM (NEW.unrecoverable_reason IS NULL)
+   OR slab_is_stuck(OLD.consecutive_failed_repairs, OLD.unrecoverable_reason IS NOT NULL)
+      IS DISTINCT FROM slab_is_stuck(NEW.consecutive_failed_repairs, NEW.unrecoverable_reason IS NOT NULL))
+EXECUTE FUNCTION slabs_maintain_repair_stats();
+
+CREATE TRIGGER slabs_maintain_repair_stats_delete
+AFTER DELETE ON slabs FOR EACH ROW
+WHEN (OLD.unrecoverable_reason IS NOT NULL OR slab_is_stuck(OLD.consecutive_failed_repairs, OLD.unrecoverable_reason IS NOT NULL))
+EXECUTE FUNCTION slabs_maintain_repair_stats();
 
 -- quick lookup of sectors that failed the integrity checks too many times
 CREATE INDEX sectors_consecutive_failed_checks_idx ON sectors(host_id, consecutive_failed_checks) WHERE consecutive_failed_checks > 0;

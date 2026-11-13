@@ -2,9 +2,11 @@ package app_test
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
+	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/indexd/client/v2"
 	"go.sia.tech/indexd/hosts"
 	"go.sia.tech/indexd/sharing"
@@ -35,7 +37,7 @@ func TestBlockedObjects(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sk, _ := newAccount(t, cluster)
+	sk, ck := newAccount(t, cluster)
 
 	// pin two objects so hiding one is distinguishable from a broken listing
 	pin := func() slabs.SealedObject {
@@ -93,11 +95,16 @@ func TestBlockedObjects(t *testing.T) {
 
 	assertVisible := func(want int) {
 		t.Helper()
-		awaitEventSecond(t)
+		publishEvents(t, indexer)
 		if events, err := appClient.ListObjects(ctx, sk, slabs.Cursor{}, 100); err != nil {
 			t.Fatal(err)
 		} else if len(events) != want {
 			t.Fatalf("expected %d objects, got %d", want, len(events))
+		}
+		if withoutSlabs, err := appClient.ListObjectsWithoutSlabs(ctx, sk, slabs.Cursor{}, 100); err != nil {
+			t.Fatal(err)
+		} else if len(withoutSlabs) != want {
+			t.Fatalf("expected %d object events, got %d", want, len(withoutSlabs))
 		}
 		if objs, err := appClient.SharingKeyObjects(ctx, sk, shareKey); err != nil {
 			t.Fatal(err)
@@ -108,6 +115,16 @@ func TestBlockedObjects(t *testing.T) {
 			t.Fatal(err)
 		} else if len(objs) != want {
 			t.Fatalf("expected %d shared objects, got %d", want, len(objs))
+		}
+		if objs, err := appClient.SharingKeyObjectsWithoutSlabs(ctx, sk, shareKey); err != nil {
+			t.Fatal(err)
+		} else if len(objs) != want {
+			t.Fatalf("expected %d sharing key objects without slabs, got %d", want, len(objs))
+		}
+		if objs, err := appClient.SharedObjectsWithoutSlabs(ctx, shareKeyPriv); err != nil {
+			t.Fatal(err)
+		} else if len(objs) != want {
+			t.Fatalf("expected %d shared objects without slabs, got %d", want, len(objs))
 		}
 	}
 	assertVisible(2)
@@ -135,8 +152,18 @@ func TestBlockedObjects(t *testing.T) {
 	} else {
 		assertStatus(t, err, http.StatusUnavailableForLegalReasons)
 	}
+	if _, err := appClient.ObjectSlabs(ctx, sk, blockedObj.ID(), 0, 100); err == nil {
+		t.Fatal("expected error fetching a blocked object's slabs")
+	} else {
+		assertStatus(t, err, http.StatusUnavailableForLegalReasons)
+	}
 	if _, err := appClient.SharedObjectByID(ctx, shareKeyPriv, blockedObj.ID()); err == nil {
 		t.Fatal("expected error fetching a blocked shared object")
+	} else {
+		assertStatus(t, err, http.StatusUnavailableForLegalReasons)
+	}
+	if _, err := appClient.SharedObjectSlabs(ctx, shareKeyPriv, blockedObj.ID(), 0, 100); err == nil {
+		t.Fatal("expected error fetching a blocked shared object's slabs")
 	} else {
 		assertStatus(t, err, http.StatusUnavailableForLegalReasons)
 	}
@@ -191,6 +218,17 @@ func TestBlockedObjects(t *testing.T) {
 		t.Fatal("expected error fetching an unblocked object")
 	}
 
+	// a blocked object stays pinned, so the account that pinned it can still
+	// be traced
+	if objectAccounts, err := adminClient.ObjectAccounts(ctx, blockedObj.ID()); err != nil {
+		t.Fatal(err)
+	} else if len(objectAccounts) != 1 || objectAccounts[0].AccountKey != proto.Account(sk.PublicKey()) || objectAccounts[0].ConnectKey != ck.Key {
+		t.Fatalf("unexpected object accounts: %+v", objectAccounts)
+	}
+	if _, err := adminClient.ObjectAccounts(ctx, frand.Entropy256()); err == nil || !strings.Contains(err.Error(), slabs.ErrObjectNotFound.Error()) {
+		t.Fatalf("expected %v, got %v", slabs.ErrObjectNotFound, err)
+	}
+
 	// unblocking restores access
 	if err := adminClient.ObjectBlocklistRemove(ctx, blockedObj.ID()); err != nil {
 		t.Fatal(err)
@@ -200,6 +238,15 @@ func TestBlockedObjects(t *testing.T) {
 		t.Fatal(err)
 	} else if got.ID() != blockedObj.ID() {
 		t.Fatalf("expected object %v, got %v", blockedObj.ID(), got.ID())
+	} else if page, err := appClient.ObjectSlabs(ctx, sk, blockedObj.ID(), 0, 100); err != nil {
+		t.Fatal(err)
+	} else if slabs.ObjectID(page) != blockedObj.ID() {
+		t.Fatalf("expected the object's slabs, got %+v", page)
+	}
+	if page, err := appClient.SharedObjectSlabs(ctx, shareKeyPriv, blockedObj.ID(), 0, 100); err != nil {
+		t.Fatal(err)
+	} else if slabs.ObjectID(page) != blockedObj.ID() {
+		t.Fatalf("expected the shared object's slabs, got %+v", page)
 	}
 	if _, _, err := appClient.SharedObject(ctx, shareURL); err != nil {
 		t.Fatal(err)

@@ -1,4 +1,4 @@
-# [![Indexd](https://sia.tech/api/media/file/banner-indexd.png)](http://sia.tech)
+# [![Indexd](.github/assets/banner.png)](http://sia.tech)
 
 [![GoDoc](https://godoc.org/go.sia.tech/indexd?status.svg)](https://godoc.org/go.sia.tech/indexd)
 
@@ -55,7 +55,7 @@ which will automatically open the admin UI in your default browser if
 
 ## Instant Syncing (Experimental)
 
-New users can sync instantly using `indexd --instant`. When instant syncing, the
+New users can sync instantly using `indexd -instant`. When instant syncing, the
 `indexd` node initializes using a Utreexo-based checkpoint and can immediately
 validate blocks from that point forward without replaying the whole chain state.
 The state is extremely compact and committed in block headers, making this
@@ -148,7 +148,7 @@ syncer:
 consensus:
     network: mainnet # mainnet | zen
     indexBatchSize: 1000
-    pruneTarget: 64 # number of blocks to keep when pruning (0 to disable, minimum 6 hours of blocks)
+    pruneTarget: 1008 # number of blocks to keep when pruning (0 to disable, minimum 6 hours of blocks)
 explorer:
     enabled: true
     url: https://api.siascan.com

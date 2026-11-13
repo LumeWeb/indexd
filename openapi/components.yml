@@ -192,28 +192,34 @@ components:
           description: The protocol used by the host
 
     SealedObject:
+      description: >
+        A sealed object with its slabs. Its logical size is the sum of its slab
+        slices' lengths.
+      allOf:
+        - $ref: "#/components/schemas/SealedObjectBase"
+        - type: object
+          properties:
+            slabs:
+              type: array
+              items:
+                $ref: "#/components/schemas/SlabSlice"
+              description: The list of slabs that make up the object
+
+    # The fields shared by a sealed object with and without its slabs.
+    SealedObjectBase:
       type: object
       properties:
-        id:
-          allOf:
-            - $ref: "#/components/schemas/Hash256"
-            - description: The object's unique ID
         encryptedDataKey:
           type: string
           format: byte
-          description: The encrypted data key used to encrypt and decrypt the object's data
-        slabs:
-          type: array
-          items:
-            $ref: "#/components/schemas/SlabSlice"
-          description: The list of slabs that make up the object
+          description: The encrypted data key used to encrypt and decrypt the object's data; exactly 72 bytes before base64 encoding in JSON
         dataSignature:
           $ref: "#/components/schemas/Signature"
           description: The signature of the object's data
         encryptedMetadataKey:
           type: string
           format: byte
-          description: The encrypted metadata key used to encrypt and decrypt the object's metadata
+          description: The optional encrypted metadata key used to encrypt and decrypt the object's metadata; omitted, empty, or exactly 72 bytes before base64 encoding in JSON
         encryptedMetadata:
           type: string
           format: byte
@@ -243,6 +249,226 @@ components:
           description: The list of slabs that make up the shared object
           items:
             $ref: "#/components/schemas/SlabSlice"
+
+    SpacePermission:
+      type: string
+      enum: [read, write, delete, admin, owner]
+      description: >
+        Cumulative permission levels: read, write, delete, admin, and owner.
+        Owner is assigned when the space is created and cannot be granted to another member.
+
+    AddSpaceRequest:
+      type: object
+      required:
+        - key
+        - encryptedKey
+        - signature
+      properties:
+        key:
+          $ref: "#/components/schemas/PublicKey"
+        encryptedKey:
+          type: string
+          format: byte
+          description: The random space seed wrapped with DeriveMemberKey(ownerAppPrivateKey, spacePublicKey); exactly 72 bytes before base64 encoding in JSON
+        encryptedName:
+          type: string
+          format: byte
+          nullable: true
+          description: Encrypted space name, at most 1024 bytes before base64 encoding
+        encryptedMetadata:
+          type: string
+          format: byte
+          nullable: true
+          description: Encrypted space metadata, at most 1024 bytes before base64 encoding
+        signature:
+          allOf:
+            - $ref: "#/components/schemas/Signature"
+            - description: Space.SigHash signed with the space private key; covers key, owner, encryptedName, and encryptedMetadata
+
+    UpdateSpaceRequest:
+      type: object
+      required:
+        - signature
+      properties:
+        encryptedName:
+          type: string
+          format: byte
+          nullable: true
+          description: Replacement encrypted name, at most 1024 bytes before base64 encoding
+        encryptedMetadata:
+          type: string
+          format: byte
+          nullable: true
+          description: Replacement encrypted metadata, at most 1024 bytes before base64 encoding
+        signature:
+          allOf:
+            - $ref: "#/components/schemas/Signature"
+            - description: The updated Space.SigHash signed with the space private key
+
+    Space:
+      type: object
+      description: Shared space fields and the requesting member's access. The shared signature is the same for every member; encryptedKey is specific to the caller.
+      properties:
+        key:
+          $ref: "#/components/schemas/PublicKey"
+        owner:
+          allOf:
+            - $ref: "#/components/schemas/PublicKey"
+            - description: The owner's app account key
+        encryptedName:
+          type: string
+          format: byte
+          nullable: true
+        encryptedMetadata:
+          type: string
+          format: byte
+          nullable: true
+        encryptedKey:
+          type: string
+          format: byte
+          description: The space seed wrapped with DeriveMemberKey for the requesting account; exactly 72 bytes before base64 encoding in JSON
+        permission:
+          $ref: "#/components/schemas/SpacePermission"
+        objectCount:
+          type: integer
+          format: uint64
+          description: The total number of objects in the space
+        objectSize:
+          type: integer
+          format: uint64
+          description: The logical size of all objects in the space, in bytes
+        pinnedData:
+          type: integer
+          format: uint64
+          description: The sum of each object's slab size, excluding redundancy, in bytes; repeated slabs count once per object
+        pinnedSize:
+          type: integer
+          format: uint64
+          description: The sum of each object's slab size, including redundancy, in bytes; repeated slabs count once per object
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        signature:
+          allOf:
+            - $ref: "#/components/schemas/Signature"
+            - description: Verified using the space public key. Covers key, owner, encryptedName, and encryptedMetadata; excludes member-specific fields, server timestamps, and storage statistics.
+
+    SpaceInvitation:
+      type: object
+      required:
+        - spaceKey
+        - inviter
+        - recipient
+        - permission
+        - encryptedKey
+        - createdAt
+        - expiresAt
+        - signature
+      properties:
+        spaceKey:
+          $ref: "#/components/schemas/PublicKey"
+        inviter:
+          allOf:
+            - $ref: "#/components/schemas/PublicKey"
+            - description: The inviter's app account key, matching the request signer
+        recipient:
+          allOf:
+            - $ref: "#/components/schemas/PublicKey"
+            - description: The invited app account key
+        permission:
+          type: string
+          enum: [read, write, delete, admin]
+          description: Cumulative read, write, delete, or admin permission; only the owner may grant admin
+        encryptedKey:
+          type: string
+          format: byte
+          description: The space seed wrapped with DeriveInvitationKey; 72 bytes before base64 encoding
+        expiresAt:
+          type: string
+          format: date-time
+          description: Must be later than createdAt and the server's current time
+        createdAt:
+          type: string
+          format: date-time
+          description: Must be within five minutes of the server's current time
+        signature:
+          allOf:
+            - $ref: "#/components/schemas/Signature"
+            - description: Invitation.SigHash signed with the inviter's app key; binds the space, both accounts, permission, encryptedKey, and creation and expiration times in Unix microseconds
+
+    AcceptSpaceInvitationRequest:
+      type: object
+      required:
+        - encryptedKey
+      properties:
+        encryptedKey:
+          type: string
+          format: byte
+          description: The decrypted space seed rewrapped with DeriveMemberKey(recipientAppPrivateKey, spacePublicKey); exactly 72 bytes before base64 encoding in JSON
+
+    UpdateSpaceMemberRequest:
+      type: object
+      required:
+        - permission
+      properties:
+        permission:
+          type: string
+          enum: [read, write, delete, admin]
+          description: Cumulative read, write, delete, or admin permission; only the owner may grant or change admin access
+
+    SpaceMember:
+      type: object
+      properties:
+        account:
+          $ref: "#/components/schemas/PublicKey"
+        invitedBy:
+          $ref: "#/components/schemas/PublicKey"
+        invitedAt:
+          type: string
+          format: date-time
+        permission:
+          $ref: "#/components/schemas/SpacePermission"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    SlabPinParams:
+      type: object
+      required:
+        - encryptionKey
+        - minShards
+        - sectors
+      properties:
+        version:
+          type: integer
+          format: uint8
+          minimum: 0
+          maximum: 1
+          default: 0
+        encryptionKey:
+          $ref: "#/components/schemas/EncryptionKey"
+        minShards:
+          type: integer
+          format: uint
+          minimum: 1
+          description: The number of data shards required to reconstruct the slab
+        sectors:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/PinnedSector"
+              - type: object
+                properties:
+                  uploadedAt:
+                    type: string
+                    format: date-time
+                    description: When the sector was uploaded; if supplied, no more than 48 hours old or five minutes ahead of the server's clock
 
     SharingKeyNonce:
       type: string
@@ -430,6 +656,32 @@ components:
             - $ref: "#/components/schemas/PublicKey"
             - description: The public key of the host storing the sector
 
+    PinnedSlab:
+      type: object
+      description: A slab that has been pinned to hosts
+      properties:
+        id:
+          allOf:
+            - $ref: "#/components/schemas/SlabID"
+            - description: The ID of the slab
+        version:
+          type: integer
+          format: uint8
+          description: The slab encoding version, folded into the slab ID for versions greater than 0
+        encryptionKey:
+          allOf:
+            - $ref: "#/components/schemas/EncryptionKey"
+            - description: The encryption key used for the slab
+        minShards:
+          type: integer
+          format: uint64
+          description: The minimum number of shards required to reconstruct the slab
+        sectors:
+          type: array
+          items:
+            $ref: "#/components/schemas/PinnedSector"
+          description: The sectors of the slab in order
+
     Sector:
       type: object
       description: A 4MiB sector of a slab stored on a host.
@@ -535,10 +787,13 @@ components:
             $ref: "#/components/schemas/Shard"
         recovered:
           type: boolean
-          description: Whether the slab's shards were recovered; if false the repair state is left untouched
+          description: Whether the slab's shards were recovered; if false the repair state is left untouched, but the failure counts towards the slab's 30-day recovery window, after which the slab is marked unrecoverable
         success:
           type: boolean
           description: Whether every required sector was migrated; only meaningful when recovered is true
+        unrecoverableReason:
+          type: string
+          description: Set when the slab can never be fully repaired, taking it out of the repair rotation
 
     ObjectSlab:
       type: object
@@ -578,7 +833,7 @@ components:
         encryptedDataKey:
           type: string
           format: byte
-          description: The encrypted data key used to encrypt and decrypt the object's data (base64-encoded in JSON)
+          description: The encrypted data key used to encrypt and decrypt the object's data; exactly 72 bytes before base64 encoding in JSON
         slabs:
           type: array
           items:
@@ -591,7 +846,7 @@ components:
         encryptedMetadataKey:
           type: string
           format: byte
-          description: The encrypted metadata key used to encrypt and decrypt the object's metadata (base64-encoded in JSON)
+          description: The optional encrypted metadata key used to encrypt and decrypt the object's metadata; omitted, empty, or exactly 72 bytes before base64 encoding in JSON
         encryptedMetadata:
           type: string
           format: byte
@@ -614,10 +869,57 @@ components:
         updatedAt:
           type: string
           format: date-time
-          description: Last time the object was created, updated, or deleted.
+          description: The timestamp component of the event's position in the stream. Every event published in the same batch shares it, so pair it with the event's key to page through the stream. Positions increase, are truncated to second precision, and an object that changes again is given a new one. Use the object's own timestamps to tell when it was last modified.
         object:
           allOf:
             - $ref: "#/components/schemas/SealedObject"
+            - description: The object, if it exists
+
+    SealedObjectWithoutSlabs:
+      description: >
+        A sealed object without its slabs, which are paginated separately with
+        `GET /objects/{key}/slabs`, or `GET /shared/objects/{id}/slabs` when
+        authenticated with a sharing key
+      allOf:
+        - $ref: "#/components/schemas/SealedObjectBase"
+        - type: object
+          properties:
+            size:
+              type: integer
+              format: uint64
+              description: The logical size of the object in bytes, the sum of its slab slices' lengths
+
+    SharingKeyObjectWithoutSlabs:
+      description: >
+        An object attached to a sharing key without its slabs. The object ID can
+        not be derived without the slabs, so it is returned alongside the object.
+      allOf:
+        - $ref: "#/components/schemas/SealedObjectWithoutSlabs"
+        - type: object
+          properties:
+            objectID:
+              allOf:
+                - $ref: "#/components/schemas/Hash256"
+                - description: The object's unique ID
+
+    ObjectEventWithoutSlabs:
+      type: object
+      description: An object event whose object is returned without its slabs
+      properties:
+        key:
+          allOf:
+            - $ref: "#/components/schemas/Hash256"
+            - description: The object's unique ID
+        deleted:
+          type: boolean
+          description: Whether the object was deleted or not
+        updatedAt:
+          type: string
+          format: date-time
+          description: The timestamp component of the event's position in the stream. Pair it with the event's key to paginate. Use the nested object's updatedAt for its modification time.
+        object:
+          allOf:
+            - $ref: "#/components/schemas/SealedObjectWithoutSlabs"
             - description: The object, if it exists
 
     BlockedObject:
@@ -636,22 +938,29 @@ components:
           format: date-time
           description: When the object was blocked
 
+    ObjectAccount:
+      type: object
+      description: An account that has pinned an object, either personally or through a space it owns
+      properties:
+        accountKey:
+          $ref: "#/components/schemas/Account/properties/accountKey"
+        connectKey:
+          $ref: "#/components/schemas/Account/properties/connectKey"
+        spaceKey:
+          allOf:
+            - $ref: "#/components/schemas/PublicKey"
+            - description: The space that pins the object; omitted for personal pins
+
     PublicKey:
       type: string
       pattern: "^ed25519:[0-9a-fA-F]{64}$"
       description: A ed25519 public key
 
     SemVer:
-      type: array
-      description: "Represents a semantic version as an array of three unsigned 8-bit integers: [major, minor, patch]"
-      minItems: 3
-      maxItems: 3
-      items:
-        type: integer
-        format: uint8
-        minimum: 0
-        maximum: 255
-      example: [1, 2, 3]
+      type: string
+      description: "Represents a semantic version as a string in the form v<major>.<minor>.<patch>"
+      pattern: '^v[0-9]+\.[0-9]+\.[0-9]+$'
+      example: "v1.2.3"
 
     Signature:
       type: string
@@ -661,24 +970,25 @@ components:
 
     SlabSlice:
       type: object
+      description: A slice of a slab that is part of an object
       properties:
-        id:
-          $ref: "#/components/schemas/SlabID"
         version:
           type: integer
           format: uint8
-          description: The slab encoding version
+          description: The slab encoding version, folded into the slab ID for versions greater than 0
         encryptionKey:
-          $ref: "#/components/schemas/EncryptionKey"
+          allOf:
+            - $ref: "#/components/schemas/EncryptionKey"
+            - description: The encryption key used for the slab
         minShards:
           type: integer
           format: uint64
-          description: Minimum number of shards required to reconstruct the slab
+          description: The minimum number of shards required to reconstruct the slab
         sectors:
           type: array
-          description: The list of sectors composing the slab
           items:
             $ref: "#/components/schemas/PinnedSector"
+          description: The sectors of the slab in order
         offset:
           type: integer
           format: uint32
@@ -995,8 +1305,8 @@ components:
           format: uint64
           description: The number of consecutive failed scans
         recentUptime:
-          type: string
-          format: float64
+          type: number
+          format: double
           description: The recent uptime of the host as a number between 0 and 1, where 1 means 100% uptime
         addresses:
           type: array
@@ -1023,10 +1333,18 @@ components:
           type: integer
           format: uint64
           description: The number of unpinned sectors on the host
-        fundsSpent:
+        accountFunding:
           allOf:
             - $ref: "#/components/schemas/Currency"
-            - description: The total amount of funds spent on this host
+            - description: The total amount spent on funding ephemeral accounts on this host
+        totalSpent:
+          allOf:
+            - $ref: "#/components/schemas/Currency"
+            - description: The total amount spent on this host, including account funding
+        stuckSince:
+          type: string
+          format: date-time
+          description: The time the host became stuck. The zero time if the host is not stuck.
         countryCode:
           type: string
           description: The ISO 3166-1 A-2 country code of the host inferred from its IP address.
@@ -1205,7 +1523,7 @@ components:
         minProtocolVersion:
           allOf:
             - $ref: "#/components/schemas/SemVer"
-            - description: "The minimum protocol version the host must have to be considered usable. The version is represented as an array of three unsigned 8-bit integers: [major, minor, patch]"
+            - description: The minimum protocol version the host must have to be considered usable
 
     RegisterAppResponse:
       type: object
@@ -1252,6 +1570,14 @@ components:
           type: integer
           format: uint64
           description: Number of accounts active in the last week.
+        pinnedData:
+          type: integer
+          format: uint64
+          description: Total pinned data in bytes before redundancy across all accounts
+        pinnedSize:
+          type: integer
+          format: uint64
+          description: Total pinned data in bytes including redundancy across all accounts
 
     ConnectKeyQuotaStats:
       type: object
@@ -1328,6 +1654,10 @@ components:
           type: integer
           format: int64
           description: Number of contracts currently within their renew window
+        contractTax:
+          allOf:
+            - $ref: "#/components/schemas/Currency"
+            - description: Total tax paid by the wallet for every contract it has ever formed or renewed
         lockedAllowance:
           allOf:
             - $ref: "#/components/schemas/Currency"
@@ -1382,6 +1712,13 @@ components:
             allOf:
               - $ref: "#/components/schemas/Currency"
               - description: Total amount spent on this host
+          protocolVersion:
+            allOf:
+              - $ref: "#/components/schemas/SemVer"
+              - description: The protocol version reported by the host
+          release:
+            type: string
+            description: The release reported by the host
           scans:
             type: integer
             format: int64
@@ -1430,6 +1767,14 @@ components:
           format: int64
           description: Total number of failed host scans
 
+    ObjectStatsResponse:
+      type: object
+      properties:
+        unpublishedEvents:
+          type: integer
+          format: int64
+          description: Number of object events waiting for a position in the stream, a number that keeps growing when the publisher cannot keep up
+
     SectorStatsResponse:
       type: object
       properties:
@@ -1465,6 +1810,14 @@ components:
           type: integer
           format: int64
           description: Number of sectors that have had failed integrity checks.
+        unrecoverableSlabs:
+          type: integer
+          format: int64
+          description: Number of slabs that were taken out of the repair rotation because they can never be fully repaired or their shards failed to recover for 30 days.
+        stuckSlabs:
+          type: integer
+          format: int64
+          description: Number of slabs that failed more than one consecutive repair attempt and are still being retried.
 
     QuotaKey:
       type: string

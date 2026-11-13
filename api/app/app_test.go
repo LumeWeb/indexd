@@ -142,12 +142,22 @@ func uploadRandomSlab(t testing.TB, client *client.Client, sk types.PrivateKey, 
 	}
 }
 
-// awaitEventSecond waits out the current second so events written in it become
-// listable; ListObjects withholds the second still in progress.
-func awaitEventSecond(t testing.TB) {
+// publishEvents publishes the events written so far, waiting out the current
+// second first if a publish already claimed it, since at most one batch is
+// published per second.
+func publishEvents(t testing.TB, indexer *testutils.Indexer) {
 	t.Helper()
-	now := time.Now()
-	time.Sleep(now.Truncate(time.Second).Add(time.Second).Sub(now) + 20*time.Millisecond)
+	var claimed bool
+	if err := indexer.Store().QueryRow(t.Context(), `SELECT object_events_last_published >= date_trunc('second', NOW()) FROM global_settings`).Scan(&claimed); err != nil {
+		t.Fatal(err)
+	}
+	if claimed {
+		now := time.Now()
+		time.Sleep(now.Truncate(time.Second).Add(time.Second).Sub(now) + 20*time.Millisecond)
+	}
+	if err := indexer.Store().PublishObjectEvents(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestApplicationAPI(t *testing.T) {
@@ -230,6 +240,47 @@ func TestApplicationAPI(t *testing.T) {
 	_, err = client.PinSlabs(context.Background(), sk, p)
 	if err == nil || !strings.Contains(err.Error(), "too low") {
 		t.Fatal("expected redundancy error, got:", err)
+	}
+
+	// assert pinning past the app's storage limit is rejected, a rejected pin
+	// leaves nothing behind so the same slab serves both limits
+	rejected := uploadRandomSlab(t, hc, sk, hosts)
+	acc, err := adminClient.Account(ctx, sk.PublicKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	limit := uint64(1)
+	if err := adminClient.UpdateAccount(ctx, sk.PublicKey(), accounts.UpdateAccountRequest{MaxPinnedData: &limit}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.PinSlabs(ctx, sk, rejected)
+	assertStatus(t, err, http.StatusForbidden)
+	if !errors.Is(err, accounts.ErrAccountStorageLimitExceeded) {
+		t.Fatalf("expected error %v, got %v", accounts.ErrAccountStorageLimitExceeded, err)
+	}
+	if err := adminClient.UpdateAccount(ctx, sk.PublicKey(), accounts.UpdateAccountRequest{MaxPinnedData: &acc.MaxPinnedData}); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert pinning past the connect key's quota is rejected
+	if err := adminClient.PutQuota(ctx, "tiny", accounts.PutQuotaRequest{
+		Description:     "tiny quota",
+		MaxPinnedData:   1,
+		TotalUses:       2,
+		FundTargetBytes: &testutils.TestQuotaFundTargetBytes,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := adminClient.UpdateAppConnectKey(ctx, accounts.AppConnectKeyRequest{Key: key.Key, Description: key.Description, Quota: "tiny"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.PinSlabs(ctx, sk, rejected)
+	assertStatus(t, err, http.StatusForbidden)
+	if !errors.Is(err, accounts.ErrAppKeyStorageLimitExceeded) {
+		t.Fatalf("expected error %v, got %v", accounts.ErrAppKeyStorageLimitExceeded, err)
+	}
+	if err := adminClient.UpdateAppConnectKey(ctx, accounts.AppConnectKeyRequest{Key: key.Key, Description: key.Description, Quota: key.Quota}); err != nil {
+		t.Fatal(err)
 	}
 
 	// assert hosts returns all usable hosts
@@ -409,6 +460,28 @@ func TestApplicationAPI(t *testing.T) {
 	if err := client.PinObject(context.Background(), sk, obj); err == nil || !strings.Contains(err.Error(), slabs.ErrInvalidObjectSignature.Error()) {
 		t.Fatalf("expected %v, got %v", slabs.ErrInvalidObjectSignature, err)
 	}
+	for _, tt := range []struct {
+		name   string
+		change func(*slabs.SealedObject)
+		body   string
+	}{
+		{"no slabs", func(o *slabs.SealedObject) { o.Slabs = nil }, "object must have at least one slab"},
+		{"large metadata", func(o *slabs.SealedObject) { o.EncryptedMetadata = make([]byte, slabs.MaxMetadataSize+1) }, "object metadata size limit (1024) exceeded: got 1025 bytes"},
+		{"duplicate slabs", func(o *slabs.SealedObject) { o.Slabs = []slabs.SlabSlice{slab1.Slice(0, 256), slab1.Slice(256, 256)} }, fmt.Sprintf("%v: slab 1: %v", slabs.ErrObjectDuplicateSlab, slab1.ID)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			invalid := obj
+			invalid.Slabs = append([]slabs.SlabSlice(nil), obj.Slabs...)
+			tt.change(&invalid)
+			invalid.Sign(sk)
+			var httpErr *app.HTTPError
+			if err := client.PinObject(t.Context(), sk, invalid); !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusBadRequest {
+				t.Fatalf("expected HTTP 400 for invalid object, got %v", err)
+			} else if httpErr.Body != tt.body {
+				t.Fatalf("expected response %q, got %q", tt.body, httpErr.Body)
+			}
+		})
+	}
 
 	// sign and save the object
 	obj.Sign(sk)
@@ -416,7 +489,7 @@ func TestApplicationAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	awaitEventSecond(t)
+	publishEvents(t, indexer)
 	objs, err = client.ListObjects(context.Background(), sk, slabs.Cursor{}, 100)
 	if err != nil {
 		t.Fatal(err)
@@ -425,9 +498,40 @@ func TestApplicationAPI(t *testing.T) {
 	}
 	obj1 := *objs[0].Object
 
+	// list the object without its slabs and check the rest of the event matches
+	withoutSlabs, err := client.ListObjectsWithoutSlabs(context.Background(), sk, slabs.Cursor{}, 100)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(withoutSlabs) != 1 || withoutSlabs[0].Object == nil {
+		t.Fatalf("expected 1 object event, got %+v", withoutSlabs)
+	} else if !reflect.DeepEqual(withoutSlabs[0].Object, obj1.WithoutSlabs()) {
+		t.Fatalf("expected object %+v, got %+v", obj1.WithoutSlabs(), withoutSlabs[0].Object)
+	} else if withoutSlabs[0].Key != objs[0].Key || withoutSlabs[0].Deleted != objs[0].Deleted || !withoutSlabs[0].UpdatedAt.Equal(objs[0].UpdatedAt) {
+		t.Fatalf("expected event %+v, got %+v", objs[0], withoutSlabs[0])
+	}
+
+	// paginate over the object's slabs one at a time
+	var slices []slabs.SlabSlice
+	for {
+		page, err := client.ObjectSlabs(context.Background(), sk, withoutSlabs[0].Key, int64(len(slices)), 1)
+		if err != nil {
+			t.Fatal(err)
+		} else if len(page) > 1 {
+			t.Fatalf("expected at most 1 slab per page, got %d", len(page))
+		} else if len(page) == 0 {
+			break
+		}
+		slices = append(slices, page...)
+	}
+	if len(slices) != len(obj1.Slabs) {
+		t.Fatalf("expected %d slabs, got %d", len(obj1.Slabs), len(slices))
+	} else if reassembled := withoutSlabs[0].Object.WithSlabs(slices); !reflect.DeepEqual(*reassembled, obj1) {
+		t.Fatalf("expected reassembled object %+v, got %+v", obj1, *reassembled)
+	}
+
 	if objs, err := client.ListObjects(context.Background(), sk, slabs.Cursor{
-		After: obj1.UpdatedAt,
-		Key:   obj1.ID(),
+		After: objs[0].UpdatedAt,
+		Key:   objs[0].Key,
 	}, 100); err != nil {
 		t.Fatal(err)
 	} else if len(objs) != 0 {
@@ -437,8 +541,16 @@ func TestApplicationAPI(t *testing.T) {
 	obj, err = client.Object(context.Background(), sk, obj1.ID())
 	if err != nil {
 		t.Fatal(err)
-	} else if !reflect.DeepEqual(obj, *objs[0].Object) {
-		t.Fatal("objects not equal", obj, *objs[0].Object)
+	}
+	// the CBOR listing decodes timestamps in UTC while the JSON object keeps
+	// the local offset, so compare them by instant and the rest structurally
+	listed := *objs[0].Object
+	if !obj.CreatedAt.Equal(listed.CreatedAt) || !obj.UpdatedAt.Equal(listed.UpdatedAt) {
+		t.Fatal("object timestamps not equal", obj, listed)
+	}
+	obj.CreatedAt, obj.UpdatedAt = listed.CreatedAt, listed.UpdatedAt
+	if !reflect.DeepEqual(obj, listed) {
+		t.Fatal("objects not equal", obj, listed)
 	}
 
 	if err := client.DeleteObject(context.Background(), sk, obj1.ID()); err != nil {
@@ -454,7 +566,7 @@ func TestApplicationAPI(t *testing.T) {
 		t.Fatalf("expected %v, got %v", slabs.ErrObjectNotFound, err)
 	}
 
-	awaitEventSecond(t)
+	publishEvents(t, indexer)
 	objs, err = client.ListObjects(context.Background(), sk, slabs.Cursor{}, 100)
 	if err != nil {
 		t.Fatal(err)

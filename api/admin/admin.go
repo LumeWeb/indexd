@@ -118,7 +118,7 @@ type (
 		UpdateAppConnectKey(context.Context, accounts.AppConnectKeyRequest) (accounts.ConnectKey, error)
 		DeleteAppConnectKey(context.Context, string) error
 		AppConnectKey(ctx context.Context, key string) (accounts.ConnectKey, error)
-		AppConnectKeys(ctx context.Context, offset, limit int) ([]accounts.ConnectKey, error)
+		AppConnectKeys(ctx context.Context, offset, limit int, opts ...accounts.QueryConnectKeysOpt) ([]accounts.ConnectKey, error)
 		AddPreAuthorizedKey(context.Context, accounts.PreAuthorizedKeyRequest) (accounts.PreAuthorizedKey, error)
 		DeletePreAuthorizedKey(context.Context, types.PublicKey) error
 		PreAuthorizedKey(context.Context, types.PublicKey) (accounts.PreAuthorizedKey, error)
@@ -138,7 +138,9 @@ type (
 
 	// SlabManager defines the slab-related interface used by the admin API.
 	SlabManager interface {
-		DeleteObject(ctx context.Context, account proto.Account, objectKey types.Hash256) error
+		DeleteSlabObject(ctx context.Context, obj slabs.SlabObject) error
+		ObjectAccounts(ctx context.Context, objectKey types.Hash256, offset, limit int) ([]slabs.ObjectAccount, error)
+		ObjectStats() (slabs.ObjectStats, error)
 		ObjectsForSlab(slabID slabs.SlabID) ([]slabs.SlabObject, error)
 		PruneSlabs(ctx context.Context, account proto.Account, cutoff time.Time) error
 		SectorStats() (slabs.SectorsStats, error)
@@ -268,6 +270,9 @@ func NewAPI(chain ChainManager, accounts Accounts, contracts ContractManager, ho
 		"DELETE /hosts/blocklist/:hostkey": a.handleDELETEHostsBlocklist,
 		"POST   /hosts/scan":               a.handlePOSTHostsScan,
 
+		// object endpoints
+		"GET /object/:objectkey/accounts": a.handleGETObjectAccounts,
+
 		// object blocklist endpoints
 		"GET    /objects/blocklist":            a.handleGETObjectsBlocklist,
 		"GET    /objects/blocklist/:objectkey": a.handleGETObjectsBlocklistKey,
@@ -331,6 +336,7 @@ func NewAPI(chain ChainManager, accounts Accounts, contracts ContractManager, ho
 		"GET /stats/contracts":      a.handleGETStatsContracts,
 		"GET /stats/hosts":          a.handleGETStatsHostsAggregated,
 		"GET /stats/hosts/detailed": a.handleGETStatsHostsDetailed,
+		"GET /stats/objects":        a.handleGETStatsObjects,
 		"GET /stats/sectors":        a.handleGETStatsSectors,
 
 		// prometheus metrics endpoint
@@ -397,7 +403,7 @@ func (a *admin) handleDELETESlab(jc jape.Context) {
 
 	// delete each object
 	for _, obj := range objects {
-		err := a.slabs.DeleteObject(jc.Request.Context(), obj.Account, obj.ObjectID)
+		err := a.slabs.DeleteSlabObject(jc.Request.Context(), obj)
 		if errors.Is(err, slabs.ErrObjectNotFound) {
 			continue
 		} else if err != nil {
@@ -447,7 +453,16 @@ func (a *admin) handleGETAppConnectKeys(jc jape.Context) {
 		return
 	}
 
-	keys, err := a.accounts.AppConnectKeys(jc.Request.Context(), offset, limit)
+	var exceedsQuota bool
+	if jc.DecodeForm("exceedsquota", &exceedsQuota) != nil {
+		return
+	}
+	var opts []accounts.QueryConnectKeysOpt
+	if exceedsQuota {
+		opts = append(opts, accounts.WithExceedsQuota())
+	}
+
+	keys, err := a.accounts.AppConnectKeys(jc.Request.Context(), offset, limit, opts...)
 	if jc.Check("failed to get app connect keys", err) != nil {
 		return
 	}
@@ -914,8 +929,7 @@ func (a *admin) handlePOSTMigrationBatch(jc jape.Context) {
 
 // handlePOSTMigrationResults persists the outcomes of migrations reported by a
 // remote node. A batch where every result failed to persist indicates a
-// database problem and is surfaced as an error so the reporting node backs
-// off instead of burning through fresh batches.
+// is surfaced as an error so the reporting node aborts its pass.
 func (a *admin) handlePOSTMigrationResults(jc jape.Context) {
 	var results []slabs.MigrationResult
 	if jc.Decode(&results) != nil {
@@ -1231,6 +1245,25 @@ func (a *admin) handleDELETEHostsBlocklist(jc jape.Context) {
 	jc.Encode(nil)
 }
 
+func (a *admin) handleGETObjectAccounts(jc jape.Context) {
+	var objectKey types.Hash256
+	if jc.DecodeParam("objectkey", &objectKey) != nil {
+		return
+	}
+	offset, limit, ok := api.ParseOffsetLimit(jc)
+	if !ok {
+		return
+	}
+	objectAccounts, err := a.slabs.ObjectAccounts(jc.Request.Context(), objectKey, offset, limit)
+	if errors.Is(err, slabs.ErrObjectNotFound) {
+		jc.Error(err, http.StatusNotFound)
+		return
+	} else if jc.Check("failed to get object accounts", err) != nil {
+		return
+	}
+	jc.Encode(objectAccounts)
+}
+
 func (a *admin) handleGETObjectsBlocklist(jc jape.Context) {
 	offset, limit, ok := api.ParseOffsetLimit(jc)
 	if !ok {
@@ -1499,6 +1532,14 @@ func (a *admin) handleGETStatsHostsAggregated(jc jape.Context) {
 	writeResponse(jc, AggregatedHostStatsResponse(stats))
 }
 
+func (a *admin) handleGETStatsObjects(jc jape.Context) {
+	stats, err := a.slabs.ObjectStats()
+	if jc.Check("failed to retrieve object stats", err) != nil {
+		return
+	}
+	writeResponse(jc, ObjectStatsResponse(stats))
+}
+
 func (a *admin) handleGETStatsSectors(jc jape.Context) {
 	stats, err := a.slabs.SectorStats()
 	if jc.Check("failed to retrieve sector stats", err) != nil {
@@ -1567,6 +1608,11 @@ func (a *admin) handleGETPrometheusMetrics(jc jape.Context) {
 		return
 	}
 
+	objectStats, err := a.slabs.ObjectStats()
+	if jc.Check("failed to retrieve object stats", err) != nil {
+		return
+	}
+
 	apps, err := a.accounts.AppStats(0, 1000)
 	if jc.Check("failed to retrieve app stats", err) != nil {
 		return
@@ -1587,6 +1633,7 @@ func (a *admin) handleGETPrometheusMetrics(jc jape.Context) {
 		ContractsStatsResponse(contractsStats),
 		AggregatedHostStatsResponse(aggHostStats),
 		SectorsStatsResponse(sectorStats),
+		ObjectStatsResponse(objectStats),
 		AppStatsResponse(apps),
 		HostStatsResponse(hosts),
 	} {
