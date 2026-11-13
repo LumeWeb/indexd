@@ -647,7 +647,7 @@ func TestMigrationBackfillsObjectSizes(t *testing.T) {
 
 func TestMigrationBackfillsSpaceTotals(t *testing.T) {
 	ctx := context.Background()
-	const previousVersion = 30 // last schema without space totals
+	const previousVersion = 32 // spaces exist, but totals are not yet tracked
 	store := initV1Database(t, connectionInfoFromEnv(), "", func(pool *pgxpool.Pool) {
 		old := &Store{pool: pool, log: zaptest.NewLogger(t)}
 		if err := old.upgradeDatabase(1, previousVersion); err != nil {
@@ -738,7 +738,7 @@ UPDATE space_objects o SET account_key = a.public_key
 FROM spaces s JOIN accounts a ON a.id = s.owner_account_id WHERE s.id = o.space_id;
 ALTER TABLE space_objects ALTER COLUMN account_key SET NOT NULL;`); err != nil {
 		t.Fatal(err)
-	} else if err := store.upgradeDatabase(31, 32); err != nil {
+	} else if err := store.upgradeDatabase(33, 34); err != nil {
 		t.Fatal(err)
 	}
 	for _, table := range []string{"space_objects", "space_object_slabs", "space_slabs"} {
