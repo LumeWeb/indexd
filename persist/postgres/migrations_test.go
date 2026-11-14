@@ -5,10 +5,14 @@ import (
 	"database/sql"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	proto "go.sia.tech/core/rhp/v4"
+	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/contracts"
 	"go.sia.tech/indexd/hosts"
+	"go.sia.tech/indexd/slabs"
 	"go.uber.org/zap/zaptest"
 )
 
@@ -443,6 +447,337 @@ CREATE UNIQUE INDEX slab_sectors_slab_id_slab_index_idx ON slab_sectors(slab_id,
 -- speeds up finding sectors for deletion when unpinning slabs
 CREATE UNIQUE INDEX slab_sectors_sector_id_slab_id_idx ON slab_sectors(sector_id, slab_id);
 `
+
+// initV1Database brings up a database at the initial schema version, seeds it
+// with seed, runs beforeOpen and returns it migrated to the current version.
+func initV1Database(t *testing.T, ci ConnectionInfo, seed string, beforeOpen ...func(*pgxpool.Pool)) *Store {
+	t.Helper()
+	ctx := context.Background()
+	t.Cleanup(func() {
+		pool, err := pgxpool.New(ctx, ci.String())
+		if err != nil {
+			t.Fatal(err)
+		} else if _, err := pool.Exec(ctx, `DROP SCHEMA public CASCADE;CREATE SCHEMA public;`); err != nil {
+			t.Fatal(err)
+		}
+		pool.Close()
+	})
+
+	if err := ensureDatabase(ctx, ci); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(ctx, ci.String())
+	if err != nil {
+		t.Fatal(err)
+	} else if _, err := pool.Exec(ctx, initialSchema); err != nil {
+		t.Fatal(err)
+	} else if _, err := pool.Exec(ctx, `INSERT INTO global_settings(id, db_version) VALUES (0, 1);`); err != nil {
+		t.Fatal(err)
+	} else if seed != "" {
+		if _, err := pool.Exec(ctx, seed); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, fn := range beforeOpen {
+		fn(pool)
+	}
+	pool.Close()
+
+	store, err := NewStore(ctx, ci, contracts.DefaultMaintenanceSettings, hosts.DefaultUsabilitySettings, zaptest.NewLogger(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
+// TestMigrationCarriesOverUnrecoverableSlabs asserts unrecoverable slabs stay
+// unrecoverable after the migration.
+func TestMigrationCarriesOverUnrecoverableSlabs(t *testing.T) {
+	ctx := context.Background()
+	const previousVersion = 25 // last schema with the unrecoverable flag
+	store := initV1Database(t, connectionInfoFromEnv(), "", func(pool *pgxpool.Pool) {
+		old := &Store{pool: pool, log: zaptest.NewLogger(t)}
+		if err := old.upgradeDatabase(1, previousVersion); err != nil {
+			t.Fatal(err)
+		} else if _, err := pool.Exec(ctx, `
+			INSERT INTO slabs (digest, encryption_key, min_shards, consecutive_failed_repairs, unrecoverable, unrecoverable_reason)
+			VALUES
+				(sha256('healthy'), sha256('healthy'), 1, 0, FALSE, NULL),
+				(sha256('stuck'), sha256('stuck'), 1, 2, FALSE, NULL),
+				(sha256('unrecoverable'), sha256('unrecoverable'), 1, 2, TRUE, 'shard root mismatch')`); err != nil {
+			t.Fatal(err)
+		}
+	})
+	defer store.Close()
+
+	tests := []struct {
+		name   string
+		since  sql.NullTime
+		reason sql.NullString
+	}{
+		{name: "healthy"},
+		{name: "stuck"},
+		{name: "unrecoverable", since: sql.NullTime{Time: time.Unix(0, 0), Valid: true}, reason: sql.NullString{String: "shard root mismatch", Valid: true}},
+	}
+	for _, test := range tests {
+		var since sql.NullTime
+		var reason sql.NullString
+		if err := store.pool.QueryRow(ctx, `SELECT unrecoverable_since, unrecoverable_reason FROM slabs WHERE digest = sha256($1::bytea)`, []byte(test.name)).Scan(&since, &reason); err != nil {
+			t.Fatal(err)
+		} else if since.Valid != test.since.Valid || !since.Time.Equal(test.since.Time) {
+			t.Fatalf("expected %s slab unrecoverable since %v, got %v", test.name, test.since, since)
+		} else if reason != test.reason {
+			t.Fatalf("expected %s slab reason %v, got %v", test.name, test.reason, reason)
+		}
+	}
+
+	assertStats := func(unrecoverable, stuck int64) {
+		t.Helper()
+		var gotUnrecoverable, gotStuck int64
+		if err := store.pool.QueryRow(ctx, sqlStatSelect(statUnrecoverableSlabs, statStuckSlabs)).Scan(&gotUnrecoverable, &gotStuck); err != nil {
+			t.Fatal(err)
+		} else if gotUnrecoverable != unrecoverable {
+			t.Fatalf("expected %d unrecoverable slabs, got %d", unrecoverable, gotUnrecoverable)
+		} else if gotStuck != stuck {
+			t.Fatalf("expected %d stuck slabs, got %d", stuck, gotStuck)
+		}
+	}
+	assertStats(1, 1)
+
+	// the recreated triggers continue from the carried over counters
+	if _, err := store.pool.Exec(ctx, `DELETE FROM slabs`); err != nil {
+		t.Fatal(err)
+	}
+	assertStats(0, 0)
+}
+
+// TestMigrationSeedsRepairStats asserts the repair-state counters are seeded
+// from the rows an older database already has.
+func TestMigrationSeedsRepairStats(t *testing.T) {
+	ctx := context.Background()
+	store := initV1Database(t, connectionInfoFromEnv(), `
+		INSERT INTO slabs (digest, encryption_key, min_shards, consecutive_failed_repairs)
+		SELECT sha256(i::text::bytea), sha256(i::text::bytea), 1, i
+		FROM generate_series(0, 3) i`)
+	defer store.Close()
+
+	// two of the four have more than one consecutive failure
+	var stuck, unrecoverable int64
+	if err := store.pool.QueryRow(ctx, sqlStatSelect(statStuckSlabs, statUnrecoverableSlabs)).Scan(&stuck, &unrecoverable); err != nil {
+		t.Fatal(err)
+	} else if stuck != 2 {
+		t.Fatalf("expected 2 stuck slabs, got %d", stuck)
+	} else if unrecoverable != 0 {
+		t.Fatalf("expected 0 unrecoverable slabs, got %d", unrecoverable)
+	}
+}
+
+// TestMigrationBackfillsContractTax asserts the contract tax is seeded from the
+// wallet events an older database already has.
+func TestMigrationBackfillsContractTax(t *testing.T) {
+	ctx := context.Background()
+	event := newTestContractEvent()
+	encoded, err := (*sqlWalletEvent)(&event).Value()
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := sqlChainIndex(event.Index).Value()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := initV1Database(t, connectionInfoFromEnv(), fmt.Sprintf(`
+		INSERT INTO wallet_events (chain_index, maturity_height, event_id, event_type, event_data)
+		VALUES ('\x%x', 1, '\x%x', '%s', '\x%x')`, index, event.ID[:], event.Type, encoded))
+	defer store.Close()
+
+	var tax types.Currency
+	if err := store.pool.QueryRow(ctx, sqlStatSelect(statContractTax)).Scan((*sqlCurrency)(&tax)); err != nil {
+		t.Fatal(err)
+	} else if tax != types.Siacoins(6) {
+		t.Fatalf("expected tax %v, got %v", types.Siacoins(6), tax)
+	}
+}
+
+// TestMigrationBackfillsObjectSizes asserts existing objects' sizes are
+// backfilled from their slab slices.
+func TestMigrationBackfillsObjectSizes(t *testing.T) {
+	ctx := context.Background()
+	const previousVersion = 26 // last schema without the object size
+	store := initV1Database(t, connectionInfoFromEnv(), "", func(pool *pgxpool.Pool) {
+		old := &Store{pool: pool, log: zaptest.NewLogger(t)}
+		if err := old.upgradeDatabase(1, previousVersion); err != nil {
+			t.Fatal(err)
+		} else if _, err := pool.Exec(ctx, `
+			INSERT INTO quotas (name, description, max_pinned_data, total_uses, fund_target_bytes) VALUES ('test', 'test', 0, 0, 0);
+			INSERT INTO app_connect_keys (user_secret, app_key, use_description, quota_name) VALUES (sha256('secret'), 'key', 'test', 'test');
+			INSERT INTO accounts (public_key, connect_key_id, max_pinned_data) VALUES (sha256('account'), 1, 0);
+			INSERT INTO slabs (digest, encryption_key, min_shards)
+			VALUES (sha256('a'), sha256('a'), 1), (sha256('b'), sha256('b'), 1);
+			INSERT INTO objects (object_key, account_id, encrypted_data_key, data_signature, meta_signature)
+			SELECT sha256(k::bytea), 1, substring(sha512(k::bytea) || sha256(k::bytea) FROM 1 FOR 72), sha512(k::bytea), sha512(('meta' || k)::bytea)
+			FROM (VALUES ('one'), ('two'), ('three')) v(k);
+			INSERT INTO object_slabs (object_id, slab_digest, slab_index, slab_offset, slab_length)
+			VALUES
+				(1, sha256('a'), 0, 0, 10),
+				(1, sha256('b'), 1, 0, 20),
+				(1, sha256('a'), 2, 10, 30),
+				(2, sha256('b'), 0, 20, 5)`); err != nil {
+			t.Fatal(err)
+		}
+	})
+	defer store.Close()
+
+	tests := []struct {
+		name string
+		size uint64
+	}{
+		{name: "one", size: 60},
+		{name: "two", size: 5},
+		{name: "three", size: 0},
+	}
+	for _, test := range tests {
+		var size uint64
+		if err := store.pool.QueryRow(ctx, `SELECT size FROM objects WHERE object_key = sha256($1::bytea)`, []byte(test.name)).Scan(&size); err != nil {
+			t.Fatal(err)
+		} else if size != test.size {
+			t.Fatalf("expected %s object to have size %d, got %d", test.name, test.size, size)
+		}
+	}
+}
+
+func TestMigrationBackfillsSpaceTotals(t *testing.T) {
+	ctx := context.Background()
+	const previousVersion = 32 // spaces exist, but totals are not yet tracked
+	store := initV1Database(t, connectionInfoFromEnv(), "", func(pool *pgxpool.Pool) {
+		old := &Store{pool: pool, log: zaptest.NewLogger(t)}
+		if err := old.upgradeDatabase(1, previousVersion); err != nil {
+			t.Fatal(err)
+		} else if _, err := pool.Exec(ctx, `
+			INSERT INTO quotas (name, description, max_pinned_data, total_uses, fund_target_bytes) VALUES ('test', 'test', 0, 0, 0);
+			INSERT INTO app_connect_keys (user_secret, app_key, use_description, quota_name) VALUES (sha256('secret'), 'key', 'test', 'test');
+			INSERT INTO accounts (public_key, connect_key_id, max_pinned_data) VALUES (sha256('account'), 1, 0);
+			INSERT INTO slabs (digest, encryption_key, min_shards)
+			VALUES (sha256('a'), sha256('a'), 2), (sha256('b'), sha256('b'), 1);
+			INSERT INTO sectors (sector_root, next_integrity_check)
+			SELECT sha256(n::text::bytea), NOW() FROM generate_series(1, 5) n;
+			INSERT INTO slab_sectors (slab_id, sector_id, slab_index)
+			VALUES (1, 1, 0), (1, 2, 1), (1, 3, 2), (2, 4, 0), (2, 5, 1);
+			INSERT INTO spaces (space_key, owner_account_id, signature)
+			VALUES (sha256('space'), 1, sha512('space')), (sha256('empty'), 1, sha512('empty'));
+			INSERT INTO space_objects (space_id, object_key, encrypted_data_key, data_signature, meta_signature, account_key, size)
+			SELECT 1, sha256(k::bytea), substring(sha512(k::bytea) || sha256(k::bytea) FROM 1 FOR 72), sha512(k::bytea), sha512(('meta' || k)::bytea), sha256('account'), size
+			FROM (VALUES ('one', 60), ('two', 5), ('three', 0)) v(k, size);
+			INSERT INTO space_object_slabs (object_id, slab_digest, slab_index, slab_offset, slab_length)
+			VALUES
+				(1, sha256('a'), 0, 0, 10),
+				(1, sha256('b'), 1, 0, 20),
+				(1, sha256('a'), 2, 10, 30),
+				(2, sha256('a'), 0, 40, 5)`); err != nil {
+			t.Fatal(err)
+		}
+	})
+	defer store.Close()
+
+	for _, test := range []struct {
+		name       string
+		data, size uint64
+	}{
+		{"one", 3 * proto.SectorSize, 5 * proto.SectorSize},
+		{"two", 2 * proto.SectorSize, 3 * proto.SectorSize},
+		{"three", 0, 0},
+	} {
+		var data, size uint64
+		if err := store.pool.QueryRow(ctx, `SELECT pinned_data, pinned_size FROM space_objects WHERE object_key = sha256($1::bytea)`, []byte(test.name)).Scan(&data, &size); err != nil {
+			t.Fatal(err)
+		} else if data != test.data || size != test.size {
+			t.Fatalf("object %s footprint: got %d %d, want %d %d", test.name, data, size, test.data, test.size)
+		}
+	}
+	assertTotals := func(name string, count, size, data, disk uint64) {
+		t.Helper()
+		var gotCount, gotSize, gotData, gotDisk uint64
+		if err := store.pool.QueryRow(ctx, `SELECT object_count, size, pinned_data, pinned_size FROM spaces WHERE space_key = sha256($1::bytea)`, []byte(name)).Scan(&gotCount, &gotSize, &gotData, &gotDisk); err != nil {
+			t.Fatal(err)
+		} else if gotCount != count || gotSize != size || gotData != data || gotDisk != disk {
+			t.Fatalf("space %s totals: got %d %d %d %d, want %d %d %d %d", name, gotCount, gotSize, gotData, gotDisk, count, size, data, disk)
+		}
+	}
+	assertTotals("space", 3, 65, 5*proto.SectorSize, 8*proto.SectorSize)
+	assertTotals("empty", 0, 0, 0, 0)
+	if _, err := store.pool.Exec(ctx, `DELETE FROM space_objects WHERE object_key = sha256('one')`); err != nil {
+		t.Fatal(err)
+	}
+	assertTotals("space", 2, 5, 2*proto.SectorSize, 3*proto.SectorSize)
+}
+
+func TestMigrationPreservesAccountSignedSpaceObjects(t *testing.T) {
+	store := initPostgres(t, zaptest.NewLogger(t))
+	ownerKey := types.GeneratePrivateKey()
+	owner := proto.Account(ownerKey.PublicKey())
+	store.addTestAccount(t, ownerKey.PublicKey())
+	keys := []types.PublicKey{store.addTestSpace(t, owner).PublicKey(), store.addTestSpace(t, owner).PublicKey()}
+	host := store.addTestHost(t)
+	store.addTestContract(t, host)
+	personal := store.pinTestObject(t, owner, host)
+	spaceOnly := store.pinTestObject(t, owner, host)
+	for _, key := range keys {
+		for _, obj := range []slabs.SealedObject{personal, spaceOnly} {
+			obj.Sign(ownerKey)
+			if err := store.PinSpaceObject(owner, key, obj.PinRequest()); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := store.DeleteObject(owner, spaceOnly.ID()); err != nil {
+		t.Fatal(err)
+	}
+	store.publishEvents(t)
+	if _, err := store.pool.Exec(t.Context(), `
+ALTER TABLE space_objects ADD COLUMN account_key BYTEA CHECK(LENGTH(account_key) = 32);
+UPDATE space_objects o SET account_key = a.public_key
+FROM spaces s JOIN accounts a ON a.id = s.owner_account_id WHERE s.id = o.space_id;
+ALTER TABLE space_objects ALTER COLUMN account_key SET NOT NULL;`); err != nil {
+		t.Fatal(err)
+	} else if err := store.upgradeDatabase(33, 34); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"space_objects", "space_object_slabs", "space_slabs"} {
+		var count int
+		if err := store.pool.QueryRow(t.Context(), `SELECT COUNT(*) FROM `+table).Scan(&count); err != nil {
+			t.Fatal(err)
+		} else if count != 4 {
+			t.Fatalf("expected %s to retain four rows, got %d", table, count)
+		}
+	}
+	if _, err := store.Object(owner, personal.ID()); err != nil {
+		t.Fatalf("personal object lost: %v", err)
+	}
+	store.assertPinnedSlabs(t, owner, personal.Slabs[0].Digest(), spaceOnly.Slabs[0].Digest())
+	store.publishEvents(t)
+	for _, key := range keys {
+		space, err := store.Space(owner, key)
+		if err != nil {
+			t.Fatal(err)
+		} else if space.ObjectCount != 2 || space.ObjectSize != 200 || space.PinnedData != 2*proto.SectorSize || space.PinnedSize != 2*proto.SectorSize {
+			t.Fatalf("space totals changed: %+v", space)
+		}
+		events, err := store.ListSpaceObjects(owner, key, slabs.Cursor{}, 10)
+		if err != nil {
+			t.Fatal(err)
+		} else if len(events) != 2 {
+			t.Fatalf("expected two object events, got %d", len(events))
+		}
+		for _, event := range events {
+			if event.Deleted || event.Object == nil {
+				t.Fatalf("expected live object event, got %+v", event)
+			} else if err := event.Object.VerifySignatures(ownerKey.PublicKey()); err != nil {
+				t.Fatalf("account signatures changed: %v", err)
+			} else if err := event.Object.VerifySignatures(key); err == nil {
+				t.Fatal("old object unexpectedly verifies with the space key")
+			}
+		}
+	}
+}
 
 func TestMigrationConsistency(t *testing.T) {
 	// prepare 2 databases

@@ -1,6 +1,7 @@
 package slabs
 
 import (
+	"errors"
 	"math"
 	"testing"
 	"time"
@@ -51,5 +52,81 @@ func TestObjectEquivalency(t *testing.T) {
 		t.Fatalf("unexpected metadata sig hash: got %v, want %v", pr.MetaSigHash(), so.MetaSigHash())
 	} else if err := pr.VerifySignatures(sk.PublicKey()); err != nil {
 		t.Fatalf("unexpected error verifying signatures: %v", err)
+	}
+}
+
+func TestSealedObjectSize(t *testing.T) {
+	tests := []struct {
+		slices []SlabSlice
+		size   uint64
+	}{
+		{slices: nil, size: 0},
+		{slices: []SlabSlice{{Length: 100}}, size: 100},
+		{slices: []SlabSlice{{Offset: 10, Length: 100}, {Length: 50}}, size: 150},
+		// slice lengths are summed as uint64 so they can't overflow
+		{slices: []SlabSlice{{Length: math.MaxUint32}, {Length: math.MaxUint32}}, size: 2 * math.MaxUint32},
+	}
+	for _, test := range tests {
+		so := SealedObject{Slabs: test.slices}
+		pr := so.PinRequest()
+		withoutSlabs := so.WithoutSlabs()
+		if so.Size() != test.size {
+			t.Fatalf("expected size %d, got %d", test.size, so.Size())
+		} else if pr.Size() != test.size {
+			t.Fatalf("expected pin request size %d, got %d", test.size, pr.Size())
+		} else if withoutSlabs.Size != test.size {
+			t.Fatalf("expected size without slabs %d, got %d", test.size, withoutSlabs.Size)
+		} else if got := withoutSlabs.WithSlabs(test.slices).Size(); got != test.size {
+			t.Fatalf("expected reassembled size %d, got %d", test.size, got)
+		}
+	}
+}
+
+func TestPinObjectRequestValidateIntegerBounds(t *testing.T) {
+	req := PinObjectRequest{
+		EncryptedDataKey: frand.Bytes(72),
+		Slabs:            []ObjectSlab{{ID: SlabID{1}, Offset: math.MaxInt32, Length: math.MaxInt32}},
+	}
+	req.ID = pinnedObjectID(req.Slabs)
+	if err := req.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPinObjectRequestValidateDuplicateSlabs(t *testing.T) {
+	req := PinObjectRequest{
+		EncryptedDataKey: frand.Bytes(72),
+		Slabs:            []ObjectSlab{{ID: SlabID{1}, Length: 1}, {ID: SlabID{1}, Offset: 1, Length: 1}},
+	}
+	req.ID = pinnedObjectID(req.Slabs)
+	if err := req.Validate(); !errors.Is(err, ErrObjectDuplicateSlab) {
+		t.Fatalf("expected %v, got %v", ErrObjectDuplicateSlab, err)
+	}
+}
+
+func TestPinObjectRequestValidateOpaqueFields(t *testing.T) {
+	obj := SealedObject{
+		EncryptedMetadata: []byte("opaque metadata"),
+		Slabs:             []SlabSlice{{EncryptionKey: frand.Entropy256(), MinShards: 1, Length: 1}},
+	}
+	req := obj.PinRequest()
+	for _, tt := range []struct {
+		dataKeySize, metadataKeySize int
+		valid                        bool
+	}{
+		{72, 0, true},
+		{72, 72, true},
+		{0, 0, false},
+		{71, 0, false},
+		{73, 0, false},
+		{72, 71, false},
+		{72, 73, false},
+	} {
+		req.EncryptedDataKey = frand.Bytes(tt.dataKeySize)
+		req.EncryptedMetadataKey = frand.Bytes(tt.metadataKeySize)
+		err := req.Validate()
+		if tt.valid && err != nil || !tt.valid && !errors.Is(err, ErrInvalidObjectRequest) {
+			t.Fatalf("key lengths %d/%d: valid=%v, got %v", tt.dataKeySize, tt.metadataKeySize, tt.valid, err)
+		}
 	}
 }

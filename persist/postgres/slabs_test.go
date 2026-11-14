@@ -1,9 +1,12 @@
 package postgres
 
 import (
+	"bytes"
+	"database/sql"
 	"errors"
 	"math"
 	"reflect"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -236,6 +239,15 @@ func TestMarkSlabRepaired(t *testing.T) {
 		}
 	}
 
+	// assert the backoff doesn't overflow and the counter saturates
+	for _, n := range []int{21, 22, 62, 63, math.MaxInt16 - 1, math.MaxInt16} {
+		if _, err := store.pool.Exec(t.Context(), "UPDATE slabs SET consecutive_failed_repairs = $1", n); err != nil {
+			t.Fatal(err)
+		}
+		simulateFailedRepair()
+		assertSlabState(min(n+1, math.MaxInt16), time.Now().Add(maxRepairBackoff))
+	}
+
 	// assert state after successful repair
 	oneHourAgo := time.Now().Add(-1 * time.Hour)
 	_, err = store.pool.Exec(t.Context(), "UPDATE slabs SET next_repair_attempt = $1", oneHourAgo)
@@ -244,6 +256,252 @@ func TestMarkSlabRepaired(t *testing.T) {
 	}
 	simulateSuccessfulRepair()
 	assertSlabState(0, oneHourAgo)
+}
+
+func TestMarkSlabUnrecoverable(t *testing.T) {
+	store := initPostgres(t, zap.NewNop())
+
+	// add account, host and contract
+	account := proto.Account{1}
+	store.addTestAccount(t, types.PublicKey(account))
+	host := store.addTestHost(t)
+	store.addTestContract(t, host)
+
+	// add two slabs and lose all of their sectors so both need repair
+	slab1 := newTestSlab(host)
+	slabID1 := store.pinTestSlabs(t, account, slab1)[0]
+	slabID2 := store.pinTestSlab(t, account, 1, []types.PublicKey{host, host})
+	loseAllSectors := func() {
+		t.Helper()
+		if _, err := store.pool.Exec(t.Context(), `UPDATE sectors SET host_id = NULL`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	loseAllSectors()
+
+	assertUnhealthySlabs := func(expected ...slabs.SlabID) {
+		t.Helper()
+		resetNextRepairAttempt(t, store)
+		got := collectUnhealthySlabs(t, store)
+		byDigest := func(a, b slabs.SlabID) int { return bytes.Compare(a[:], b[:]) }
+		slices.SortFunc(got, byDigest)
+		slices.SortFunc(expected, byDigest)
+		if !slices.Equal(got, expected) {
+			t.Fatalf("expected unhealthy slabs %v, got %v", expected, got)
+		}
+	}
+
+	assertUnrecoverable := func(slabID slabs.SlabID, expected string) {
+		t.Helper()
+		var neverRepairable bool
+		var reason sql.NullString
+		if err := store.pool.QueryRow(t.Context(), `
+			SELECT unrecoverable_since IS NOT DISTINCT FROM 'epoch', unrecoverable_reason
+			FROM slabs
+			WHERE digest = $1`, sqlHash256(slabID)).Scan(&neverRepairable, &reason); err != nil {
+			t.Fatal(err)
+		} else if neverRepairable != (expected != "") {
+			t.Fatalf("expected never repairable %v, got %v", expected != "", neverRepairable)
+		} else if reason.String != expected {
+			t.Fatalf("expected reason %q, got %q", expected, reason.String)
+		}
+	}
+
+	assertFailedRepairs := func(slabID slabs.SlabID, expected int) {
+		t.Helper()
+		var failures int
+		if err := store.pool.QueryRow(t.Context(), `
+			SELECT consecutive_failed_repairs
+			FROM slabs
+			WHERE digest = $1`, sqlHash256(slabID)).Scan(&failures); err != nil {
+			t.Fatal(err)
+		} else if failures != expected {
+			t.Fatalf("expected %d failed repairs, got %d", expected, failures)
+		}
+	}
+
+	// both slabs need repair
+	assertUnhealthySlabs(slabID1, slabID2)
+	assertUnrecoverable(slabID1, "")
+	assertUnrecoverable(slabID2, "")
+
+	// an unrecoverable slab is not handed out again
+	if err := store.MarkSlabUnrecoverable(slabID1, "shard root mismatch"); err != nil {
+		t.Fatal(err)
+	}
+	assertUnrecoverable(slabID1, "shard root mismatch")
+	assertUnhealthySlabs(slabID2)
+
+	// marking it again keeps the original reason
+	if err := store.MarkSlabUnrecoverable(slabID1, "some other reason"); err != nil {
+		t.Fatal(err)
+	}
+	assertUnrecoverable(slabID1, "shard root mismatch")
+
+	// an unknown slab is not found
+	if err := store.MarkSlabUnrecoverable(slabs.SlabID(frand.Entropy256()), "shard root mismatch"); !errors.Is(err, slabs.ErrSlabNotFound) {
+		t.Fatalf("expected ErrSlabNotFound, got %v", err)
+	}
+
+	// re-pinning the exact same slab revives it with a clean repair state
+	if err := store.MarkSlabRepaired(slabID1, false); err != nil {
+		t.Fatal(err)
+	}
+	assertFailedRepairs(slabID1, 1)
+	if id := store.pinTestSlabs(t, account, slab1)[0]; id != slabID1 {
+		t.Fatalf("expected re-pin to return slab %v, got %v", slabID1, id)
+	}
+	assertUnrecoverable(slabID1, "")
+	assertFailedRepairs(slabID1, 0)
+
+	// the revived slab is handed out for repair again once it needs it
+	loseAllSectors()
+	assertUnhealthySlabs(slabID1, slabID2)
+
+	// stats no longer count it as unrecoverable
+	if stats, err := store.SectorStats(); err != nil {
+		t.Fatal(err)
+	} else if stats.UnrecoverableSlabs != 0 {
+		t.Fatalf("expected 0 unrecoverable slabs, got %d", stats.UnrecoverableSlabs)
+	}
+}
+
+// backdateRecoveryWindow starts the slab's recovery window age ago.
+func (s *Store) backdateRecoveryWindow(t testing.TB, slabID slabs.SlabID, age time.Duration) {
+	t.Helper()
+	if _, err := s.pool.Exec(t.Context(), `UPDATE slabs SET unrecoverable_since = $2 WHERE digest = $1`, sqlHash256(slabID), time.Now().Add(-age)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestRecordFailedSlabRecovery tests the slab's recovery window.
+func TestRecordFailedSlabRecovery(t *testing.T) {
+	const reason = "shard recovery failed"
+	store := initPostgres(t, zaptest.NewLogger(t).Named("postgres"))
+
+	// add account, host, contract and slab
+	account := proto.Account{1}
+	store.addTestAccount(t, types.PublicKey(account))
+	hk := store.addTestHost(t)
+	store.addTestContract(t, hk)
+	slabID := store.pinTestSlab(t, account, 1, []types.PublicKey{hk})
+
+	assertUnhealthySlabs := func(expected ...slabs.SlabID) {
+		t.Helper()
+		resetNextRepairAttempt(t, store)
+		if got := collectUnhealthySlabs(t, store); !slices.Equal(got, expected) {
+			t.Fatalf("expected unhealthy slabs %v, got %v", expected, got)
+		}
+	}
+	recordFailure := func(expected bool) {
+		t.Helper()
+		if unrecoverable, err := store.RecordFailedSlabRecovery(slabID, reason); err != nil {
+			t.Fatal(err)
+		} else if unrecoverable != expected {
+			t.Fatalf("expected failure to mark slab unrecoverable %v, got %v", expected, unrecoverable)
+		}
+	}
+	// recoveryState returns the start of the slab's recovery window and the
+	// reason it was marked unrecoverable
+	recoveryState := func() (since sql.NullTime, reason sql.NullString) {
+		t.Helper()
+		if err := store.pool.QueryRow(t.Context(), `SELECT unrecoverable_since, unrecoverable_reason FROM slabs WHERE digest = $1`, sqlHash256(slabID)).Scan(&since, &reason); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	loseAllSectors := func() {
+		t.Helper()
+		if _, err := store.pool.Exec(t.Context(), `UPDATE sectors SET host_id = NULL`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	restoreAllSectors := func() {
+		t.Helper()
+		if _, err := store.pool.Exec(t.Context(), `UPDATE sectors SET host_id = (SELECT id FROM hosts)`); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// a failed recovery while the slab's sectors are still stored on a host,
+	// e.g. because the host was unreachable, doesn't start the recovery window
+	recordFailure(false)
+	if since, _ := recoveryState(); since.Valid {
+		t.Fatalf("expected no recovery window, got %v", since.Time)
+	}
+
+	// a failed recovery once its sectors are lost starts the recovery window
+	// without marking the slab unrecoverable
+	loseAllSectors()
+	recordFailure(false)
+	if since, reason := recoveryState(); !since.Valid || time.Since(since.Time) > time.Minute {
+		t.Fatalf("expected recovery window to start now, got %v", since)
+	} else if reason.Valid {
+		t.Fatalf("expected no reason, got %q", reason.String)
+	}
+	assertUnhealthySlabs(slabID)
+
+	// failures within the recovery window continue it
+	store.backdateRecoveryWindow(t, slabID, slabs.RecoveryWindow-time.Hour)
+	recordFailure(false)
+	if since, reason := recoveryState(); time.Since(since.Time) < slabs.RecoveryWindow-time.Hour {
+		t.Fatalf("expected recovery window to continue, got %v", since)
+	} else if reason.Valid {
+		t.Fatalf("expected no reason, got %q", reason.String)
+	}
+	assertUnhealthySlabs(slabID)
+
+	// a failed recovery once its sectors are stored on a host again resets the
+	// recovery window
+	restoreAllSectors()
+	recordFailure(false)
+	if since, _ := recoveryState(); since.Valid {
+		t.Fatalf("expected recovery window to be reset, got %v", since.Time)
+	}
+	loseAllSectors()
+	recordFailure(false)
+	if since, _ := recoveryState(); time.Since(since.Time) > time.Minute {
+		t.Fatalf("expected recovery window to start now, got %v", since)
+	}
+
+	// the first failure after the recovery window has passed marks the slab
+	// unrecoverable
+	store.backdateRecoveryWindow(t, slabID, slabs.RecoveryWindow)
+	assertUnhealthySlabs(slabID)
+	recordFailure(true)
+	if since, got := recoveryState(); time.Since(since.Time) < slabs.RecoveryWindow {
+		t.Fatalf("expected recovery window to be kept, got %v", since)
+	} else if got.String != reason {
+		t.Fatalf("expected reason %q, got %q", reason, got.String)
+	}
+	assertUnhealthySlabs()
+
+	// later failures don't report the slab as newly unrecoverable, and it
+	// stays unrecoverable even once its sectors are stored on a host again
+	recordFailure(false)
+	restoreAllSectors()
+	recordFailure(false)
+	if since, got := recoveryState(); !since.Valid || got.String != reason {
+		t.Fatalf("expected reason %q, got %q", reason, got.String)
+	}
+	loseAllSectors()
+	assertUnhealthySlabs()
+
+	// a failed recovery keeps the reason of a slab that can never be fully
+	// repaired
+	if err := store.MarkSlabUnrecoverable(slabID, "shard root mismatch"); err != nil {
+		t.Fatal(err)
+	}
+	recordFailure(false)
+	if _, got := recoveryState(); got.String != "shard root mismatch" {
+		t.Fatalf("expected reason %q, got %q", "shard root mismatch", got.String)
+	}
+	assertUnhealthySlabs()
+
+	// an unknown slab is not found
+	if _, err := store.RecordFailedSlabRecovery(slabs.SlabID(frand.Entropy256()), reason); !errors.Is(err, slabs.ErrSlabNotFound) {
+		t.Fatalf("expected ErrSlabNotFound, got %v", err)
+	}
 }
 
 func TestPinnedSlab(t *testing.T) {
@@ -811,7 +1069,7 @@ func benchmarkPruneSlabs(b *testing.B, numAccounts, objectsPerAccount int) {
 			objectKey := sqlHash256(frand.Entropy256())
 			if j%2 == 0 {
 				objectID++
-				batch.Queue(`INSERT INTO objects(object_key, account_id, encrypted_data_key, encrypted_meta_key, data_signature, meta_signature) VALUES ($1, $2, $3, $4, $5, $6)`, objectKey, accountID, frand.Bytes(72), frand.Bytes(72), frand.Bytes(64), frand.Bytes(64))
+				batch.Queue(`INSERT INTO objects(object_key, account_id, encrypted_data_key, encrypted_meta_key, data_signature, meta_signature, size) VALUES ($1, $2, $3, $4, $5, $6, 0)`, objectKey, accountID, frand.Bytes(72), frand.Bytes(72), frand.Bytes(64), frand.Bytes(64))
 			}
 			for k := range slabsPerObject {
 				slabID++

@@ -15,7 +15,6 @@ import (
 	"go.sia.tech/coreutils/chain"
 	"go.sia.tech/coreutils/rhp/v4/quic"
 	"go.sia.tech/coreutils/rhp/v4/siamux"
-	"go.sia.tech/coreutils/syncer"
 	"go.sia.tech/coreutils/threadgroup"
 	"go.sia.tech/indexd/alerts"
 	"go.sia.tech/indexd/geoip"
@@ -26,6 +25,16 @@ import (
 const (
 	announcementMaxAddressesPerProtocol = 2
 
+	// minTimeBetweenFailedScans is the minimum time that must pass between two
+	// failed scans of the same host. This is to avoid hammering a host that is
+	// down or unreachable.
+	minTimeBetweenFailedScans = time.Hour
+
+	// minConsecutiveScansBeforeCooldown is the minimum number of consecutive
+	// failed scans before a host is put on a minTimeBetweenFailedScans
+	// cooldown.
+	minConsecutiveScansBeforeCooldown = 10
+
 	pruneFrequency                  = time.Hour * 24
 	pruneMinConsecutiveScanFailures = 10
 	pruneMinDowntime                = time.Hour * 24 * 365 // 1 year
@@ -33,6 +42,10 @@ const (
 	// stuckFrequency represents how often we check for stuck hosts and
 	// register an alert if there are any
 	stuckFrequency = time.Hour
+
+	// onlineCheckInterval is how long the result of a connectivity check is
+	// cached
+	onlineCheckInterval = 30 * time.Second
 
 	scanThreads                    = 50
 	scanTimeout                    = time.Minute
@@ -199,11 +212,6 @@ type (
 		DismissAlerts(ids ...types.Hash256)
 	}
 
-	// Syncer defines an interface that exposes the Peers method.
-	Syncer interface {
-		Peers() []*syncer.Peer
-	}
-
 	// UpdateTx defines what the host manager needs to atomically process a
 	// chain update in the database.
 	UpdateTx interface {
@@ -308,7 +316,7 @@ func (hm *HostManager) ResetLostSectors(ctx context.Context, hk types.PublicKey)
 }
 
 // NewManager creates a new host manager.
-func NewManager(syncer Syncer, locator Locator, client HostClient, store Store, alerter AlertsManager, opts ...Option) (*HostManager, error) {
+func NewManager(locator Locator, client HostClient, store Store, alerter AlertsManager, opts ...Option) (*HostManager, error) {
 	// uses Cloudflare 1.1.1.1 for when OS resolver fails
 	fallbackResolver := &net.Resolver{
 		// PreferGo allows us to use our own dialer
@@ -324,7 +332,7 @@ func NewManager(syncer Syncer, locator Locator, client HostClient, store Store, 
 		scanFrequency:      5 * time.Minute,
 		scanInterval:       time.Hour * 24,
 
-		onlineChecker: &onlineChecker{addresses: fallbackSites, syncer: syncer},
+		onlineChecker: &onlineChecker{addresses: connectivitySites},
 		resolver:      &resolver{main: &net.Resolver{}, fallback: fallbackResolver},
 		scanner:       &scanner{},
 		locator:       locator,
@@ -482,6 +490,12 @@ func (m *HostManager) WithScannedHost(ctx context.Context, hk types.PublicKey, f
 		}
 	}
 
+	// if a host has failed scans repeatedly we avoid scanning them again for a
+	// while
+	if host.ConsecutiveFailedScans >= minConsecutiveScansBeforeCooldown && time.Since(host.LastFailedScan) < minTimeBetweenFailedScans {
+		return fmt.Errorf("host has failed scans %d times and won't be scanned again before %v", host.ConsecutiveFailedScans, host.LastFailedScan.Add(minTimeBetweenFailedScans))
+	}
+
 	// scan the host if the prices were outdated
 	host, err = m.ScanHost(ctx, hk)
 	if err != nil {
@@ -506,6 +520,7 @@ func (m *HostManager) WithScannedHost(ctx context.Context, hk types.PublicKey, f
 func (m *HostManager) ScanHost(ctx context.Context, hk types.PublicKey) (Host, error) {
 	logger := m.log.With(zap.Stringer("hk", hk))
 
+	parentCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, scanTimeout)
 	defer cancel()
 
@@ -519,9 +534,13 @@ func (m *HostManager) ScanHost(ctx context.Context, hk types.PublicKey) (Host, e
 		return Host{}, fmt.Errorf("failed to resolve host, %w", err)
 	}
 
+	// hitting scanTimeout counts as a failed scan, only the caller giving up
+	// doesn't
 	settings, err := fetchSettings(ctx, m.scanner, hk, addrs, logger)
-	if err != nil {
+	if err != nil && parentCtx.Err() != nil {
 		return Host{}, fmt.Errorf("failed to fetch settings, %w", err)
+	} else if err != nil {
+		logger.Debug("scan timed out", zap.Error(err))
 	}
 
 	consecutiveFailures := host.ConsecutiveFailedScans

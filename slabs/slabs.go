@@ -34,6 +34,10 @@ const (
 	// MaxSlabUploadSkew is the furthest a slab's upload time may be ahead of
 	// the indexer's clock.
 	MaxSlabUploadSkew = 5 * time.Minute
+
+	// RecoveryWindow is how long a slab's shards may fail to recover before
+	// the slab is marked unrecoverable.
+	RecoveryWindow = 30 * 24 * time.Hour
 )
 
 var (
@@ -48,7 +52,8 @@ var (
 	ErrUnrecoverable = errors.New("slab is unrecoverable")
 
 	// ErrBadHosts is returned when attempting to pin a slab with too many
-	// sectors on bad hosts.
+	// sectors on bad hosts. It is only returned for a slab that doesn't exist
+	// yet; an existing slab can always be re-pinned.
 	ErrBadHosts = errors.New("slab has too many sectors on bad hosts")
 
 	// ErrMinShards is returned when attempting to pin a slab with an invalid
@@ -132,6 +137,7 @@ type (
 	SlabObject struct {
 		Account  proto.Account
 		ObjectID types.Hash256
+		SpaceKey types.PublicKey `json:"spaceKey,omitzero"`
 	}
 )
 

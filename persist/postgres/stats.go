@@ -9,12 +9,14 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/accounts"
 	"go.sia.tech/indexd/hosts"
 	"go.sia.tech/indexd/slabs"
 )
 
 const (
+	statContractTax        = "contract_tax"
 	statSlabs              = "num_slabs"
 	statMigratedSectors    = "num_migrated_sectors"
 	statPinnedSectors      = "num_pinned_sectors"
@@ -26,6 +28,8 @@ const (
 	statAccountsRegistered = "num_accounts_registered"
 	statScans              = "num_scans"
 	statScansFailed        = "num_scans_failed"
+	statUnrecoverableSlabs = "num_unrecoverable_slabs"
+	statStuckSlabs         = "num_stuck_slabs"
 )
 
 // sqlStatSelect returns a SELECT query that reads the effective values of the
@@ -43,6 +47,25 @@ func incrementStat(ctx context.Context, tx *txn, name string, delta int64) error
 		return nil
 	}
 	_, err := tx.Exec(ctx, "INSERT INTO stats_deltas (stat_name, stat_delta) VALUES ($1, $2)", name, delta)
+	return err
+}
+
+// incrementContractTax adds delta to the accumulated file contract tax.
+func incrementContractTax(ctx context.Context, tx *txn, delta types.Currency) error {
+	if delta.IsZero() {
+		return nil
+	}
+	_, err := tx.Exec(ctx, "INSERT INTO stats_deltas (stat_name, stat_delta) VALUES ($1, $2)", statContractTax, sqlCurrency(delta))
+	return err
+}
+
+// decrementContractTax subtracts delta from the accumulated file contract tax.
+// Currency is unsigned, so the delta is negated by the database.
+func decrementContractTax(ctx context.Context, tx *txn, delta types.Currency) error {
+	if delta.IsZero() {
+		return nil
+	}
+	_, err := tx.Exec(ctx, "INSERT INTO stats_deltas (stat_name, stat_delta) VALUES ($1, -$2::NUMERIC)", statContractTax, sqlCurrency(delta))
 	return err
 }
 
@@ -118,14 +141,14 @@ func incrementHostsUnpinnedSectors(ctx context.Context, tx *txn, deltas []unpinn
 }
 
 func initStats(ctx context.Context, tx *txn) error {
-	_, err := tx.Exec(ctx, `INSERT INTO stats (stat_name) VALUES
-		($1), ($2), ($3), ($4), ($5), ($6), ($7), ($8), ($9), ($10), ($11)
-	ON CONFLICT (stat_name) DO NOTHING`,
-		statSlabs, statMigratedSectors, statPinnedSectors, statUnpinnableSectors, statUnpinnedSectors,
-		statSectorsChecked, statSectorsLost, statSectorsCheckFailed,
-		statAccountsRegistered,
-		statScans, statScansFailed,
-	)
+	_, err := tx.Exec(ctx, `INSERT INTO stats (stat_name) SELECT unnest($1::text[]) ON CONFLICT (stat_name) DO NOTHING`,
+		[]string{
+			statSlabs, statMigratedSectors, statPinnedSectors, statUnpinnableSectors, statUnpinnedSectors,
+			statSectorsChecked, statSectorsLost, statSectorsCheckFailed,
+			statAccountsRegistered,
+			statScans, statScansFailed,
+			statUnrecoverableSlabs, statStuckSlabs, statContractTax,
+		})
 	return err
 }
 
@@ -171,13 +194,25 @@ func (s *Store) FlushStatsDelta(limit int) (more bool, err error) {
 	return
 }
 
+// ObjectStats reports statistics about the objects tracked by this instance.
+func (s *Store) ObjectStats() (slabs.ObjectStats, error) {
+	var stats slabs.ObjectStats
+	err := s.transaction(func(ctx context.Context, tx *txn) error {
+		return tx.QueryRow(ctx, `SELECT
+	(SELECT COUNT(*) FROM object_events WHERE updated_at IS NULL) +
+	(SELECT COUNT(*) FROM space_object_events WHERE updated_at IS NULL)`).Scan(&stats.UnpublishedEvents)
+	})
+	return stats, err
+}
+
 // SectorStats reports statistics about the sectors and slabs stored in the
 // database.
 func (s *Store) SectorStats() (slabs.SectorsStats, error) {
 	var stats slabs.SectorsStats
 	err := s.transaction(func(ctx context.Context, tx *txn) error {
-		return tx.QueryRow(ctx, sqlStatSelect(statSlabs, statMigratedSectors, statPinnedSectors, statUnpinnableSectors, statUnpinnedSectors, statSectorsLost, statSectorsChecked, statSectorsCheckFailed)).
-			Scan(&stats.Slabs, &stats.Migrated, &stats.Pinned, &stats.Unpinnable, &stats.Unpinned, &stats.Lost, &stats.Checked, &stats.CheckFailed)
+		return tx.QueryRow(ctx, sqlStatSelect(statSlabs, statMigratedSectors, statPinnedSectors, statUnpinnableSectors, statUnpinnedSectors, statSectorsLost, statSectorsChecked, statSectorsCheckFailed, statUnrecoverableSlabs, statStuckSlabs)).
+			Scan(&stats.Slabs, &stats.Migrated, &stats.Pinned, &stats.Unpinnable, &stats.Unpinned, &stats.Lost, &stats.Checked, &stats.CheckFailed,
+				&stats.UnrecoverableSlabs, &stats.StuckSlabs)
 	})
 	return stats, err
 }

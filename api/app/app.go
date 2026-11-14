@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -10,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,6 +46,8 @@ type (
 		DeleteObject(ctx context.Context, account proto.Account, objectKey types.Hash256) error
 		PinObject(ctx context.Context, account proto.Account, obj slabs.PinObjectRequest) error
 		ListObjects(ctx context.Context, account proto.Account, cursor slabs.Cursor, limit int) ([]slabs.ObjectEvent, error)
+		ListObjectsWithoutSlabs(ctx context.Context, account proto.Account, cursor slabs.Cursor, limit int) ([]slabs.ObjectEventWithoutSlabs, error)
+		ObjectSlabs(ctx context.Context, account proto.Account, key types.Hash256, cursor int64, limit int) ([]slabs.SlabSlice, error)
 		SharedObject(ctx context.Context, key types.Hash256) (slabs.SharedObject, error)
 	}
 
@@ -60,8 +62,11 @@ type (
 		AddSharedObject(account proto.Account, sharingKey types.PublicKey, req sharing.SharedObjectRequest) error
 		DeleteSharedObject(account proto.Account, sharingKey types.PublicKey, objectKey types.Hash256) error
 		OwnedSharedObjects(account proto.Account, sharingKey types.PublicKey, offset, limit int) ([]slabs.SealedObject, error)
+		OwnedSharedObjectsWithoutSlabs(account proto.Account, sharingKey types.PublicKey, offset, limit int) ([]sharing.ObjectWithoutSlabs, error)
 		SharedObjects(sharingKey types.PublicKey, offset, limit int) ([]slabs.SealedObject, error)
+		SharedObjectsWithoutSlabs(sharingKey types.PublicKey, offset, limit int) ([]sharing.ObjectWithoutSlabs, error)
 		SharedObject(sharingKey types.PublicKey, objectKey types.Hash256) (slabs.SealedObject, error)
+		SharedObjectSlabs(sharingKey types.PublicKey, objectKey types.Hash256, cursor int64, limit int) ([]slabs.SlabSlice, error)
 		AccountTokens(sharingKey types.PublicKey, hostKeys []types.PublicKey) ([]proto.AccountToken, error)
 	}
 
@@ -177,6 +182,7 @@ type (
 		contracts Contracts
 		slabs     Slabs
 		sharing   Sharing
+		spaces    Spaces
 		log       *zap.Logger
 		rl        RateLimiter
 
@@ -204,10 +210,13 @@ var (
 )
 
 const (
-	acceptHeader = "Accept"
+	acceptHeader        = "Accept"
+	contentTypeHeader   = "Content-Type"
+	contentLengthHeader = "Content-Length"
+	varyHeader          = "Vary"
 
-	applicationJSON        = "application/json"
-	applicationOctetStream = "application/octet-stream"
+	applicationJSON = "application/json"
+	applicationCBOR = "application/cbor"
 
 	// field size limits for RegisterAppRequest
 	maxNameLen        = 128
@@ -246,7 +255,7 @@ func WrapRateLimit(rl RateLimiter, next jape.Handler) jape.Handler {
 
 func (a *app) handleGETHosts(jc jape.Context, _ types.PublicKey) {
 	if h, ok := a.usableHosts(jc); ok {
-		jc.Encode(h)
+		encodeResponse(jc, h)
 	}
 }
 
@@ -312,7 +321,33 @@ func (a *app) handleGETObject(jc jape.Context, pk types.PublicKey) {
 		return
 	}
 
-	jc.Encode(obj)
+	encodeResponse(jc, obj)
+}
+
+func (a *app) handleGETObjectSlabs(jc jape.Context, pk types.PublicKey) {
+	var key types.Hash256
+	if jc.DecodeParam("key", &key) != nil {
+		return
+	}
+
+	cursor, limit, ok := api.ParseCursorLimit(jc)
+	if !ok {
+		return
+	}
+
+	page, err := a.slabs.ObjectSlabs(jc.Request.Context(), proto.Account(pk), key, cursor, limit)
+	if errors.Is(err, slabs.ErrObjectNotFound) {
+		jc.Error(err, http.StatusNotFound)
+		return
+	} else if errors.Is(err, slabs.ErrObjectBlocked) {
+		jc.Error(err, http.StatusUnavailableForLegalReasons)
+		return
+	} else if err != nil {
+		jc.Error(err, http.StatusInternalServerError)
+		return
+	}
+
+	encodeResponse(jc, page)
 }
 
 func (a *app) handleGETObjectShared(jc jape.Context, _ types.PublicKey) {
@@ -333,7 +368,7 @@ func (a *app) handleGETObjectShared(jc jape.Context, _ types.PublicKey) {
 		return
 	}
 
-	jc.Encode(obj)
+	encodeResponse(jc, obj)
 }
 
 func (a *app) handleGETObjects(jc jape.Context, pk types.PublicKey) {
@@ -352,16 +387,31 @@ func (a *app) handleGETObjects(jc jape.Context, pk types.PublicKey) {
 		return
 	}
 
-	objs, err := a.slabs.ListObjects(jc.Request.Context(), proto.Account(pk), slabs.Cursor{
+	cursor := slabs.Cursor{
 		After: after,
 		Key:   key,
-	}, limit)
+	}
+	includeSlabs := true
+	if jc.DecodeForm("includeslabs", &includeSlabs) != nil {
+		return
+	}
+
+	if !includeSlabs {
+		withoutSlabs, err := a.slabs.ListObjectsWithoutSlabs(jc.Request.Context(), proto.Account(pk), cursor, limit)
+		if err != nil {
+			jc.Error(err, http.StatusInternalServerError)
+			return
+		}
+		encodeResponse(jc, withoutSlabs)
+		return
+	}
+
+	objs, err := a.slabs.ListObjects(jc.Request.Context(), proto.Account(pk), cursor, limit)
 	if err != nil {
 		jc.Error(err, http.StatusInternalServerError)
 		return
 	}
-
-	jc.Encode(objs)
+	encodeResponse(jc, objs)
 }
 
 func (a *app) handlePOSTObjects(jc jape.Context, pk types.PublicKey) {
@@ -371,7 +421,7 @@ func (a *app) handlePOSTObjects(jc jape.Context, pk types.PublicKey) {
 	}
 
 	err := a.slabs.PinObject(jc.Request.Context(), proto.Account(pk), obj)
-	if errors.Is(err, slabs.ErrObjectMetadataLimitExceeded) || errors.Is(err, slabs.ErrObjectMinimumSlabs) || errors.Is(err, slabs.ErrObjectUnpinnedSlab) || errors.Is(err, slabs.ErrInvalidObjectSignature) {
+	if errors.Is(err, slabs.ErrObjectMetadataLimitExceeded) || errors.Is(err, slabs.ErrObjectMinimumSlabs) || errors.Is(err, slabs.ErrObjectDuplicateSlab) || errors.Is(err, slabs.ErrObjectUnpinnedSlab) || errors.Is(err, slabs.ErrInvalidObjectSignature) || errors.Is(err, slabs.ErrInvalidObjectRequest) {
 		jc.Error(err, http.StatusBadRequest)
 		return
 	} else if errors.Is(err, slabs.ErrObjectBlocked) {
@@ -418,7 +468,7 @@ func (a *app) handlePOSTSharing(jc jape.Context, pk types.PublicKey) {
 		jc.Error(err, http.StatusInternalServerError)
 		return
 	}
-	jc.Encode(key)
+	encodeResponse(jc, key)
 }
 
 func (a *app) handleGETSharing(jc jape.Context, pk types.PublicKey) {
@@ -431,7 +481,7 @@ func (a *app) handleGETSharing(jc jape.Context, pk types.PublicKey) {
 	if jc.Check("failed to list sharing keys", err) != nil {
 		return
 	}
-	jc.Encode(keys)
+	encodeResponse(jc, keys)
 }
 
 func (a *app) handleGETSharingKey(jc jape.Context, pk types.PublicKey) {
@@ -448,7 +498,7 @@ func (a *app) handleGETSharingKey(jc jape.Context, pk types.PublicKey) {
 		jc.Error(err, http.StatusInternalServerError)
 		return
 	}
-	jc.Encode(sk)
+	encodeResponse(jc, sk)
 }
 
 func (a *app) handleDELETESharing(jc jape.Context, pk types.PublicKey) {
@@ -510,6 +560,24 @@ func (a *app) handleGETSharingObjects(jc jape.Context, pk types.PublicKey) {
 		return
 	}
 
+	includeSlabs := true
+	if jc.DecodeForm("includeslabs", &includeSlabs) != nil {
+		return
+	}
+
+	if !includeSlabs {
+		withoutSlabs, err := a.sharing.OwnedSharedObjectsWithoutSlabs(proto.Account(pk), key, offset, limit)
+		if errors.Is(err, sharing.ErrSharingKeyNotFound) {
+			jc.Error(err, http.StatusNotFound)
+			return
+		} else if err != nil {
+			jc.Error(err, http.StatusInternalServerError)
+			return
+		}
+		encodeResponse(jc, withoutSlabs)
+		return
+	}
+
 	objects, err := a.sharing.OwnedSharedObjects(proto.Account(pk), key, offset, limit)
 	if errors.Is(err, sharing.ErrSharingKeyNotFound) {
 		jc.Error(err, http.StatusNotFound)
@@ -518,7 +586,7 @@ func (a *app) handleGETSharingObjects(jc jape.Context, pk types.PublicKey) {
 		jc.Error(err, http.StatusInternalServerError)
 		return
 	}
-	jc.Encode(objects)
+	encodeResponse(jc, objects)
 }
 
 func (a *app) handleDELETESharingObject(jc jape.Context, pk types.PublicKey) {
@@ -551,6 +619,9 @@ func (a *app) handlePOSTSlabs(jc jape.Context, pk types.PublicKey) {
 	if errors.Is(err, slabs.ErrInvalidPinParams) || errors.Is(err, slabs.ErrBadHosts) || errors.Is(err, slabs.ErrMinShards) {
 		jc.Error(err, http.StatusBadRequest)
 		return
+	} else if errors.Is(err, accounts.ErrAccountStorageLimitExceeded) || errors.Is(err, accounts.ErrAppKeyStorageLimitExceeded) {
+		jc.Error(err, http.StatusForbidden)
+		return
 	} else if jc.Check("failed to pin slab", err) != nil {
 		return
 	} else if len(slabIDs) == 0 {
@@ -558,7 +629,7 @@ func (a *app) handlePOSTSlabs(jc jape.Context, pk types.PublicKey) {
 		return
 	}
 
-	jc.Encode(slabIDs)
+	encodeResponse(jc, slabIDs)
 }
 
 func (a *app) handlePOSTSlabsPrune(jc jape.Context, pk types.PublicKey) {
@@ -576,15 +647,56 @@ func (a *app) handlePOSTSlabsPrune(jc jape.Context, pk types.PublicKey) {
 	jc.Encode(nil)
 }
 
-func encodeBinary(jc jape.Context, resp types.EncoderTo) {
-	var buf bytes.Buffer
-	e := types.NewEncoder(&buf)
-	resp.EncodeTo(e)
-	e.Flush()
+// acceptsCBOR reports whether the Accept header names application/cbor with a
+// non-zero quality factor. A wildcard range does not match, so JSON stays the
+// default.
+func acceptsCBOR(header string) bool {
+	for entry := range strings.SplitSeq(header, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		mediaType, params, _ := strings.Cut(entry, ";")
+		if !strings.EqualFold(strings.TrimSpace(mediaType), applicationCBOR) {
+			continue
+		}
+		q := 1.0
+		for p := range strings.SplitSeq(params, ";") {
+			k, v, ok := strings.Cut(strings.TrimSpace(p), "=")
+			k = strings.TrimSpace(k)
+			v = strings.TrimSpace(v)
+			if ok && strings.EqualFold(k, "q") {
+				f, err := strconv.ParseFloat(v, 64)
+				if err != nil || f < 0 || f > 1 {
+					q = 0
+				} else {
+					q = f
+				}
+			}
+		}
+		if q > 0 {
+			return true
+		}
+	}
+	return false
+}
 
-	jc.ResponseWriter.Header().Set("Content-Type", applicationOctetStream)
-	jc.ResponseWriter.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
-	buf.WriteTo(jc.ResponseWriter)
+// encodeResponse writes resp as CBOR if the client accepts it, JSON otherwise.
+func encodeResponse(jc jape.Context, resp any) {
+	// the body depends on Accept, so caches must key on it
+	jc.ResponseWriter.Header().Add(varyHeader, acceptHeader)
+	if !acceptsCBOR(jc.Request.Header.Get(acceptHeader)) {
+		jc.Encode(resp)
+		return
+	}
+
+	buf, err := encodeCBOR(resp)
+	if jc.Check("failed to encode response", err) != nil {
+		return
+	}
+	jc.ResponseWriter.Header().Set(contentTypeHeader, applicationCBOR)
+	jc.ResponseWriter.Header().Set(contentLengthHeader, strconv.Itoa(len(buf)))
+	jc.ResponseWriter.Write(buf)
 }
 
 func (a *app) handleGETSlab(jc jape.Context, pk types.PublicKey) {
@@ -601,11 +713,7 @@ func (a *app) handleGETSlab(jc jape.Context, pk types.PublicKey) {
 		return
 	}
 
-	if accept := jc.Request.Header.Get(acceptHeader); accept == applicationOctetStream {
-		encodeBinary(jc, slab)
-		return
-	}
-	jc.Encode(slab)
+	encodeResponse(jc, slab)
 }
 
 func (a *app) handleGETSlabs(jc jape.Context, pk types.PublicKey) {
@@ -619,7 +727,7 @@ func (a *app) handleGETSlabs(jc jape.Context, pk types.PublicKey) {
 		return
 	}
 
-	jc.Encode(slabIDs)
+	encodeResponse(jc, slabIDs)
 }
 
 func (a *app) handleDELETESlab(jc jape.Context, pk types.PublicKey) {
@@ -735,7 +843,7 @@ func (a *app) handleAuthRequest(jc jape.Context) {
 		delete(a.authRequests, requestID)
 		a.mu.Unlock()
 	})
-	jc.Encode(RegisterAppResponse{
+	encodeResponse(jc, RegisterAppResponse{
 		ResponseURL: fmt.Sprintf("%s/auth/connect/%s", a.advertiseURL, requestID),
 		StatusURL:   fmt.Sprintf("%s/auth/connect/%s/status", a.advertiseURL, requestID),
 		RegisterURL: fmt.Sprintf("%s/auth/connect/%s/register", a.advertiseURL, requestID),
@@ -846,7 +954,7 @@ func (a *app) handleGETAuthConnectStatus(jc jape.Context) {
 		jc.Error(fmt.Errorf("invalid request signature"), http.StatusUnauthorized)
 		return
 	}
-	jc.Encode(AuthConnectStatusResponse{
+	encodeResponse(jc, AuthConnectStatusResponse{
 		Approved:     authReq.Approved,
 		Reconnecting: authReq.Reconnecting,
 		UserSecret:   authReq.UserSecret,
@@ -939,7 +1047,7 @@ func (a *app) handleGETAccount(jc jape.Context, pk types.PublicKey) {
 		jc.Error(err, http.StatusInternalServerError)
 		return
 	}
-	jc.Encode(AccountResponse{
+	encodeResponse(jc, AccountResponse{
 		AccountKey:       account.AccountKey,
 		MaxPinnedData:    min(account.MaxPinnedData, account.QuotaMaxPinnedData),
 		RemainingStorage: remainingStorage(account),
@@ -977,7 +1085,7 @@ func decodeRequest[T any](jc jape.Context) (T, bool) {
 // users, or rather their applications, to pin slabs to the indexer.
 // Authentication happens through presigned URLs that are signed with a private
 // key that corresponds to a previously registered public key.
-func NewAPI(advertiseURL string, hm Hosts, am Accounts, contracts Contracts, slabs Slabs, sharing Sharing, opts ...Option) (http.Handler, error) {
+func NewAPI(advertiseURL string, hm Hosts, am Accounts, contracts Contracts, slabs Slabs, sharing Sharing, spaces Spaces, opts ...Option) (http.Handler, error) {
 	u, err := url.Parse(advertiseURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse advertise URL %q: %w", advertiseURL, err)
@@ -988,6 +1096,7 @@ func NewAPI(advertiseURL string, hm Hosts, am Accounts, contracts Contracts, sla
 		contracts: contracts,
 		slabs:     slabs,
 		sharing:   sharing,
+		spaces:    spaces,
 		log:       zap.NewNop(),
 
 		hostname:     u.Host,
@@ -1057,9 +1166,29 @@ func NewAPI(advertiseURL string, hm Hosts, am Accounts, contracts Contracts, sla
 
 		"GET /hosts": wrapSignedAuth(a.handleGETHosts),
 
+		"POST /spaces":                               wrapSignedAuth(a.handlePOSTSpaces),
+		"GET /spaces":                                wrapSignedAuth(a.handleGETSpaces),
+		"GET /spaces/:key":                           wrapSignedAuth(a.handleGETSpace),
+		"PUT /spaces/:key":                           wrapSignedAuth(a.handlePUTSpace),
+		"DELETE /spaces/:key":                        wrapSignedAuth(a.handleDELETESpace),
+		"GET /account/spaces/invitations":            wrapSignedAuth(a.handleGETSpaceInvitations),
+		"POST /spaces/:key/invitations":              wrapSignedAuth(a.handlePOSTSpaceInvitations),
+		"POST /spaces/:key/invitations/accept":       wrapSignedAuth(a.handlePOSTSpaceInvitationAccept),
+		"DELETE /spaces/:key/invitations/:recipient": wrapSignedAuth(a.handleDELETESpaceInvitation),
+		"GET /spaces/:key/members":                   wrapSignedAuth(a.handleGETSpaceMembers),
+		"PUT /spaces/:key/members/:member":           wrapSignedAuth(a.handlePUTSpaceMember),
+		"DELETE /spaces/:key/members/:member":        wrapSignedAuth(a.handleDELETESpaceMember),
+		"POST /spaces/:key/slabs":                    wrapSignedAuth(a.handlePOSTSpaceSlabs),
+		"POST /spaces/:key/objects":                  wrapSignedAuth(a.handlePOSTSpaceObjects),
+		"GET /spaces/:key/objects":                   wrapSignedAuth(a.handleGETSpaceObjects),
+		"GET /spaces/:key/objects/:objectkey":        wrapSignedAuth(a.handleGETSpaceObject),
+		"GET /spaces/:key/objects/:objectkey/slabs":  wrapSignedAuth(a.handleGETSpaceObjectSlabs),
+		"DELETE /spaces/:key/objects/:objectkey":     wrapSignedAuth(a.handleDELETESpaceObject),
+
 		"GET /objects":             wrapSignedAuth(a.handleGETObjects),
 		"GET /objects/:key":        wrapSignedAuth(a.handleGETObject),
 		"GET /objects/:key/shared": wrapSignedAuth(a.handleGETObjectShared),
+		"GET /objects/:key/slabs":  wrapSignedAuth(a.handleGETObjectSlabs),
 		"POST /objects":            wrapSignedAuth(a.handlePOSTObjects),
 		"DELETE /objects/:key":     wrapSignedAuth(a.handleDELETEObjects),
 
@@ -1072,10 +1201,11 @@ func NewAPI(advertiseURL string, hm Hosts, am Accounts, contracts Contracts, sla
 		"DELETE /sharing/:key/objects/:objectkey": wrapSignedAuth(a.handleDELETESharingObject),
 
 		// shared-key endpoints, authenticated with a sharing key
-		"GET /shared":             wrapSharedAuth(a.handleGETShared),
-		"GET /shared/objects":     wrapSharedAuth(a.handleGETSharedObjects),
-		"GET /shared/objects/:id": wrapSharedAuth(a.handleGETSharedObject),
-		"GET /shared/hosts":       wrapSharedAuth(a.handleGETSharedHosts),
+		"GET /shared":                   wrapSharedAuth(a.handleGETShared),
+		"GET /shared/objects":           wrapSharedAuth(a.handleGETSharedObjects),
+		"GET /shared/objects/:id":       wrapSharedAuth(a.handleGETSharedObject),
+		"GET /shared/objects/:id/slabs": wrapSharedAuth(a.handleGETSharedObjectSlabs),
+		"GET /shared/hosts":             wrapSharedAuth(a.handleGETSharedHosts),
 
 		"GET /slabs":            wrapSignedAuth(a.handleGETSlabs),
 		"POST /slabs":           wrapSignedAuth(a.handlePOSTSlabs),

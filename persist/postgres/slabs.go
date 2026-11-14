@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -13,14 +15,88 @@ import (
 	"go.sia.tech/indexd/slabs"
 )
 
+// MarkSlabUnrecoverable flags a slab that can never be fully repaired as
+// unrecoverable, excluding it from [Store.UnhealthySlabs] until it is
+// re-pinned, and records the reason we gave up on it. The original reason is
+// kept if the slab was already marked by a previous call.
+func (s *Store) MarkSlabUnrecoverable(slabID slabs.SlabID, reason string) error {
+	return s.transaction(func(ctx context.Context, tx *txn) error {
+		// the epoch marks a slab that can never be fully repaired, keep the
+		// original reason if the slab is already marked
+		res, err := tx.Exec(ctx, `
+			UPDATE slabs
+			SET unrecoverable_since = 'epoch',
+				unrecoverable_reason = CASE WHEN unrecoverable_since = 'epoch' THEN unrecoverable_reason ELSE $2 END
+			WHERE digest = $1`, sqlHash256(slabID), reason)
+		if err != nil {
+			return fmt.Errorf("failed to mark slab unrecoverable: %w", err)
+		} else if res.RowsAffected() == 0 {
+			return slabs.ErrSlabNotFound
+		}
+		return nil
+	})
+}
+
+// RecordFailedSlabRecovery records a failed recovery of the slab's shards and
+// reports whether it marked the slab unrecoverable. Failures only count while
+// fewer than MinShards of the slab's sectors are stored on a host, and mark
+// the slab unrecoverable once they have for [slabs.RecoveryWindow].
+func (s *Store) RecordFailedSlabRecovery(slabID slabs.SlabID, reason string) (unrecoverable bool, err error) {
+	err = s.transaction(func(ctx context.Context, tx *txn) error {
+		unrecoverable = false // reset on retry
+		err := tx.QueryRow(ctx, `
+			WITH slab AS (
+				SELECT s.id, (
+					SELECT COUNT(*)
+					FROM slab_sectors ss
+					INNER JOIN sectors sec ON sec.id = ss.sector_id
+					WHERE ss.slab_id = s.id AND sec.host_id IS NOT NULL
+				) < s.min_shards AS below_min_shards
+				FROM slabs s
+				WHERE s.digest = $1
+			), updated AS (
+				UPDATE slabs s
+				SET unrecoverable_since = CASE WHEN slab.below_min_shards THEN COALESCE(s.unrecoverable_since, NOW()) END,
+					unrecoverable_reason = CASE WHEN slab.below_min_shards AND s.unrecoverable_since <= $2 THEN $3 END
+				FROM slab
+				WHERE s.id = slab.id AND s.unrecoverable_reason IS NULL AND (slab.below_min_shards OR s.unrecoverable_since IS NOT NULL)
+				RETURNING s.unrecoverable_reason IS NOT NULL AS unrecoverable
+			)
+			SELECT COALESCE((SELECT unrecoverable FROM updated), FALSE) FROM slab`,
+			sqlHash256(slabID), time.Now().Add(-slabs.RecoveryWindow), reason).Scan(&unrecoverable)
+		if errors.Is(err, sql.ErrNoRows) {
+			return slabs.ErrSlabNotFound
+		} else if err != nil {
+			return fmt.Errorf("failed to record failed slab recovery: %w", err)
+		}
+		return nil
+	})
+	return
+}
+
+// repairBackoff returns minRepairBackoff * 2^n capped at maxRepairBackoff.
+func repairBackoff(n int) time.Duration {
+	// return the cap before the shift can overflow
+	if n < 0 || n >= 63 || minRepairBackoff > maxRepairBackoff>>n {
+		return maxRepairBackoff
+	}
+	return minRepairBackoff << n
+}
+
 // MarkSlabRepaired marks the slab as repaired or increments the failed repair
 // count. If the repair was successful, the consecutive_failed_repairs counter
 // is reset to zero. If the repair failed, the counter is incremented and the
-// next repair attempt time is set using exponential backoff.
+// next repair attempt time is set using exponential backoff. Either way, the
+// slab's recovery window is reset.
 func (s *Store) MarkSlabRepaired(slabID slabs.SlabID, success bool) error {
 	return s.transaction(func(ctx context.Context, tx *txn) error {
 		if success {
-			if res, err := tx.Exec(ctx, `UPDATE slabs SET consecutive_failed_repairs = 0 WHERE digest = $1`, sqlHash256(slabID)); err != nil {
+			if res, err := tx.Exec(ctx, `
+				UPDATE slabs
+				SET consecutive_failed_repairs = 0,
+					unrecoverable_since = CASE WHEN unrecoverable_since = 'epoch' THEN unrecoverable_since END,
+					unrecoverable_reason = CASE WHEN unrecoverable_since = 'epoch' THEN unrecoverable_reason END
+				WHERE digest = $1`, sqlHash256(slabID)); err != nil {
 				return fmt.Errorf("failed to mark slab as repaired: %w", err)
 			} else if res.RowsAffected() == 0 {
 				return slabs.ErrSlabNotFound
@@ -41,11 +117,12 @@ func (s *Store) MarkSlabRepaired(slabID slabs.SlabID, success bool) error {
 			return fmt.Errorf("failed to fetch repair state: %w", err)
 		}
 
-		nextRepairBackoff := min(minRepairBackoff*time.Duration(1<<(currentFailures)), maxRepairBackoff)
 		_, err = tx.Exec(ctx, `
 			UPDATE slabs
-			SET consecutive_failed_repairs = $2, next_repair_attempt = $3
-			WHERE digest = $1`, sqlHash256(slabID), currentFailures+1, time.Now().Add(nextRepairBackoff))
+			SET consecutive_failed_repairs = $2, next_repair_attempt = $3,
+				unrecoverable_since = CASE WHEN unrecoverable_since = 'epoch' THEN unrecoverable_since END,
+				unrecoverable_reason = CASE WHEN unrecoverable_since = 'epoch' THEN unrecoverable_reason END
+			WHERE digest = $1`, sqlHash256(slabID), min(currentFailures+1, math.MaxInt16), time.Now().Add(repairBackoff(currentFailures)))
 		if err != nil {
 			return fmt.Errorf("failed to update repair state: %w", err)
 		}
@@ -155,7 +232,8 @@ ORDER BY ss.slab_index ASC`, dbID)
 }
 
 // PruneSlabs unpins all of a user's slabs that are not currently connected to
-// an object. Only slabs pinned before cutoff are eligible. The unpinned slabs
+// an object, including unused space pins owned by or uploaded by the account.
+// Only slabs pinned before cutoff are eligible. The unpinned slabs
 // and their sectors are queued for deletion by PruneDeletedSlabs rather than
 // removed inline.
 func (s *Store) PruneSlabs(account proto.Account, cutoff time.Time) error {
@@ -186,7 +264,22 @@ WHERE a.account_id = $1
 		WHERE o.account_id = a.account_id
 		AND os.slab_digest = s.digest
 	)
-ORDER BY a.slab_id
+	AND NOT EXISTS (
+		SELECT 1 FROM spaces sp
+		JOIN space_objects o ON o.space_id = sp.id
+		JOIN space_object_slabs os ON os.object_id = o.id
+		WHERE sp.owner_account_id = a.account_id AND os.slab_digest = s.digest
+	)
+UNION
+SELECT s.id FROM slabs s
+JOIN space_slabs p ON p.slab_id = s.id
+WHERE (p.account_id = $1 OR p.uploader_account_id = $1) AND s.id > $2 AND s.pinned_at < $3
+	AND NOT EXISTS (
+		SELECT 1 FROM space_objects o
+		JOIN space_object_slabs os ON os.object_id = o.id
+		WHERE o.space_id = p.space_id AND os.slab_digest = s.digest
+	)
+ORDER BY id
 LIMIT $4
 `, id, cursor, cutoff, limit)
 		if err != nil {
@@ -214,7 +307,41 @@ LIMIT $4
 			}
 			nextCursor = candidates[len(candidates)-1]
 
-			return s.unpinUnreferencedSlabs(ctx, tx, id, candidates, &cutoff)
+			if err := lockSlabs(ctx, tx, candidates); err != nil {
+				return err
+			}
+			rows, err := tx.Query(ctx, `DELETE FROM space_slabs p USING slabs s
+WHERE (p.account_id = $1 OR p.uploader_account_id = $1) AND p.slab_id = s.id AND s.id = ANY($2)
+	AND s.pinned_at < $3
+	AND NOT EXISTS (
+		SELECT 1 FROM space_objects o
+		JOIN space_object_slabs os ON os.object_id = o.id
+		WHERE o.space_id = p.space_id AND os.slab_digest = s.digest
+	) RETURNING p.account_id, p.slab_id`, id, candidates, cutoff)
+			if err != nil {
+				return fmt.Errorf("failed to prune unused space slabs: %w", err)
+			}
+			slabsByOwner := make(map[int64][]int64)
+			owners, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (int64, error) {
+				var ownerID, slabID int64
+				if err := row.Scan(&ownerID, &slabID); err != nil {
+					return 0, err
+				}
+				slabsByOwner[ownerID] = append(slabsByOwner[ownerID], slabID)
+				return ownerID, nil
+			})
+			if err != nil {
+				return fmt.Errorf("failed to collect space slab owners: %w", err)
+			}
+			slabsByOwner[id] = candidates
+			owners = append(owners, id)
+			slices.Sort(owners)
+			for _, ownerID := range slices.Compact(owners) {
+				if err := s.unpinUnreferencedSlabs(ctx, tx, ownerID, slabsByOwner[ownerID], &cutoff); err != nil {
+					return err
+				}
+			}
+			return nil
 		})
 		if err != nil {
 			return err

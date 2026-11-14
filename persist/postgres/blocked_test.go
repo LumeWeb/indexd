@@ -3,6 +3,7 @@ package postgres
 import (
 	"errors"
 	"math"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -105,6 +106,10 @@ func TestBlockedObjectAccess(t *testing.T) {
 		t.Fatal(err)
 	} else if _, err := store.SharedObject(key); err != nil {
 		t.Fatal(err)
+	} else if page, err := store.ObjectSlabs(acc, key, 0, 10); err != nil {
+		t.Fatal(err)
+	} else if len(page) == 0 {
+		t.Fatal("expected the object's slabs")
 	}
 
 	if err := store.BlockObject(key, "dmca"); err != nil {
@@ -114,6 +119,8 @@ func TestBlockedObjectAccess(t *testing.T) {
 	if _, err := store.Object(acc, key); !errors.Is(err, slabs.ErrObjectBlocked) {
 		t.Fatalf("expected ErrObjectBlocked, got %v", err)
 	} else if _, err := store.SharedObject(key); !errors.Is(err, slabs.ErrObjectBlocked) {
+		t.Fatalf("expected ErrObjectBlocked, got %v", err)
+	} else if _, err := store.ObjectSlabs(acc, key, 0, 10); !errors.Is(err, slabs.ErrObjectBlocked) {
 		t.Fatalf("expected ErrObjectBlocked, got %v", err)
 	}
 
@@ -134,6 +141,10 @@ func TestBlockedObjectAccess(t *testing.T) {
 		t.Fatal(err)
 	} else if got.ID() != key {
 		t.Fatalf("expected object %v, got %v", key, got.ID())
+	} else if page, err := store.ObjectSlabs(acc, key, 0, 10); err != nil {
+		t.Fatal(err)
+	} else if !reflect.DeepEqual(page, got.Slabs) {
+		t.Fatalf("expected slabs %+v, got %+v", got.Slabs, page)
 	}
 }
 
@@ -151,17 +162,31 @@ func TestBlockedObjectsHiddenFromListing(t *testing.T) {
 		objs[i] = store.pinTestObject(t, acc, hk)
 	}
 
-	// listAll pages through every event two at a time
+	// listAll publishes pending events and pages through them two at a time,
+	// asserting the listing without slabs selects the same events
 	listAll := func() []slabs.ObjectEvent {
 		t.Helper()
-		awaitEventSecond(t)
+		store.publishEvents(t)
+
 		var all []slabs.ObjectEvent
 		var cursor slabs.Cursor
 		for {
 			events, err := store.ListObjects(acc, cursor, 2)
 			if err != nil {
 				t.Fatal(err)
-			} else if len(events) == 0 {
+			}
+			withoutSlabs, err := store.ListObjectsWithoutSlabs(acc, cursor, 2)
+			if err != nil {
+				t.Fatal(err)
+			} else if len(withoutSlabs) != len(events) {
+				t.Fatalf("expected %d object events, got %d", len(events), len(withoutSlabs))
+			}
+			for i, event := range withoutSlabs {
+				if event.Key != events[i].Key {
+					t.Fatalf("expected object key %v, got %v", events[i].Key, event.Key)
+				}
+			}
+			if len(events) == 0 {
 				return all
 			}
 			all = append(all, events...)
@@ -200,9 +225,8 @@ func TestBlockedObjectsHiddenFromListing(t *testing.T) {
 		}
 	}
 
-	// unblocking bumps the event timestamps so a caught-up client sees the
-	// objects again. The bump has to advance even when the unblock lands in the
-	// same second as the last event.
+	// unblocking republishes the events so a caught-up client sees the objects
+	// again, at positions past the one its cursor rests on
 	for _, b := range blocked {
 		if err := store.UnblockObject(b); err != nil {
 			t.Fatal(err)
@@ -247,11 +271,8 @@ func TestUnblockObjectVisibleToLiveCursor(t *testing.T) {
 	}
 
 	// park a cursor on the live object, all a client can see for now
-	awaitEventSecond(t)
-	events, err := store.ListObjects(acc, slabs.Cursor{}, 10)
-	if err != nil {
-		t.Fatal(err)
-	} else if len(events) != 1 {
+	events := store.listEvents(t, acc, slabs.Cursor{})
+	if len(events) != 1 {
 		t.Fatalf("expected 1 visible object, got %d", len(events))
 	} else if events[0].Key != live {
 		t.Fatalf("expected live object %v, got %v", live, events[0].Key)
@@ -262,11 +283,8 @@ func TestUnblockObjectVisibleToLiveCursor(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	awaitEventSecond(t)
-	events, err = store.ListObjects(acc, cursor, 10)
-	if err != nil {
-		t.Fatal(err)
-	} else if len(events) != 1 {
+	events = store.listEvents(t, acc, cursor)
+	if len(events) != 1 {
 		t.Fatalf("expected unblocked object %v to be visible from the parked cursor, got %d events", blocked, len(events))
 	} else if events[0].Key != blocked {
 		t.Fatalf("expected unblocked object %v, got %v", blocked, events[0].Key)
@@ -284,6 +302,29 @@ func TestBlockedSharedObjects(t *testing.T) {
 	store.addTestContract(t, hk)
 
 	sharingKey := store.addTestSharingKey(t, acc, "share")
+
+	// listAll lists all of the sharing key's objects, asserting the listing
+	// without slabs selects the same objects
+	listAll := func() []slabs.SealedObject {
+		t.Helper()
+
+		objects, err := store.SharedObjects(sharingKey, 0, math.MaxInt16)
+		if err != nil {
+			t.Fatal(err)
+		}
+		withoutSlabs, err := store.SharedObjectsWithoutSlabs(sharingKey, 0, math.MaxInt16)
+		if err != nil {
+			t.Fatal(err)
+		} else if len(withoutSlabs) != len(objects) {
+			t.Fatalf("expected %d shared objects, got %d", len(objects), len(withoutSlabs))
+		}
+		for i, obj := range withoutSlabs {
+			if obj.ObjectID != objects[i].ID() {
+				t.Fatalf("expected object ID %v, got %v", objects[i].ID(), obj.ObjectID)
+			}
+		}
+		return objects
+	}
 
 	const n = 4
 	objs := make([]slabs.SealedObject, n)
@@ -317,13 +358,13 @@ func TestBlockedSharedObjects(t *testing.T) {
 	}
 
 	// paging to the end returns one object fewer than before
-	if shared, err := store.SharedObjects(sharingKey, 0, math.MaxInt16); err != nil {
-		t.Fatal(err)
-	} else if len(shared) != n-1 {
+	if shared := listAll(); len(shared) != n-1 {
 		t.Fatalf("expected %d shared objects, got %d", n-1, len(shared))
 	}
 
 	if _, err := store.SharingKeyObject(sharingKey, blockedKey); !errors.Is(err, slabs.ErrObjectBlocked) {
+		t.Fatalf("expected ErrObjectBlocked, got %v", err)
+	} else if _, err := store.SharingKeyObjectSlabs(sharingKey, blockedKey, 0, 10); !errors.Is(err, slabs.ErrObjectBlocked) {
 		t.Fatalf("expected ErrObjectBlocked, got %v", err)
 	}
 
@@ -341,12 +382,14 @@ func TestBlockedSharedObjects(t *testing.T) {
 	// blocking does not touch the key's totals
 	assertKeyTotals(t, store, sharingKey, total.ObjectCount, total.ObjectSize, total.PinnedData, total.PinnedSize)
 
-	// unblocking restores the listing
+	// unblocking restores the listing and the object's slabs
 	if err := store.UnblockObject(blockedKey); err != nil {
 		t.Fatal(err)
-	} else if shared, err := store.SharedObjects(sharingKey, 0, math.MaxInt16); err != nil {
-		t.Fatal(err)
-	} else if len(shared) != n {
+	} else if shared := listAll(); len(shared) != n {
 		t.Fatalf("expected %d shared objects, got %d", n, len(shared))
+	} else if page, err := store.SharingKeyObjectSlabs(sharingKey, blockedKey, 0, 10); err != nil {
+		t.Fatal(err)
+	} else if slabs.ObjectID(page) != blockedKey {
+		t.Fatalf("expected the object's slabs, got %+v", page)
 	}
 }

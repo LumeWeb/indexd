@@ -37,6 +37,7 @@ import (
 	"go.sia.tech/indexd/pins"
 	"go.sia.tech/indexd/sharing"
 	"go.sia.tech/indexd/slabs"
+	"go.sia.tech/indexd/spaces"
 	"go.sia.tech/indexd/stats"
 	"go.sia.tech/indexd/subscriber"
 	"go.sia.tech/jape"
@@ -78,11 +79,9 @@ func runRootCmd(ctx context.Context, cfg config.Config, walletKey types.PrivateK
 	}
 
 	var dbstore *chain.DBStore
+	// a prune target of 0 explicitly disables pruning
 	minPruneTarget := uint64(6 * time.Hour / network.BlockInterval)
-	if instantSync && cfg.Consensus.PruneTarget == 0 {
-		// default to 6 hours of blocks
-		cfg.Consensus.PruneTarget = minPruneTarget
-	} else if cfg.Consensus.PruneTarget > 0 && cfg.Consensus.PruneTarget < minPruneTarget {
+	if cfg.Consensus.PruneTarget > 0 && cfg.Consensus.PruneTarget < minPruneTarget {
 		return fmt.Errorf("prune target must be at least %d blocks (6 hours)", minPruneTarget)
 	}
 
@@ -228,7 +227,7 @@ func runRootCmd(ctx context.Context, cfg config.Config, walletKey types.PrivateK
 	client := client.New(client.NewProvider(hosts.NewHostStore(store)), log.Named("client"))
 
 	alerter := alerts.NewManager()
-	hm, err := hosts.NewManager(s, locator, client, store, alerter, hosts.WithLogger(log.Named("hosts")))
+	hm, err := hosts.NewManager(locator, client, store, alerter, hosts.WithLogger(log.Named("hosts")))
 	if err != nil {
 		return fmt.Errorf("failed to create host manager: %w", err)
 	}
@@ -267,6 +266,7 @@ func runRootCmd(ctx context.Context, cfg config.Config, walletKey types.PrivateK
 		return fmt.Errorf("failed to create sharing manager: %w", err)
 	}
 	defer sharing.Close()
+	spaces := spaces.NewManager(store)
 
 	subscriber, err := subscriber.New(cm, hm, contracts, wm, store,
 		subscriber.WithLogger(log.Named("subscriber")),
@@ -295,7 +295,13 @@ func runRootCmd(ctx context.Context, cfg config.Config, walletKey types.PrivateK
 		adminAPIOpts = append(adminAPIOpts, admin.WithExplorer(e))
 	}
 
-	pm, err := pins.NewManager(e, hm, store, pins.WithLogger(log.Named("pins")))
+	// only pass the explorer if it is enabled, otherwise the nil pointer would
+	// be wrapped in a non-nil interface
+	var pinExplorer pins.Explorer
+	if e != nil {
+		pinExplorer = e
+	}
+	pm, err := pins.NewManager(pinExplorer, hm, store, pins.WithLogger(log.Named("pins")))
 	if err != nil {
 		return fmt.Errorf("failed to create pins manager: %w", err)
 	}
@@ -342,7 +348,7 @@ func runRootCmd(ctx context.Context, cfg config.Config, walletKey types.PrivateK
 		}
 	}
 
-	appHandler, err := app.NewAPI(advertiseURL, hm, am, contracts, slabs, sharing, appAPIOpts...)
+	appHandler, err := app.NewAPI(advertiseURL, hm, am, contracts, slabs, sharing, spaces, appAPIOpts...)
 	if err != nil {
 		return fmt.Errorf("failed to create application API: %w", err)
 	}

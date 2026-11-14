@@ -43,10 +43,13 @@ func NewClient(addr, password string) *Client {
 }
 
 // AppConnectKeys retrieves a paginated list of application connection keys.
-func (c *Client) AppConnectKeys(ctx context.Context, offset, limit int) (keys []accounts.ConnectKey, err error) {
+func (c *Client) AppConnectKeys(ctx context.Context, offset, limit int, opts ...api.URLQueryParameterOption) (keys []accounts.ConnectKey, err error) {
 	values := url.Values{}
 	values.Set("offset", fmt.Sprintf("%d", offset))
 	values.Set("limit", fmt.Sprintf("%d", limit))
+	for _, opt := range opts {
+		opt(values)
+	}
 	err = c.c.GET(ctx, "/apps/connect/keys?"+values.Encode(), &keys)
 	return
 }
@@ -353,6 +356,18 @@ func (c *Client) HostsBlocklistRemove(ctx context.Context, hostKey types.PublicK
 	return
 }
 
+// ObjectAccounts returns the accounts that have pinned an object with the given
+// key, along with their connect keys. Space pins include the space key and its
+// owner's account.
+func (c *Client) ObjectAccounts(ctx context.Context, objectKey types.Hash256, opts ...api.URLQueryParameterOption) (objectAccounts []slabs.ObjectAccount, err error) {
+	values := url.Values{}
+	for _, opt := range opts {
+		opt(values)
+	}
+	err = c.c.GET(ctx, fmt.Sprintf("/object/%s/accounts?%s", objectKey, values.Encode()), &objectAccounts)
+	return
+}
+
 // ObjectsBlocklist returns the objects on the blocklist.
 func (c *Client) ObjectsBlocklist(ctx context.Context, opts ...api.URLQueryParameterOption) (blocklist []slabs.BlockedObject, err error) {
 	values := url.Values{}
@@ -521,6 +536,12 @@ func (c *Client) StatsHostsDetailed(ctx context.Context, offset, limit int) (res
 	values.Set("offset", fmt.Sprintf("%d", offset))
 	values.Set("limit", fmt.Sprintf("%d", limit))
 	err = c.c.GET(ctx, "/stats/hosts/detailed?"+values.Encode(), &resp)
+	return
+}
+
+// StatsObjects returns statistics about the objects tracked by the indexer.
+func (c *Client) StatsObjects(ctx context.Context) (resp ObjectStatsResponse, err error) {
+	err = c.c.GET(ctx, "/stats/objects", &resp)
 	return
 }
 

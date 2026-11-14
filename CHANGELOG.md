@@ -1,3 +1,146 @@
+## 0.6.3 (2026-10-30)
+
+### Fixes
+
+- Add endpoint to get accounts who pinned an object
+
+#### Fix admin API spec mismatches
+
+The admin OpenAPI spec now matches what the API sends and accepts. Protocol versions are strings like `v1.2.3`, the hosts blocklist request uses `hostKeys` and its Go example passes reasons as a slice, the lost sectors reset route is `/host/{hostkey}/lostsectors/reset`, `/state` includes `syncHeight`, hosts include `accountFunding`, `totalSpent`, and `stuckSince` instead of `fundsSpent` and report `recentUptime` as a number, account stats include `pinnedData` and `pinnedSize`, and detailed host stats include `protocolVersion` and `release`.
+
+#### Update coreutils
+
+Update `go.sia.tech/coreutils` to v0.25.3.
+
+## 0.6.2 (2026-10-26)
+
+### Fixes
+
+- Fix panic when updating pinned settings with the explorer disabled
+- The app authorization page draws its logo itself instead of loading it from sia.tech
+
+#### Fix blocking hosts that are not in the hosts table
+
+Blocking a host that indexd has not seen yet no longer fails when no reasons are given, and blocking it again now merges the new reasons with the existing ones instead of replacing them.
+
+## 0.6.1 (2026-10-08)
+
+### Features
+
+- Implement sparse object listing for sharing API
+
+#### Report object size when listing objects without slabs
+
+Object events and objects listed without their slabs (`includeslabs=false` on
+`GET /objects`, `GET /sharing/:key/objects`, and `GET /shared/objects`) now
+include the object's logical `size` in bytes, so callers no longer need to page
+through every slab slice to learn how large an object is. The size is stored
+when the object is pinned and existing objects are backfilled by a database
+migration.
+
+`SealedObjectWithoutSlabs` gains a `Size` field, and `SealedObject` and
+`PinObjectRequest` gain a `Size()` method that sums their slab slice lengths.
+
+### Fixes
+
+- Don't scan offline hosts more than once per hour after enough consecutive failures
+- Fix parallel host scanning
+- Interleave remote migration passes so workers don't idle behind the slowest slab of a pass
+- Limit concurrent account funding to 10 hosts
+
+#### Skip fully attached pools when looking for pending pool attachments
+
+Funding no longer rescans every account of every pool on every host each cycle, only pools that gained accounts since they were last fully attached.
+
+## 0.6.0 (2026-09-28)
+
+### Breaking Changes
+
+#### Negotiate CBOR responses on every app endpoint
+
+Every application API endpoint that returns a body now returns CBOR when the
+request's `Accept` header names `application/cbor`, and JSON otherwise. The
+negotiated responses set `Vary: Accept`. The Sia binary encoding previously
+served for `Accept: application/octet-stream` has been replaced, so
+`slabs.PinnedSlab` no longer implements `types.EncoderTo` and
+`types.DecoderFrom`.
+
+### Features
+
+- Add object listing without slab slices and object slab-slice pagination
+- Track file contract tax
+
+#### Prune node by default
+
+The consensus prune target now defaults to a week of blocks (1008) when it is
+not set in the config file. Setting `consensus.pruneTarget` to 0 explicitly
+disables pruning.
+
+### Fixes
+
+- Don't validate an existing slab's bad hosts count when pinning
+- Only rebind a lost sector to a host with a good contract
+- Reset a sector's failed integrity checks when it is rebound to a host
+
+#### Fix funding backoff overflow
+
+Fixed the account and pool funding backoff overflowing after ~28 consecutive failures, which caused funding to spin on a single failing host and stall funding for all other hosts.
+
+#### Fix object events being skipped by the cursor
+
+An event now takes its position in the stream from a background publisher rather
+than from the transaction that wrote it, so a slow commit can no longer land
+behind a cursor that has already moved on. Clients need no update, though an
+event normally becomes visible within two seconds of the write instead of
+within the same second.
+
+#### Fix offline detection
+
+Determine indexer connectivity by probing known external sites instead of relying
+on syncer peers, which can remain connected while offline. Cache connectivity
+results for 30 seconds to avoid excessive probes during host scans.
+
+#### Mark slabs unrecoverable after 30 days of failed recovery
+
+A slab is marked unrecoverable once its shards have failed to recover for 30
+days while fewer than MinShards of its sectors are stored on a host. A
+successful recovery resets the window, even if uploading the recovered shards
+fails.
+
+#### Require RHP 5.1.0 hosts by default
+
+A new deployment initializes `MinProtocolVersion` at 5.1.0 rather than 5.0.2, so
+a host needs balance pool support to pass the default usability check. Existing
+deployments keep the minimum already stored in their settings.
+
+## 0.5.0 (2026-09-09)
+
+### Breaking Changes
+
+- ReadSector takes an account token instead of an account key.
+
+### Features
+
+#### Exclude unrecoverable slabs from repairs
+
+A shard that doesn't hash to its pinned root after being reconstructed from its
+peers can never be migrated, so the slab it belongs to is now marked
+unrecoverable with a reason and taken out of the repair rotation instead of
+being retried forever. Such a mismatch no longer interrupts the migration
+either: the slab's remaining shards finish migrating first.
+
+Two metrics were added to track slab repair health:
+`indexd_num_unrecoverable_slabs` and `indexd_num_stuck_slabs`, the latter
+counting slabs that failed more than one consecutive repair attempt and are
+still being retried. Both are maintained by a trigger and reported by
+`GET /stats/sectors`.
+
+### Fixes
+
+- Raise contract growth-rate funding bounds to 256 GiB minimum and 1 TiB maximum
+- Reject sectors that have been uploaded more than the temporary storage duration ago
+- Remove the remote migration worker's exponential backoff and pause between productive passes
+
 ## 0.4.4 (2026-08-21)
 
 ### Features

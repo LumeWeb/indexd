@@ -17,7 +17,7 @@ const (
 	NonceSize = 32
 	// EncryptionKeySize is the length of a sealed encryption key (xchacha20
 	// nonce + key + tag).
-	EncryptionKeySize = 72
+	EncryptionKeySize = slabs.EncryptionKeySize
 	// MaxDescriptionSize is the maximum length of a sharing key description.
 	MaxDescriptionSize = 1024
 	// MaxMetadataSize is the maximum length of a shared object's encrypted
@@ -98,6 +98,14 @@ type (
 		EncryptedMetadataKey []byte          `json:"encryptedMetadataKey,omitempty"`
 		EncryptedMetadata    []byte          `json:"encryptedMetadata,omitempty"`
 		MetadataSignature    types.Signature `json:"metadataSignature"`
+	}
+
+	// An ObjectWithoutSlabs is an object attached to a sharing key without its
+	// slabs, which are paginated separately. The object ID can not be derived
+	// without the slabs, so it is returned alongside the object.
+	ObjectWithoutSlabs struct {
+		ObjectID types.Hash256 `json:"objectID"`
+		slabs.SealedObjectWithoutSlabs
 	}
 )
 
