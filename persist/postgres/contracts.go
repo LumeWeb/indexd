@@ -843,28 +843,21 @@ func (s *Store) PrunableContractRoots(contractID types.FileContractID, roots []t
 	if err := s.transaction(func(ctx context.Context, tx *txn) error {
 		prunable = prunable[:0] // reuse same slice if transaction retries
 
-		var wantedCSMID *int64
-		err := tx.QueryRow(ctx, `SELECT id FROM contract_sectors_map WHERE contract_id = $1`, sqlHash256(contractID)).Scan(&wantedCSMID)
-		if err != nil {
-			return fmt.Errorf("failed to fetch contract sectors map ID: %w", err)
-		}
-
-		var wantedHostID int64
-		err = tx.QueryRow(ctx, `
-			SELECT host_id FROM contracts WHERE contract_id = $1
-		`, sqlHash256(contractID)).Scan(&wantedHostID)
+		var wantedHostID, wantedCSMID int64
+		err := tx.QueryRow(ctx, `
+			SELECT c.host_id, csm.id
+			FROM contract_sectors_map csm
+			INNER JOIN contracts c ON c.contract_id = csm.contract_id
+			WHERE csm.contract_id = $1
+		`, sqlHash256(contractID)).Scan(&wantedHostID, &wantedCSMID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("contract %q: %w", contractID, contracts.ErrNotFound)
 		} else if err != nil {
-			return fmt.Errorf("failed to fetch contract host ID: %w", err)
+			return fmt.Errorf("failed to fetch contract host and sectors map ID: %w", err)
 		}
 
-		rows, err := tx.Query(ctx, `
-			SELECT s.sector_root
-			FROM sectors s
-			WHERE s.sector_root = ANY($1)
-			AND (s.contract_sectors_map_id = $2 OR (s.host_id = $3 AND s.contract_sectors_map_id IS NULL))
-       `, sqlRoots, wantedCSMID, wantedHostID)
+		// filter in Go so the planner can only use the sector_root index
+		rows, err := tx.Query(ctx, `SELECT sector_root, contract_sectors_map_id, host_id FROM sectors WHERE sector_root = ANY($1)`, sqlRoots)
 		if err != nil {
 			return fmt.Errorf("failed to fetch prunable contract roots: %w", err)
 		}
@@ -873,10 +866,15 @@ func (s *Store) PrunableContractRoots(contractID types.FileContractID, roots []t
 		lookup := make(map[sqlHash256]struct{})
 		for rows.Next() {
 			var root sqlHash256
-			if err := rows.Scan(&root); err != nil {
+			var csmID, hostID *int64
+			if err := rows.Scan(&root, &csmID, &hostID); err != nil {
 				return fmt.Errorf("failed to scan root: %w", err)
 			}
-			lookup[root] = struct{}{}
+			pinnedToContract := csmID != nil && *csmID == wantedCSMID
+			unpinnedOnHost := csmID == nil && hostID != nil && *hostID == wantedHostID
+			if pinnedToContract || unpinnedOnHost {
+				lookup[root] = struct{}{}
+			}
 		}
 		if err := rows.Err(); err != nil {
 			return fmt.Errorf("failed to iterate over rows: %w", err)
