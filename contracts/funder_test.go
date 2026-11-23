@@ -3,6 +3,7 @@ package contracts
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -22,9 +23,9 @@ type (
 	}
 
 	funderRpcResult struct {
-		res    rhp.RPCReplenishAccountsResult
-		funded int
-		err    error
+		revision types.V2FileContract
+		funded   int
+		err      error
 	}
 )
 
@@ -36,15 +37,19 @@ func (h *funderHostClientMock) ReplenishAccounts(ctx context.Context, signer rhp
 	if !ok {
 		panic("unexpected contract ID in mock")
 	}
-	return res.res, res.err
+	return rhp.RPCReplenishAccountsResult{Revision: res.revision}, res.err
 }
 
 func (h *funderHostClientMock) AttachPools(_ context.Context, _ types.PublicKey, _ []rhp.PoolAttachInput, _ time.Duration) error {
 	return nil
 }
 
-func (h *funderHostClientMock) ReplenishPools(_ context.Context, _ rhp.ContractSigner, _ client.ChainManager, _ rhp.RPCReplenishPoolsParams) (rhp.RPCReplenishPoolsResult, error) {
-	return rhp.RPCReplenishPoolsResult{}, nil
+func (h *funderHostClientMock) ReplenishPools(_ context.Context, _ rhp.ContractSigner, _ client.ChainManager, params rhp.RPCReplenishPoolsParams) (rhp.RPCReplenishPoolsResult, error) {
+	res, ok := h.results[params.Contract.ID]
+	if !ok {
+		panic("unexpected contract ID in mock")
+	}
+	return rhp.RPCReplenishPoolsResult{Revision: res.revision}, res.err
 }
 
 type mockChainManager struct{}
@@ -106,17 +111,17 @@ func TestFunder(t *testing.T) {
 	hc.results[types.FileContractID{2}] = funderRpcResult{err: ErrContractNotRevisable}
 	hc.results[types.FileContractID{3}] = funderRpcResult{err: errors.New("failed to replenish accounts")}
 	hc.results[types.FileContractID{4}] = funderRpcResult{
-		res:    rhp.RPCReplenishAccountsResult{Revision: types.V2FileContract{RenterOutput: types.SiacoinOutput{Value: target.Sub(types.NewCurrency64(1))}}},
-		funded: 1,
+		revision: types.V2FileContract{RenterOutput: types.SiacoinOutput{Value: target.Sub(types.NewCurrency64(1))}},
+		funded:   1,
 	}
 	hc.results[types.FileContractID{5}] = funderRpcResult{
-		res:    rhp.RPCReplenishAccountsResult{Revision: types.V2FileContract{RenterOutput: types.SiacoinOutput{Value: target}}},
-		funded: 1,
+		revision: types.V2FileContract{RenterOutput: types.SiacoinOutput{Value: target}},
+		funded:   1,
 	}
 	hc.results[types.FileContractID{6}] = hc.results[types.FileContractID{5}]
 	hc.results[types.FileContractID{7}] = funderRpcResult{
-		res:    rhp.RPCReplenishAccountsResult{Revision: types.V2FileContract{RenterOutput: types.SiacoinOutput{Value: target}}},
-		funded: len(accs) - 1,
+		revision: types.V2FileContract{RenterOutput: types.SiacoinOutput{Value: target}},
+		funded:   len(accs) - 1,
 	}
 
 	// prepare funder
@@ -125,62 +130,210 @@ func TestFunder(t *testing.T) {
 	f := NewFunder(hc, cl, rev, nil, &mockChainManager{}, zap.NewNop())
 
 	// assert contract is marked as drained if it is out of funds
-	funded, drained, _, err := f.FundAccounts(context.Background(), host, []types.FileContractID{{1}}, accs, target, zap.NewNop())
+	res, err := f.FundAccounts(context.Background(), host, []types.FileContractID{{1}}, accs, target, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
-	} else if funded != 0 {
-		t.Fatal("expected no funded accounts, got", funded)
-	} else if drained != 1 {
-		t.Fatal("expected 1 drained contract, got", drained)
+	} else if res.Funded != 0 {
+		t.Fatal("expected no funded accounts, got", res.Funded)
+	} else if !slices.Equal(res.Drained, []types.FileContractID{{1}}) {
+		t.Fatal("expected contract 1 to be drained, got", res.Drained)
 	}
 
 	// assert contract is marked as drained if it is not revisable
-	funded, drained, _, err = f.FundAccounts(context.Background(), host, []types.FileContractID{{2}}, accs, target, zap.NewNop())
+	res, err = f.FundAccounts(context.Background(), host, []types.FileContractID{{2}}, accs, target, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
-	} else if funded != 0 {
-		t.Fatal("expected no funded accounts, got", funded)
-	} else if drained != 1 {
-		t.Fatal("expected 1 drained contract, got", drained)
+	} else if res.Funded != 0 {
+		t.Fatal("expected no funded accounts, got", res.Funded)
+	} else if !slices.Equal(res.Drained, []types.FileContractID{{2}}) {
+		t.Fatal("expected contract 2 to be drained, got", res.Drained)
 	}
 
 	// assert contract is not marked as drained if replenish RPC fails
-	funded, drained, _, err = f.FundAccounts(context.Background(), host, []types.FileContractID{{3}}, accs, target, zap.NewNop())
+	res, err = f.FundAccounts(context.Background(), host, []types.FileContractID{{3}}, accs, target, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
-	} else if funded != 0 {
-		t.Fatal("expected no funded accounts, got", funded)
-	} else if drained != 0 {
-		t.Fatal("expected no drained contracts, got", drained)
+	} else if res.Funded != 0 {
+		t.Fatal("expected no funded accounts, got", res.Funded)
+	} else if len(res.Drained) != 0 {
+		t.Fatal("expected no drained contracts, got", res.Drained)
 	}
 
 	// assert contract is marked as drained if replenish RPC succeeds but leaves the contract with insufficient funds afterwards
-	funded, drained, _, err = f.FundAccounts(context.Background(), host, []types.FileContractID{{4}}, accs, target, zap.NewNop())
+	res, err = f.FundAccounts(context.Background(), host, []types.FileContractID{{4}}, accs, target, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
-	} else if funded != 1 {
-		t.Fatal("expected 1 funded account, got", funded)
-	} else if drained != 1 {
-		t.Fatal("expected drained 1 contract, got", drained)
+	} else if res.Funded != 1 {
+		t.Fatal("expected 1 funded account, got", res.Funded)
+	} else if !slices.Equal(res.Drained, []types.FileContractID{{4}}) {
+		t.Fatal("expected contract 4 to be drained, got", res.Drained)
 	}
 
 	// assert contracts are iterated and funded is updated until we run out of contracts
-	funded, drained, _, err = f.FundAccounts(context.Background(), host, []types.FileContractID{{5}, {6}}, accs, target, zap.NewNop())
+	res, err = f.FundAccounts(context.Background(), host, []types.FileContractID{{5}, {6}}, accs, target, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
-	} else if funded != 2 {
-		t.Fatal("expected 2 funded accounts, got", funded)
-	} else if drained != 0 {
-		t.Fatal("expected no drained contracts, got", drained)
+	} else if res.Funded != 2 {
+		t.Fatal("expected 2 funded accounts, got", res.Funded)
+	} else if len(res.Drained) != 0 {
+		t.Fatal("expected no drained contracts, got", res.Drained)
 	}
 
 	// assert contracts are iterated and funded is updated until we run out of accounts
-	funded, drained, _, err = f.FundAccounts(context.Background(), host, []types.FileContractID{{7}, {1}, {5}, {4}}, accs, target, zap.NewNop())
+	res, err = f.FundAccounts(context.Background(), host, []types.FileContractID{{7}, {1}, {5}, {4}}, accs, target, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
-	} else if funded != 3 {
-		t.Fatal("expected 3 funded accounts, got", funded)
-	} else if drained != 1 {
-		t.Fatal("expected 1 drained contract, got", drained) // both 1 and 4 would be drained, were it not we ran out of accounts to replenish
+	} else if res.Funded != 3 {
+		t.Fatal("expected 3 funded accounts, got", res.Funded)
+	} else if !slices.Equal(res.Drained, []types.FileContractID{{1}}) {
+		t.Fatal("expected contract 1 to be drained, got", res.Drained) // both 1 and 4 would be drained, were it not we ran out of accounts to replenish
 	}
+}
+
+// TestFunderLockedContracts asserts that FundAccounts and FundPools report
+// locked contracts separately from drained contracts and replenish failures.
+func TestFunderLockedContracts(t *testing.T) {
+	host := hosts.Host{PublicKey: types.PublicKey{1}}
+	target := types.Siacoins(1)
+	accs := []accounts.HostAccount{
+		{AccountKey: proto.Account{1}},
+		{AccountKey: proto.Account{2}},
+	}
+	pools := []accounts.HostPool{
+		{PoolKey: types.GeneratePrivateKey()},
+		{PoolKey: types.GeneratePrivateKey()},
+	}
+
+	// contract 1 is locked, contract 3 fails, contract 4 funds one account
+	// and is drained, contract 5 funds one account and contract 7 funds both
+	hc := &funderHostClientMock{results: make(map[types.FileContractID]funderRpcResult)}
+	hc.results[types.FileContractID{3}] = funderRpcResult{err: errors.New("failed to replenish")}
+	hc.results[types.FileContractID{4}] = funderRpcResult{revision: types.V2FileContract{RenterOutput: types.SiacoinOutput{Value: target.Sub(types.NewCurrency64(1))}}}
+	hc.results[types.FileContractID{5}] = funderRpcResult{revision: types.V2FileContract{RenterOutput: types.SiacoinOutput{Value: target}}}
+	hc.results[types.FileContractID{7}] = hc.results[types.FileContractID{5}]
+
+	// prepare funder
+	rev := NewRevisionManager(hc, &mockChainManager{}, &mockStore{target: target}, 1, zap.NewNop())
+	cl := NewContractLocker()
+	_, unlock, _ := cl.LockContract(t.Context(), types.FileContractID{1})
+	defer unlock()
+
+	defer func(d time.Duration) { fundLockTimeout = d }(fundLockTimeout)
+	fundLockTimeout = 10 * time.Millisecond
+	f := NewFunder(hc, cl, rev, nil, &mockChainManager{}, zap.NewNop())
+
+	for _, tc := range []struct {
+		name            string
+		contractIDs     []types.FileContractID
+		funded          int
+		drained         []types.FileContractID
+		replenishFailed bool
+	}{
+		{
+			name:        "funded then locked",
+			contractIDs: []types.FileContractID{{5}, {1}},
+			funded:      1,
+		},
+		{
+			name:        "locked then funded",
+			contractIDs: []types.FileContractID{{1}, {7}},
+			funded:      2,
+		},
+		{
+			name:        "locked and drained",
+			contractIDs: []types.FileContractID{{1}, {4}},
+			funded:      1,
+			drained:     []types.FileContractID{{4}},
+		},
+		{
+			name:            "locked and replenish failure",
+			contractIDs:     []types.FileContractID{{1}, {3}},
+			replenishFailed: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			check := func(t *testing.T, kind string, res FundResult) {
+				t.Helper()
+				if res.Funded != tc.funded {
+					t.Fatalf("expected %d funded %s, got %d", tc.funded, kind, res.Funded)
+				} else if !slices.Equal(res.Drained, tc.drained) {
+					t.Fatalf("expected drained contracts %v when funding %s, got %v", tc.drained, kind, res.Drained)
+				} else if res.ReplenishFailed != tc.replenishFailed {
+					t.Fatalf("expected ReplenishFailed to be %v when funding %s, got %v", tc.replenishFailed, kind, res.ReplenishFailed)
+				} else if !slices.Equal(res.Locked, []types.FileContractID{{1}}) {
+					t.Fatalf("expected contract 1 to be locked when funding %s, got %v", kind, res.Locked)
+				}
+			}
+
+			res, err := f.FundAccounts(context.Background(), host, tc.contractIDs, accs, target, zap.NewNop())
+			if err != nil {
+				t.Fatal(err)
+			}
+			check(t, "accounts", res)
+
+			res, err = f.FundPools(context.Background(), host, tc.contractIDs, pools, target, zap.NewNop())
+			if err != nil {
+				t.Fatal(err)
+			}
+			check(t, "pools", res)
+		})
+	}
+}
+
+func TestFunderLockWait(t *testing.T) {
+	host := hosts.Host{PublicKey: types.PublicKey{1}}
+	target := types.Siacoins(1)
+	accs := []accounts.HostAccount{{AccountKey: proto.Account{1}}}
+	pools := []accounts.HostPool{{PoolKey: types.GeneratePrivateKey()}}
+
+	fcid := types.FileContractID{1}
+	hc := &funderHostClientMock{results: make(map[types.FileContractID]funderRpcResult)}
+	hc.results[fcid] = funderRpcResult{revision: types.V2FileContract{RenterOutput: types.SiacoinOutput{Value: target}}}
+
+	rev := NewRevisionManager(hc, &mockChainManager{}, &mockStore{target: target}, 1, zap.NewNop())
+	cl := NewContractLocker()
+	f := NewFunder(hc, cl, rev, nil, &mockChainManager{}, zap.NewNop())
+
+	fund := func(ctx context.Context) (accRes, poolRes FundResult) {
+		t.Helper()
+		accRes, err := f.FundAccounts(ctx, host, []types.FileContractID{fcid}, accs, target, zap.NewNop())
+		if err != nil {
+			t.Fatal(err)
+		}
+		poolRes, err = f.FundPools(ctx, host, []types.FileContractID{fcid}, pools, target, zap.NewNop())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+
+	t.Run("released within timeout", func(t *testing.T) {
+		_, unlock, _ := cl.LockContract(t.Context(), fcid)
+		time.AfterFunc(50*time.Millisecond, unlock)
+
+		// assert the contract was waited on rather than reported as locked
+		accRes, poolRes := fund(t.Context())
+		if accRes.Funded != len(accs) || len(accRes.Locked) != 0 || accRes.ReplenishFailed {
+			t.Fatalf("expected all accounts to be funded, got %+v", accRes)
+		} else if poolRes.Funded != len(pools) || len(poolRes.Locked) != 0 || poolRes.ReplenishFailed {
+			t.Fatalf("expected all pools to be funded, got %+v", poolRes)
+		}
+	})
+
+	t.Run("interrupted while waiting", func(t *testing.T) {
+		_, unlock, _ := cl.LockContract(t.Context(), fcid)
+		defer unlock()
+
+		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+		defer cancel()
+
+		// assert the interruption neither marked the contract as locked nor
+		// counted as a replenish failure
+		accRes, poolRes := fund(ctx)
+		if accRes.Funded != 0 || len(accRes.Locked) != 0 || accRes.ReplenishFailed {
+			t.Fatalf("expected no funded accounts, locked contracts or replenish failure, got %+v", accRes)
+		} else if poolRes.Funded != 0 || len(poolRes.Locked) != 0 || poolRes.ReplenishFailed {
+			t.Fatalf("expected no funded pools, locked contracts or replenish failure, got %+v", poolRes)
+		}
+	})
 }
